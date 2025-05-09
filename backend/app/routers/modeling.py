@@ -5,12 +5,14 @@ from app.utils.enums import CompTemplate, FormatOutPut
 from app.utils.log_util import logger
 from app.utils.redis_manager import redis_manager
 from app.schemas.request import Problem
-from app.schemas.response import AgentMessage, AgentType, Message, SystemMessage
+from app.schemas.response import SystemMessage
 from app.utils.common_utils import create_task_id, create_work_dir, get_config_template
 import os
 import asyncio
 from fastapi import HTTPException
-from app.utils.common_utils import md_2_docx
+from app.utils.common_utils import md_2_docx, get_work_dir
+import subprocess
+from icecream import ic
 
 router = APIRouter()
 
@@ -89,6 +91,23 @@ async def get_writer_seque():
     # 返回论文顺序
     config_template: dict = get_config_template(CompTemplate.CHINA)
     return list(config_template.keys())
+
+
+@router.get("/open_folder")
+async def open_folder(task_id: str):
+    ic(task_id)
+    # 打开工作目录
+    work_dir = get_work_dir(task_id)
+
+    # 打开工作目录
+    if os.name == "nt":
+        subprocess.run(["explorer", work_dir])
+    elif os.name == "posix":
+        subprocess.run(["open", work_dir])
+    else:
+        raise HTTPException(status_code=500, detail=f"不支持的操作系统: {os.name}")
+
+    return {"message": "打开工作目录成功", "work_dir": work_dir}
 
 
 async def run_modeling_task_async(

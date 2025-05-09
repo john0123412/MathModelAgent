@@ -21,6 +21,11 @@ const routes = [
 		component: () => import("@/pages/task/index.vue"),
 		props: true,
 	},
+		{
+		path: "/example/:id",
+		component: () => import("@/pages/example/[id].vue"),
+		props: true,
+	},
 	{
 		path: "/test",
 		component: () => import("@/pages/test/index.vue"),

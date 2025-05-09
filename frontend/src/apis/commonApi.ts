@@ -8,3 +8,12 @@ export function getHelloWorld() {
 export function getWriterSeque() {
 	return request.get<{ writer_seque: string[] }>("/writer_seque");
 }
+
+
+export function openFolderAPI(task_id: string) {
+	return request.get<{ message: string }>("/open_folder", {
+		params: {
+			task_id,
+		},
+	});
+}

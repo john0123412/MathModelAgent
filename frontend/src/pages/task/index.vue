@@ -19,9 +19,13 @@ import WriterEditor from '@/components/WriterEditor.vue'
 import ChatArea from '@/components/ChatArea.vue'
 import { onMounted, onBeforeUnmount, ref } from 'vue'
 import { useTaskStore } from '@/stores/task'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { getWriterSeque } from '@/apis/commonApi';
 import { Button } from '@/components/ui/button';
+import { openFolderAPI } from '@/apis/commonApi';
+import { useToast } from '@/components/ui/toast/use-toast'
+
+const { toast } = useToast()
+
 
 const props = defineProps<{ task_id: string }>()
 const taskStore = useTaskStore()
@@ -35,6 +39,15 @@ onMounted(async () => {
   const res = await getWriterSeque();
   writerSequence.value = Array.isArray(res.data) ? res.data : [];
 })
+
+const openFolder = async () => {
+  const res = await openFolderAPI(props.task_id);
+  console.log(res);
+  toast({
+    title: '打开工作目录成功',
+    description: res.data.message,
+  })
+}
 
 
 onBeforeUnmount(() => {
@@ -63,9 +76,16 @@ onBeforeUnmount(() => {
                 </TabsTrigger>
               </TabsList>
               <!--  TODO: 其他选项 -->
-              <Button @click="taskStore.downloadMessages" class="flex justify-end">
-                下载消息
-              </Button>
+
+              <div class="flex justify-end gap-2">
+                <Button @click="taskStore.downloadMessages" class="flex justify-end">
+                  下载消息
+                </Button>
+                <Button @click="openFolder" class="flex">
+                  打开工作目录
+                </Button>
+              </div>
+
             </div>
 
             <TabsContent value="coder" class="h-full p-1 flex-1 overflow-auto">

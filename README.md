@@ -114,7 +114,8 @@ set ENV=DEV ; uvicorn app.main:app --host 0.0.0.0 --port 8000 --ws-ping-interval
 
 ```bash
 cd frontend # 切换到 frontend 目录下
-pnpm i #确保电脑安装了 pnpm
+npm install -g pnpm
+pnpm i #确保电脑安装了 pnpm 
 pnpm run dev
 ```
 

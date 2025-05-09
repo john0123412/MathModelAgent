@@ -10,6 +10,7 @@ from app.utils.common_utils import create_task_id, create_work_dir, get_config_t
 import os
 import asyncio
 from fastapi import HTTPException
+from app.utils.common_utils import md_2_docx
 
 router = APIRouter()
 
@@ -124,3 +125,5 @@ async def run_modeling_task_async(
         task_id,
         SystemMessage(content="任务处理完成", type="success"),
     )
+    # 转换md为docx
+    md_2_docx(task_id)

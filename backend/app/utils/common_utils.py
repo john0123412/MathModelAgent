@@ -5,6 +5,7 @@ import tomllib
 from app.utils.enums import CompTemplate
 from app.utils.log_util import logger
 import re
+import pypandoc
 
 
 def create_task_id() -> str:
@@ -103,3 +104,28 @@ def transform_link(task_id: str, content: str):
         content,
     )
     return content
+
+
+# TODO: fix 公式显示
+def md_2_docx(task_id: str):
+    work_dir = get_work_dir(task_id)
+    md_path = os.path.join(work_dir, "res.md")
+    docx_path = os.path.join(work_dir, "res.docx")
+
+    extra_args = [
+        "--resource-path",
+        str(work_dir),
+        "--mathml",  # MathML 格式公式
+        "--standalone",
+        # "--extract-media=" + str(md_dir / "generated_images")  # 按需启用
+    ]
+
+    pypandoc.convert_file(
+        source_file=md_path,
+        to="docx",
+        outputfile=docx_path,
+        format="markdown+tex_math_dollars",
+        extra_args=extra_args,
+    )
+    print(f"转换完成: {docx_path}")
+    logger.info(f"转换完成: {docx_path}")

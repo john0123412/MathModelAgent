@@ -81,7 +81,7 @@ REDIS_MAX_CONNECTIONS=20
 CORS_ALLOW_ORIGINS=http://localhost:5173,http://localhost:3000
 ```
 
-复制`/fronted/.env.example`到`/fronted/.env`(删除`.example` 后缀
+复制`/fronted/.env.example`到`/fronted/.env`(删除`.example` 后缀)
 
 
 推荐模型能力较强的、参数量大的模型。
@@ -101,10 +101,13 @@ cd backend # 切换到 backend 目录下
 pip install uv # 推荐使用 uv 管理 python 项目
 uv sync # 安装依赖
 # 启动后端
+# 激活 python 蓄虚拟环境
+source .venv/bin/activate # MacOS or Linux
+venv\Scripts\activate.bat # Windows
 # MacOS or Linux 运行这条命令
 ENV=DEV uvicorn app.main:app --host 0.0.0.0 --port 8000 --ws-ping-interval 60 --ws-ping-timeout 120
 # Windows 运行这条命令
-set ENV=DEV && uvicorn app.main:app --host 0.0.0.0 --port 8000 --ws-ping-interval 60 --ws-ping-timeout 120
+set ENV=DEV ; uvicorn app.main:app --host 0.0.0.0 --port 8000 --ws-ping-interval 60 --ws-ping-timeout 120
 ```
 
 启动前端

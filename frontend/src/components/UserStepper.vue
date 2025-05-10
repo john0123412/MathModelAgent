@@ -55,6 +55,9 @@ const showSubmitSuccess = ref(false)
 
 const taskId = ref<string | null>(null)
 
+// 添加 fileInput 的类型声明
+const fileInput = ref<HTMLInputElement | null>(null)
+
 const nextStep = () => {
   if (currentStep.value < 2)
     currentStep.value++
@@ -98,14 +101,14 @@ const handleSubmit = async () => {
       uploadedFiles.value
     )
 
-    taskId.value = response.data.task_id
+    taskId.value = response?.data?.task_id ?? null
 
     showSubmitSuccess.value = true
     setTimeout(() => {
       showSubmitSuccess.value = false // 3秒后自动隐藏
     }, 3000)
     router.push(`/task/${taskId.value}`)
-    console.log('任务提交成功:', response.data)
+    console.log('任务提交成功:', response?.data)
     // 这里可以添加跳转或状态更新逻辑
   } catch (error) {
     console.error('任务提交失败:', error)
@@ -146,7 +149,7 @@ const handleSubmit = async () => {
       <div v-if="currentStep === 1" class="p-6">
         <div
           class="border-2 border-dashed rounded-lg p-8 text-center hover:border-primary/50 transition-colors cursor-pointer"
-          @click="() => $refs.fileInput?.click()">
+          @click="() => fileInput?.click()">
           <input type="file" ref="fileInput" class="hidden" @change="handleFileUpload" accept=".txt,.csv,.xlsx"
             multiple>
           <div class="mx-auto w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
@@ -184,7 +187,8 @@ const handleSubmit = async () => {
 
           <div class="grid grid-cols-3 gap-3">
             <div v-for="item in selectConfig" :key="item.key">
-              <Select v-model="selectedOptions[item.key.toLowerCase()]" :defaultValue="item.options[0].toLowerCase()">
+              <Select v-model="selectedOptions[item.key.toLowerCase() as keyof typeof selectedOptions]"
+                :defaultValue="item.options[0].toLowerCase()">
                 <SelectTrigger class="h-9">
                   <SelectValue :placeholder="item.label" />
                 </SelectTrigger>

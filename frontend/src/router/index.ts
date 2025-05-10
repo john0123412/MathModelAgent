@@ -1,12 +1,12 @@
 // 封转路由
-import { createRouter, createWebHashHistory } from "vue-router";
+import { createRouter, createWebHistory } from "vue-router";
 // 路由配置
 // meau 需要登录后才能访问
 
 const routes = [
 	{
 		path: "/",
-		redirect: "/chat",
+		component: () => import("@/pages/index.vue"),
 	},
 	{
 		path: "/login",
@@ -21,24 +21,11 @@ const routes = [
 		component: () => import("@/pages/task/index.vue"),
 		props: true,
 	},
-		{
-		path: "/example/:id",
-		component: () => import("@/pages/example/[id].vue"),
-		props: true,
-	},
-	{
-		path: "/test",
-		component: () => import("@/pages/test/index.vue"),
-	},
-	{
-		path: "/test-jupyter",
-		component: () => import("@/pages/test/testJupyter.vue"),
-	},
 ];
 
 // 创建路由
 const router = createRouter({
-	history: createWebHashHistory(),
+	history: createWebHistory(),
 	routes,
 });
 

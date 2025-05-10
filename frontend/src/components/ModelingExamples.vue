@@ -3,6 +3,12 @@ import { ref } from 'vue'
 import { Button } from '@/components/ui/button'
 import { useRouter } from 'vue-router'
 
+// 导入图片资源
+import huashuCupC from '@/assets/example/华数杯2023年C题.png'
+import wuyiCupC from '@/assets/example/2025五一杯C题.png'
+import mcmCupC from '@/assets/example/2024高教杯C题.png'
+import { exampleAPI } from '@/apis/commonApi'
+
 // 定义样例类型
 interface ModelingExample {
   id: number
@@ -11,44 +17,46 @@ interface ModelingExample {
   description: string
   tags: string[]
   problemText: string
+  image: string
 }
 
 const router = useRouter()
 const examples = ref<ModelingExample[]>([
   {
     id: 1,
-    title: "基于改进随机森林算法的农作物产量预测",
-    source: "2023年高教社杯全国大学生数学建模竞赛",
-    description: "通过历史气象和产量数据，建立农作物产量预测模型。",
-    tags: ["随机森林", "数据分析", "气象预测"],
-    problemText: "给定历年中国主要粮食作物产量数据及气象数据，建立一个预测模型，预测未来五年的粮食产量，并分析气候变化对粮食产量的影响。"
+    title: "母亲身心健康对婴儿成长的影响",
+    source: "2023华数杯C题",
+    description: "研究母亲身心健康对婴儿成长的影响",
+    tags: ["分类问题", "成长", "健康"],
+    problemText: "给定母亲身心健康数据，建立一个预测模型，预测婴儿成长情况。",
+    image: huashuCupC
   },
   {
     id: 2,
-    title: "共享单车潮汐调度优化研究",
-    source: "2022年美国大学生数学建模竞赛",
-    description: "针对城市高峰期共享单车分布不均问题，构建调度优化模型。",
-    tags: ["图论", "线性规划", "智能调度"],
-    problemText: "针对共享单车系统在早晚高峰期出现的车辆分布不均问题，构建一个优化调度模型，最小化调度成本同时满足用户需求。"
+    title: "社交媒体平台用户分析问题",
+    source: "2025五一杯C题",
+    description: "分析社交媒体平台用户行为特征",
+    tags: ["社交媒体", "用户行为"],
+    problemText: "分析社交媒体平台用户行为特征，构建用户画像模型。",
+    image: wuyiCupC
   },
   {
     id: 3,
-    title: "新冠疫情传播模型与干预策略评估",
-    source: "2021年高教社杯全国大学生数学建模竞赛",
-    description: "基于SEIR模型改进的传染病传播预测与防控策略分析。",
-    tags: ["微分方程", "蒙特卡洛", "策略评估"],
-    problemText: "基于已有的疫情数据，构建传染病传播模型，模拟不同干预措施对疫情发展的影响，为防控决策提供科学依据。"
+    title: "农作物的种植策略",
+    source: "2024高教杯C题",
+    description: "研究农作物的种植策略",
+    tags: ["种植策略", "农作物", "生长"],
+    problemText: "研究农作物的种植策略，建立一个优化模型，使得农作物产量最大化。",
+    image: mcmCupC
   }
 ])
 
 // 选择样例并跳转到任务创建步骤
-const selectExample = (example: ModelingExample) => {
-  // 这里可以存储选中的样例数据到 localStorage 或 pinia store
-  localStorage.setItem('selectedExample', JSON.stringify(example))
-  // 跳转到任务创建流程
-  router.push('/task/create')
+const selectExample = async (example: ModelingExample) => {
+  const res = await exampleAPI(example.id.toString(), example.source)
+  const task_id = res?.data?.task_id
+  router.push(`/task/${task_id}`)
 }
-
 
 </script>
 
@@ -57,27 +65,44 @@ const selectExample = (example: ModelingExample) => {
     <h2 class="text-xl font-medium mb-4">样例解析</h2>
     <p class="text-sm text-muted-foreground mb-6">浏览历年数模竞赛优秀案例，快速开始你的建模任务</p>
 
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
       <div v-for="example in examples" :key="example.id"
-        class="border rounded-lg overflow-hidden hover:shadow-md transition-shadow">
-        <div class="p-4 border-b bg-muted/30">
-          <h3 class="font-medium line-clamp-2">{{ example.title }}</h3>
-          <p class="text-xs text-muted-foreground mt-1">{{ example.source }}</p>
+        class="border rounded-lg overflow-hidden hover:shadow-md transition-shadow group">
+        <!-- 题目缩略图 -->
+        <div class="relative h-48 overflow-hidden bg-muted">
+          <img :src="example.image" alt="题目缩略图"
+            class="w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-300" />
+          <div
+            class="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+            <Button variant="secondary" size="sm" @click="selectExample(example)">
+              查看详情
+            </Button>
+          </div>
         </div>
+
+        <!-- 题目信息 -->
         <div class="p-4">
-          <p class="text-sm text-muted-foreground mb-3">{{ example.description }}</p>
-          <div class="flex flex-wrap gap-2 mt-2 mb-3">
-            <span v-for="tag in example.tags" :key="tag"
-              class="px-2 py-0.5 bg-primary/10 text-primary rounded-full text-xs">
+          <div class="flex justify-between items-start mb-2">
+            <h3 class="font-medium line-clamp-2">{{ example.title }}</h3>
+            <span class="text-xs px-2 py-0.5 bg-primary/10 text-primary rounded-full">
+              {{ example.tags[0] }}
+            </span>
+          </div>
+          <p class="text-xs text-muted-foreground mb-2">{{ example.source }}</p>
+          <p class="text-sm text-muted-foreground mb-4 line-clamp-2">{{ example.description }}</p>
+
+          <!-- 标签 -->
+          <div class="flex flex-wrap gap-1 mb-4">
+            <span v-for="(tag, _) in example.tags.slice(1)" :key="tag"
+              class="px-2 py-0.5 bg-muted text-muted-foreground rounded-full text-xs">
               {{ tag }}
             </span>
           </div>
-          <div class="flex gap-2 mt-4">
 
-            <Button variant="default" size="sm" class="flex-1" @click="selectExample(example)">
-              基于此开始
-            </Button>
-          </div>
+          <!-- 按钮 -->
+          <Button variant="default" size="sm" class="w-full" @click="selectExample(example)">
+            使用该案例
+          </Button>
         </div>
       </div>
     </div>

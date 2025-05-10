@@ -4,7 +4,7 @@
 import AppSidebar from '@/components/AppSidebar.vue'
 import UserStepper from '@/components/UserStepper.vue'
 import ModelingExamples from '@/components/ModelingExamples.vue'
-import { ref, onMounted } from 'vue'
+import { onMounted } from 'vue'
 import {
   SidebarInset,
   SidebarProvider,

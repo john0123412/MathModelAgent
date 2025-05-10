@@ -16,6 +16,7 @@
 
 <p align="center">
     <img src="./docs/index.png">
+    <img src="./docs/chat.png">
     <img src="./docs/coder.png">
     <img src="./docs/writer.png">
 </p>
@@ -38,7 +39,7 @@
 - [ ] 集成 latex 模板
 - [ ] 接入视觉模型
 - [ ] 添加正确文献引用
-- [ ] 更多测试案例
+- [x] 更多测试案例
 - [ ] docker 部署
 - [ ] 引入用户的交互（选择模型，重写等等）
 - [x] codeinterpreter 接入云端 如 e2b 等供应商..

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { SidebarProps } from '.'
 import { cn } from '@/lib/utils'
-import { Sheet, SheetContent } from '@/components/ui/sheet'
+import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import { SIDEBAR_WIDTH_MOBILE, useSidebar } from './utils'
 
 defineOptions({
@@ -29,6 +29,8 @@ const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
       class="w-[--sidebar-width] bg-sidebar p-0 text-sidebar-foreground [&>button]:hidden" :style="{
         '--sidebar-width': SIDEBAR_WIDTH_MOBILE,
       }">
+      <SheetTitle class="sr-only">侧边栏导航</SheetTitle>
+      <SheetDescription class="sr-only">包含应用程序的主要导航菜单</SheetDescription>
       <div class="flex h-full w-full flex-col">
         <slot />
       </div>

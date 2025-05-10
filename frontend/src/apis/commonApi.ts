@@ -17,3 +17,14 @@ export function openFolderAPI(task_id: string) {
 		},
 	});
 }
+
+
+export function exampleAPI(example_id: string, source: string) {
+	return request.post<{
+		task_id: string;
+		status: string;
+	}>("/example", {
+		example_id,
+		source,
+	});
+}

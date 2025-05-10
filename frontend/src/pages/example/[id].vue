@@ -3,6 +3,18 @@ import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'
 
+// 导入图片资源
+import huashuCup from '@/assets/example/华数杯2023年C题.png'
+import mcmProblemC1 from '@/assets/example/2025-51MCM-Problem C_01.png'
+import mcmProblemC2 from '@/assets/example/2025-51MCM-Problem C_02.png'
+
+// 图片映射表
+const imageMap: Record<number, string> = {
+  1: huashuCup,
+  2: mcmProblemC1,
+  3: mcmProblemC2
+}
+
 interface ModelingExample {
   id: number
   title: string
@@ -10,6 +22,7 @@ interface ModelingExample {
   description: string
   tags: string[]
   problemText: string
+  image?: string
 }
 
 const route = useRoute()
@@ -22,19 +35,26 @@ onMounted(() => {
   // 从localStorage获取样例数据
   const storedExample = localStorage.getItem('viewingExample')
   if (storedExample) {
-    example.value = JSON.parse(storedExample)
+    const parsedExample = JSON.parse(storedExample) as ModelingExample
+    // 确保示例有图片属性，如果没有，从映射中获取
+    if (!parsedExample.image && imageMap[parsedExample.id]) {
+      parsedExample.image = imageMap[parsedExample.id]
+    }
+    example.value = parsedExample
     loading.value = false
   } else {
     // 如果没有找到缓存的数据，可以模拟一个API请求
     // 实际项目中应该从API获取
     setTimeout(() => {
+      const id = parseInt(exampleId)
       example.value = {
-        id: parseInt(exampleId),
+        id,
         title: "数学建模样例案例",
         source: "全国大学生数学建模竞赛",
         description: "这是一个示例数模案例。",
         tags: ["数据分析", "算法优化"],
-        problemText: "这里是完整的竞赛题目描述文本。"
+        problemText: "这里是完整的竞赛题目描述文本。",
+        image: imageMap[id] || mcmProblemC1
       }
       loading.value = false
     }, 800)
@@ -79,6 +99,11 @@ const goBack = () => {
             {{ tag }}
           </span>
         </div>
+      </div>
+
+      <!-- 题目图片 -->
+      <div v-if="example.image" class="rounded-lg overflow-hidden border">
+        <img :src="example.image" alt="题目图片" class="w-full h-auto" />
       </div>
 
       <div class="space-y-4">

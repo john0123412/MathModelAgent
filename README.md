@@ -45,10 +45,15 @@
 - [x] codeinterpreter 接入云端 如 e2b 等供应商..
 - [ ] 多语言: R 语言, matlab
 - [ ] 绘图 napki,draw.io
+- [ ] 添加 benchmark
 
 ## 视频demo
 
 <video src="https://github.com/user-attachments/assets/954cb607-8e7e-45c6-8b15-f85e204a0c5d"></video>
+
+> [!CAUTION]
+> 项目处于实验探索迭代demo阶段，有许多需要改进优化改进地方，我(项目作者)很忙，有时间会优化更新
+> 欢迎贡献
 
 ## 📖 使用教程
 
@@ -60,32 +65,21 @@
 
 1. 配置模型
 
-复制`/backend/.env.dev.example`到`/backend/.env.dev`(删除`.example` 后缀), 填写配置模型和 APIKEY
-[deepseek开发者平台](https://platform.deepseek.com/)
+复制`/backend/.env.dev.example`到`/backend/.env.dev`(删除`.example` 后缀)
+填写配置模型和 APIKEY
+推荐模型能力较强的、参数量大的模型。
 
 ```bash
-ENV=dev
-# 兼容 OpenAI 格式都行，具体看官方文档
-DEEPSEEK_API_KEY=
-DEEPSEEK_MODEL=
-DEEPSEEK_BASE_URL=
-# 模型最大问答次数
-MAX_CHAT_TURNS=60
-# 思考反思次数
-MAX_RETRIES=5
-
-LOG_LEVEL=DEBUG
-DEBUG=true
+# support all model, check out https://docs.litellm.ai/docs/ 
+API_KEY=
+# gpt-4.1,deepseek/deepseek-chat
+MODEL=
 # 确保安装 Redis
-REDIS_URL=redis://localhost:6379/0
-REDIS_MAX_CONNECTIONS=20
-CORS_ALLOW_ORIGINS=http://localhost:5173,http://localhost:3000
 ```
 
 复制`/fronted/.env.example`到`/fronted/.env`(删除`.example` 后缀)
 
 
-推荐模型能力较强的、参数量大的模型。
 
 2. 安装依赖
 

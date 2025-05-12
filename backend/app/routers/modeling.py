@@ -19,6 +19,7 @@ from app.utils.common_utils import md_2_docx, get_work_dir
 import subprocess
 from icecream import ic
 from pydantic import BaseModel
+from app.utils.track import track_cost_callback
 
 router = APIRouter()
 
@@ -190,3 +191,10 @@ async def run_modeling_task_async(
     )
     # 转换md为docx
     md_2_docx(task_id)
+
+
+@router.get("/track")
+async def track(task_id: str):
+    # 获取任务的token使用情况
+
+    pass

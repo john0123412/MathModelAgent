@@ -6,6 +6,7 @@ from app.utils.enums import CompTemplate
 from app.utils.log_util import logger
 import re
 import pypandoc
+from app.config.setting import settings
 
 
 def create_task_id() -> str:
@@ -74,33 +75,11 @@ def get_current_files(folder_path: str, type: str = "all") -> list[str]:
         ]
 
 
-def simple_chat(model, history: list) -> str:
-    """
-    Description of the function.
-
-    Args:
-        model (BaseModel): 模型
-        history (list): 构造好的历史记录（包含system_prompt,user_prompt）
-
-    Returns:
-        return_type: Description of the return value.
-    """
-    kwargs = {
-        "model": model.model,
-        "messages": history,
-        "stream": False,
-    }
-
-    completion = model.client.chat.completions.create(**kwargs)
-
-    return completion.choices[0].message.content
-
-
 # 判断content是否包含图片 xx.png,对其处理为    ![filename](http://localhost:8000/static/20250428-200915-ebc154d4/filename.jpg)
 def transform_link(task_id: str, content: str):
     content = re.sub(
         r"!\[(.*?)\]\((.*?\.(?:png|jpg|jpeg|gif|bmp|webp))\)",
-        lambda match: f"![{match.group(1)}](http://localhost:8000/static/{task_id}/{match.group(2)})",
+        lambda match: f"![{match.group(1)}]({settings.SERVER_HOST}/static/{task_id}/{match.group(2)})",
         content,
     )
     return content

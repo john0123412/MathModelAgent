@@ -43,10 +43,15 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
             f"os.chdir(work_dir)\n"
             f"print('当前工作目录:', os.getcwd())\n"
             f"import matplotlib.pyplot as plt\n"
+            f"import matplotlib as mpl\n"
             # 更完整的中文字体配置
-            f"plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS', 'sans-serif']\n"
+            f"plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'SimHei', 'Microsoft YaHei', 'WenQuanYi Micro Hei', 'PingFang SC', 'Hiragino Sans GB', 'Heiti SC', 'DejaVu Sans', 'sans-serif']\n"
             f"plt.rcParams['axes.unicode_minus'] = False\n"
             f"plt.rcParams['font.family'] = 'sans-serif'\n"
+            f"mpl.rcParams['font.size'] = 12\n"
+            f"mpl.rcParams['axes.labelsize'] = 12\n"
+            f"mpl.rcParams['xtick.labelsize'] = 10\n"
+            f"mpl.rcParams['ytick.labelsize'] = 10\n"
             # 设置DPI以获得更清晰的显示
         )
         self.execute_code_(init_code)
@@ -186,7 +191,8 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
                 # TODO: 正确返回格式
                 if "traceback" in iopub_msg["content"]:
                     output = "\n".join(iopub_msg["content"]["traceback"])
-                    all_output.append(("error", output))
+                    cleaned_output = self.delete_color_control_char(output)
+                    all_output.append(("error", cleaned_output))
         return all_output
 
     async def get_created_images(self, section: str) -> list[str]:

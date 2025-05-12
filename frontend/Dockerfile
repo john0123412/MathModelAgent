@@ -6,10 +6,10 @@ COPY package.json pnpm-lock.yaml ./
 RUN npm install -g pnpm
 RUN pnpm install
 COPY . .
-RUN pnpm build
 
-# 部署阶段
-FROM nginx:alpine
-COPY --from=build /app/dist /usr/share/nginx/html
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+# 应用将运行的端口 (Vite 开发环境通常是 5173)
+EXPOSE 5173
+
+# 运行开发服务器的命令
+# --host 确保可以从容器外部访问
+CMD ["pnpm", "run", "dev", "--host"]

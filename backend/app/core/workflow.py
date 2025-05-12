@@ -1,14 +1,13 @@
 from app.core.agents import WriterAgent, CoderAgent
-from app.core.llm import LLM
+from app.core.llm import LLM, simple_chat
 from app.models.model import CoderToWriter
 from app.schemas.request import Problem
 from app.schemas.response import SystemMessage
 from app.utils.log_util import logger
-from app.utils.common_utils import create_work_dir, simple_chat, get_config_template
+from app.utils.common_utils import create_work_dir, get_config_template
 from app.models.user_output import UserOutput
 from app.config.setting import settings
 from app.tools.interpreter_factory import create_interpreter
-from app.core.llm import DeepSeekModel
 import json
 from app.utils.redis_manager import redis_manager
 from app.utils.notebook_serializer import NotebookSerializer
@@ -36,10 +35,10 @@ class MathModelWorkFlow(WorkFlow):
         self.work_dir = create_work_dir(self.task_id)
 
         # default choose deepseek model
-        deepseek_model = DeepSeekModel(
-            api_key=settings.DEEPSEEK_API_KEY,
-            model=settings.DEEPSEEK_MODEL,
-            base_url=settings.DEEPSEEK_BASE_URL,
+        llm_model = LLM(
+            api_key=settings.API_KEY,
+            model=settings.MODEL,
+            base_url=settings.BASE_URL,
             task_id=self.task_id,
         )
 
@@ -48,7 +47,7 @@ class MathModelWorkFlow(WorkFlow):
             SystemMessage(content="正在拆解问题问题"),
         )
 
-        self.format_questions(problem.ques_all, deepseek_model)
+        await self.format_questions(problem.ques_all, llm_model)
 
         user_output = UserOutput(work_dir=self.work_dir)
 
@@ -79,11 +78,19 @@ class MathModelWorkFlow(WorkFlow):
 
         coder_agent = CoderAgent(
             task_id=problem.task_id,
-            model=deepseek_model,
+            model=llm_model,
             work_dir=self.work_dir,
             max_chat_turns=settings.MAX_CHAT_TURNS,
             max_retries=settings.MAX_RETRIES,
             code_interpreter=code_interpreter,
+        )
+
+        # TODO: 自定义 writer_agent mode llm
+        writer_agent = WriterAgent(
+            task_id=problem.task_id,
+            model=llm_model,
+            comp_template=problem.comp_template,
+            format_output=problem.format_output,
         )
 
         ################################################ solution steps
@@ -114,14 +121,6 @@ class MathModelWorkFlow(WorkFlow):
             await redis_manager.publish_message(
                 self.task_id,
                 SystemMessage(content=f"论文手开始写{key}部分"),
-            )
-
-            # TODO: 自定义 writer_agent mode llm
-            writer_agent = WriterAgent(
-                task_id=problem.task_id,
-                model=deepseek_model,
-                comp_template=problem.comp_template,
-                format_output=problem.format_output,
             )
 
             ## TODO: 图片引用错误
@@ -155,7 +154,7 @@ class MathModelWorkFlow(WorkFlow):
             # TODO: writer_agent 是否不需要初始化
             writer_agent = WriterAgent(
                 task_id=problem.task_id,
-                model=deepseek_model,
+                model=llm_model,
                 comp_template=problem.comp_template,
                 format_output=problem.format_output,
             )
@@ -166,7 +165,7 @@ class MathModelWorkFlow(WorkFlow):
 
         user_output.save_result(ques_count=self.ques_count)
 
-    def format_questions(self, ques_all: str, model: LLM) -> None:
+    async def format_questions(self, ques_all: str, model: LLM) -> None:
         """用户输入问题 使用LLM 格式化 questions"""
         # TODO:  "note": <补充说明,如果没有补充说明，请填 null>,
         from app.core.prompts import FORMAT_QUESTIONS_PROMPT
@@ -178,7 +177,7 @@ class MathModelWorkFlow(WorkFlow):
             },
             {"role": "user", "content": ques_all},
         ]
-        json_str = simple_chat(model, history)
+        json_str = await simple_chat(model, history)
         json_str = json_str.replace("```json", "").replace("```", "").strip()
 
         if not json_str:

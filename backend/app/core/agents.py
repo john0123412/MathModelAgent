@@ -26,6 +26,7 @@ class Agent:
         model: LLM,
         max_chat_turns: int = 30,  # 单个agent最大对话轮次
         user_output: UserOutput = None,
+        max_memory: int = 20,  # 最大记忆轮次
     ) -> None:
         self.task_id = task_id
         self.model = model
@@ -33,6 +34,7 @@ class Agent:
         self.max_chat_turns = max_chat_turns  # 最大对话轮次
         self.current_chat_turns = 0  # 当前对话轮次计数器
         self.user_output = user_output
+        self.max_memory = max_memory  # 最大记忆轮次
 
     async def run(self, prompt: str, system_prompt: str, sub_title: str) -> str:
         """
@@ -68,10 +70,19 @@ class Agent:
             return error_msg
 
     def append_chat_history(self, msg: dict) -> None:
+        self.clear_memory()
         self.chat_history.append(msg)
         # self.user_output.data_recorder.append_chat_history(
         # msg, agent_name=self.__class__.__name__
         # )
+
+    def clear_memory(self):
+        logger.info(f"{self.__class__.__name__}:清除记忆")
+        if len(self.chat_history) <= self.max_memory:
+            return
+
+        # 使用切片保留第一条和最后两条消息
+        self.chat_history = self.chat_history[:2] + self.chat_history[-5:]
 
 
 class ModelerAgent(Agent):  # 继承自Agent类而不是BaseModel
@@ -207,18 +218,18 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                         error_message,
                     ) = await self.code_interpreter.execute_code(code)
 
-                    # 记录执行结果
-
                     # 添加工具执行结果
-                    self.append_chat_history(
-                        {
-                            "role": "tool",
-                            "content": text_to_gpt,
-                            "tool_call_id": tool_id,
-                        }
-                    )
-                    # 代码执行错误
                     if error_occurred:
+                        # 即使发生错误也要添加tool响应
+                        self.append_chat_history(
+                            {
+                                "role": "tool",
+                                "content": error_message,
+                                "tool_call_id": tool_id,
+                                "name": "execute_code",
+                            }
+                        )
+
                         logger.warning(f"代码执行错误: {error_message}")
                         retry_count += 1
                         logger.info(f"当前尝试次:{retry_count} / {self.max_retries}")
@@ -227,7 +238,7 @@ class CoderAgent(Agent):  # 同样继承自Agent类
 
                         await redis_manager.publish_message(
                             self.task_id,
-                            SystemMessage(content="代码手反思错误", type="error"),
+                            SystemMessage(content="代码手反思纠正错误", type="error"),
                         )
 
                         self.append_chat_history(
@@ -235,6 +246,16 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                         )
                         # 如果代码出错，返回重新开始
                         continue
+                    else:
+                        # 成功执行的tool响应
+                        self.append_chat_history(
+                            {
+                                "role": "tool",
+                                "content": text_to_gpt,
+                                "tool_call_id": tool_id,
+                                "name": "execute_code",
+                            }
+                        )
 
                     # 检查任务完成情况时也计入对话轮次
                     self.current_chat_turns += 1
@@ -326,7 +347,28 @@ class WriterAgent(Agent):  # 同样继承自Agent类
             image_prompt = f"\n可用的图片链接列表：\n{image_list}\n请在写作时适当引用这些图片链接。"
             prompt = prompt + image_prompt
 
-        return await super().run(prompt, self.system_prompt, sub_title)
+        try:
+            logger.info(f"{self.__class__.__name__}:开始:执行对话")
+            self.current_chat_turns = 0  # 重置对话轮次计数器
+
+            # 更新对话历史
+            self.append_chat_history({"role": "system", "content": self.system_prompt})
+            self.append_chat_history({"role": "user", "content": prompt})
+
+            # 获取历史消息用于本次对话
+            response = await self.model.chat(
+                history=self.chat_history,
+                agent_name=self.__class__.__name__,
+                sub_title=sub_title,
+            )
+            response_content = response.choices[0].message.content
+            self.chat_history.append({"role": "assistant", "content": response_content})
+            logger.info(f"{self.__class__.__name__}:完成:执行对话")
+            return response_content
+        except Exception as e:
+            error_msg = f"执行过程中遇到错误: {str(e)}"
+            logger.error(f"Agent执行失败: {str(e)}")
+            return error_msg
 
     async def summarize(self) -> str:
         """

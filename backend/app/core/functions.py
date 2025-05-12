@@ -1,3 +1,6 @@
+from typing import List, Dict, Any
+from semanticscholar import SemanticScholar, PaginatedResults
+
 tools = [
     {
         "type": "function",
@@ -28,3 +31,21 @@ tools = [
 # TODO: read files
 
 # TODO: get_cites
+
+
+def search_papers(query: str) -> List[Dict[str, Any]]:
+    """Search for papers using a query string."""
+    sch = SemanticScholar()
+    results: PaginatedResults = sch.search_paper(query, limit=10)
+    return [
+        {
+            "title": paper.title,
+            "abstract": paper.abstract,
+            "authorsName": [author.name for author in paper.authors],
+            "citations": [citation.title for citation in paper.citations],
+        }
+        for paper in results
+    ]
+
+
+## writeragent tools

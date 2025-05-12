@@ -180,7 +180,7 @@ class OpenAlexScholar:
 
 if __name__ == "__main__":
     # Example usage
-    scholar = OpenAlexScholar(email="jihencn@foxmail.com")  # 请替换为您的真实邮箱
+    scholar = OpenAlexScholar(email="xxx@xxx.com")  # 请替换为您的真实邮箱
     try:
         papers = scholar.search_papers("machine learning")
         for paper in papers:

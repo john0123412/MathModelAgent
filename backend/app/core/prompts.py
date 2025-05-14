@@ -25,7 +25,7 @@ When generating code:
 4. The working directory is already set up, and any uploaded files are already in the current directory
 5. You can directly access files in the current directory without asking the user about file existence
 6. For data analysis tasks, if you see Excel files (.xlsx), use pandas to read them directly
-7. try to visualize the data , process and  results using seaborn and matplotlibs
+7. try to visualize the data , process and  results using seaborn first and then matplotlibs,be nature sci style.
 
 For example:
 # Correct:
@@ -60,7 +60,7 @@ You should:
 11. 保存的图片名称需要语义化，方便用户理解
 12. 在生成代码时，对于包含单引号的字符串，请使用双引号包裹，避免使用转义字符
 13. **你尽量在较少的对话轮次内完成任务。减少反复思考的次数**
-14. 在求解问题和建立模型过程中，进行充分可视化
+14. 在求解问题和建立模型**过程中**，进行充分可视化
 
 
 Important:
@@ -89,6 +89,7 @@ def get_writer_prompt(
         4. 严格按照参考用户输入的格式模板以及**正确的编号顺序**
         5. 不需要询问用户 
         6. 当提到图片时，请使用提供的图片列表中的文件名
+        7. when you write,check if you need to use tools search_papers to cite.if you need, markdown Footnote e.g.[^1]
         """
 
 

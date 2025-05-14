@@ -7,7 +7,7 @@ from app.core.prompts import (
     CODER_PROMPT,
     MODELER_PROMPT,
 )
-from app.core.functions import tools
+from app.core.functions import coder_tools, writer_tools
 from app.models.model import CoderToWriter
 from app.models.user_output import UserOutput
 from app.utils.enums import CompTemplate, FormatOutPut
@@ -17,6 +17,7 @@ from app.utils.common_utils import get_current_files
 from app.utils.redis_manager import redis_manager
 from app.schemas.response import SystemMessage
 from app.tools.base_interpreter import BaseCodeInterpreter
+from app.tools.openalex_scholar import OpenAlexScholar
 
 
 class Agent:
@@ -26,7 +27,7 @@ class Agent:
         model: LLM,
         max_chat_turns: int = 30,  # 单个agent最大对话轮次
         user_output: UserOutput = None,
-        max_memory: int = 20,  # 最大记忆轮次
+        max_memory: int = 25,  # 最大记忆轮次
     ) -> None:
         self.task_id = task_id
         self.model = model
@@ -85,7 +86,7 @@ class Agent:
         self.chat_history = self.chat_history[:2] + self.chat_history[-5:]
 
 
-class ModelerAgent(Agent):  # 继承自Agent类而不是BaseModel
+class ModelerAgent(Agent):  # 继承自Agent类
     def __init__(
         self,
         model: LLM,
@@ -168,7 +169,7 @@ class CoderAgent(Agent):  # 同样继承自Agent类
             logger.info(f"当前对话轮次: {self.current_chat_turns}")
             response = await self.model.chat(
                 history=self.chat_history,
-                tools=tools,
+                tools=coder_tools,
                 tool_choice="auto",
                 agent_name=self.__class__.__name__,
             )
@@ -274,7 +275,7 @@ class CoderAgent(Agent):  # 同样继承自Agent类
 
                     completion_response = await self.model.chat(
                         history=self.chat_history,
-                        tools=tools,
+                        tools=coder_tools,
                         tool_choice="auto",
                         agent_name=self.__class__.__name__,
                     )
@@ -318,10 +319,12 @@ class WriterAgent(Agent):  # 同样继承自Agent类
         comp_template: CompTemplate = CompTemplate,
         format_output: FormatOutPut = FormatOutPut.Markdown,
         user_output: UserOutput = None,
+        scholar: OpenAlexScholar = None,
     ) -> None:
         super().__init__(task_id, model, max_chat_turns, user_output)
         self.format_out_put = format_output
         self.comp_template = comp_template
+        self.scholar = scholar
         self.system_prompt = get_writer_prompt(format_output)
         self.available_images: list[str] = []
 
@@ -347,28 +350,86 @@ class WriterAgent(Agent):  # 同样继承自Agent类
             image_prompt = f"\n可用的图片链接列表：\n{image_list}\n请在写作时适当引用这些图片链接。"
             prompt = prompt + image_prompt
 
-        try:
-            logger.info(f"{self.__class__.__name__}:开始:执行对话")
-            self.current_chat_turns = 0  # 重置对话轮次计数器
+        logger.info(f"{self.__class__.__name__}:开始:执行对话")
+        self.current_chat_turns += 1  # 重置对话轮次计数器
 
-            # 更新对话历史
-            self.append_chat_history({"role": "system", "content": self.system_prompt})
-            self.append_chat_history({"role": "user", "content": prompt})
+        # 更新对话历史
+        self.append_chat_history({"role": "system", "content": self.system_prompt})
+        self.append_chat_history({"role": "user", "content": prompt})
 
-            # 获取历史消息用于本次对话
-            response = await self.model.chat(
-                history=self.chat_history,
-                agent_name=self.__class__.__name__,
-                sub_title=sub_title,
-            )
+        # 获取历史消息用于本次对话
+        response = await self.model.chat(
+            history=self.chat_history,
+            tools=writer_tools,
+            tool_choice="auto",
+            agent_name=self.__class__.__name__,
+            sub_title=sub_title,
+        )
+
+        if (
+            hasattr(response.choices[0].message, "tool_calls")
+            and response.choices[0].message.tool_calls
+        ):
+            logger.info("检测到工具调用")
+            tool_call = response.choices[0].message.tool_calls[0]
+            tool_id = tool_call.id
+            tool_call.function.name
+            if tool_call.function.name == "search_papers":
+                logger.info("调用工具: search_papers")
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(content=f"写作手调用{tool_call.function.name}工具"),
+                )
+
+                query = json.loads(tool_call.function.arguments)["query"]
+
+                full_content = response.choices[0].message.content
+                # 更新对话历史 - 添加助手的响应
+                self.append_chat_history(
+                    {
+                        "role": "assistant",
+                        "content": full_content,
+                        "tool_calls": [
+                            {
+                                "id": tool_id,
+                                "type": "function",
+                                "function": {
+                                    "name": "search_papers",
+                                    "arguments": json.dumps({"query": query}),
+                                },
+                            }
+                        ],
+                    }
+                )
+
+                try:
+                    papers = self.scholar.search_papers(query)
+                except Exception as e:
+                    logger.error(f"搜索文献失败: {str(e)}")
+                    return f"搜索文献失败: {str(e)}"
+                # TODO: pass to frontend
+                self.scholar.print_papers(papers)
+                self.append_chat_history(
+                    {
+                        "role": "tool",
+                        "content": papers,
+                        "tool_call_id": tool_id,
+                        "name": "search_papers",
+                    }
+                )
+                next_response = await self.model.chat(
+                    history=self.chat_history,
+                    tools=writer_tools,
+                    tool_choice="auto",
+                    agent_name=self.__class__.__name__,
+                    sub_title=sub_title,
+                )
+                response_content = next_response.choices[0].message.content
+        else:
             response_content = response.choices[0].message.content
-            self.chat_history.append({"role": "assistant", "content": response_content})
-            logger.info(f"{self.__class__.__name__}:完成:执行对话")
-            return response_content
-        except Exception as e:
-            error_msg = f"执行过程中遇到错误: {str(e)}"
-            logger.error(f"Agent执行失败: {str(e)}")
-            return error_msg
+        self.chat_history.append({"role": "assistant", "content": response_content})
+        logger.info(f"{self.__class__.__name__}:完成:执行对话")
+        return response_content
 
     async def summarize(self) -> str:
         """

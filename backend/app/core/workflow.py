@@ -1,8 +1,8 @@
 from app.core.agents import WriterAgent, CoderAgent
 from app.core.llm import LLM, simple_chat
-from app.models.model import CoderToWriter
 from app.schemas.request import Problem
 from app.schemas.response import SystemMessage
+from app.tools.openalex_scholar import OpenAlexScholar
 from app.utils.log_util import logger
 from app.utils.common_utils import create_work_dir, get_config_template
 from app.models.user_output import UserOutput
@@ -66,6 +66,10 @@ class MathModelWorkFlow(WorkFlow):
             timeout=3000,
         )
 
+        # Example usage
+
+        scholar = OpenAlexScholar(email=settings.OPENALEX_EMAIL)  # 请替换为您的真实邮箱
+
         await redis_manager.publish_message(
             self.task_id,
             SystemMessage(content="创建完成"),
@@ -91,6 +95,7 @@ class MathModelWorkFlow(WorkFlow):
             model=llm_model,
             comp_template=problem.comp_template,
             format_output=problem.format_output,
+            scholar=scholar,
         )
 
         ################################################ solution steps

@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     REDIS_MAX_CONNECTIONS: int
     CORS_ALLOW_ORIGINS: Annotated[list[str] | str, BeforeValidator(parse_cors)]
     SERVER_HOST: str = "http://localhost:8000"  # 默认值
+    OPENALEX_EMAIL: Optional[str] = None
 
     model_config = SettingsConfigDict(
         env_file=".env.dev",

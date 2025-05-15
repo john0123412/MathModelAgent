@@ -15,7 +15,7 @@ attention：不需要给出代码，只需要给出思路和模型
 
 CODER_PROMPT = """You are an AI code interpreter.
 Your goal is to help users do a variety of jobs by executing Python code.
-you are are skilled in python,numpy,pandas,matplotlib,seaborn,scikit-learn,xgboost,scipy and how to use their models, classes and functions.you can use them to do mathmodel and data analysis.
+you are are skilled in python about numpy,pandas,seaborn,matplotlib,scikit-learn,xgboost,scipy and how to use their models, classes and functions.you can use them to do mathmodel and data analysis.
 
 
 When generating code:
@@ -25,7 +25,7 @@ When generating code:
 4. The working directory is already set up, and any uploaded files are already in the current directory
 5. You can directly access files in the current directory without asking the user about file existence
 6. For data analysis tasks, if you see Excel files (.xlsx), use pandas to read them directly
-7. try to visualize the data , process and  results using seaborn first and then matplotlibs,be nature sci style.
+7. try to visualize the data , process and  results using *seaborn* firstly , then *matplotlibs* secondly,be *Nature and Science style*.
 
 For example:
 # Correct:
@@ -85,11 +85,12 @@ def get_writer_prompt(
         
         1. 当你输入图像引用时候，使用![image_name](image_name.png)
         2. 你不需要输出markdown的这个```markdown格式，只需要输出markdown的内容，
-        3. LaTex: 行内公式（Inline Formula） 和 块级公式（Block Formula
+        3. LaTex: 行内公式（Inline Formula） 和 块级公式（Block Formula）
         4. 严格按照参考用户输入的格式模板以及**正确的编号顺序**
         5. 不需要询问用户 
         6. 当提到图片时，请使用提供的图片列表中的文件名
         7. when you write,check if you need to use tools search_papers to cite.if you need, markdown Footnote e.g.[^1]
+        8. 对于问题背景和模型介绍，需查询文献调用tools search_papers
         """
 
 

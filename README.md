@@ -72,7 +72,7 @@
 ```bash
 # support all model, check out https://docs.litellm.ai/docs/ 
 API_KEY=
-# gpt-4.1,deepseek/deepseek-chat
+# gpt-4.1,deepseek/deepseek-chat,gemini/gemini-2.5-flash-preview-04-17
 MODEL=
 # 确保安装 Redis
 ```

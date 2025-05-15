@@ -18,6 +18,7 @@ from app.utils.redis_manager import redis_manager
 from app.schemas.response import SystemMessage
 from app.tools.base_interpreter import BaseCodeInterpreter
 from app.tools.openalex_scholar import OpenAlexScholar
+from icecream import ic
 
 
 class Agent:
@@ -78,9 +79,9 @@ class Agent:
         # )
 
     def clear_memory(self):
-        logger.info(f"{self.__class__.__name__}:清除记忆")
         if len(self.chat_history) <= self.max_memory:
             return
+        logger.info(f"{self.__class__.__name__}:清除记忆")
 
         # 使用切片保留第一条和最后两条消息
         self.chat_history = self.chat_history[:2] + self.chat_history[-5:]
@@ -348,6 +349,7 @@ class WriterAgent(Agent):  # 同样继承自Agent类
             # 拼接成完整URL
             image_list = ",".join(available_images)
             image_prompt = f"\n可用的图片链接列表：\n{image_list}\n请在写作时适当引用这些图片链接。"
+            ic(image_prompt)
             prompt = prompt + image_prompt
 
         logger.info(f"{self.__class__.__name__}:开始:执行对话")

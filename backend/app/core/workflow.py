@@ -34,7 +34,6 @@ class MathModelWorkFlow(WorkFlow):
         self.task_id = problem.task_id
         self.work_dir = create_work_dir(self.task_id)
 
-        # default choose deepseek model
         llm_model = LLM(
             api_key=settings.API_KEY,
             model=settings.MODEL,
@@ -67,7 +66,6 @@ class MathModelWorkFlow(WorkFlow):
         )
 
         # Example usage
-
         scholar = OpenAlexScholar(email=settings.OPENALEX_EMAIL)  # 请替换为您的真实邮箱
 
         await redis_manager.publish_message(
@@ -156,13 +154,6 @@ class MathModelWorkFlow(WorkFlow):
                 SystemMessage(content=f"论文手开始写{key}部分"),
             )
 
-            # TODO: writer_agent 是否不需要初始化
-            writer_agent = WriterAgent(
-                task_id=problem.task_id,
-                model=llm_model,
-                comp_template=problem.comp_template,
-                format_output=problem.format_output,
-            )
             writer_response = await writer_agent.run(prompt=value, sub_title=key)
             user_output.set_res(key, writer_response)
 

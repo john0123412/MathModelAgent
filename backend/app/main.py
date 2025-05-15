@@ -6,16 +6,17 @@ from app.routers import modeling, ws
 from app.utils.log_util import logger
 from app.config.setting import settings
 from fastapi.staticfiles import StaticFiles
+from app.utils.cli import get_ascii_banner, center_cli_str
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    print(get_ascii_banner())
+    print(center_cli_str("GitHub:https://github.com/jihe520/MathModelAgent"))
     logger.info("Starting MathModelAgent")
 
     PROJECT_FOLDER = "./project"
     os.makedirs(PROJECT_FOLDER, exist_ok=True)
-
-    logger.info("CORS_ALLOW_ORIGINS:", settings.CORS_ALLOW_ORIGINS)
 
     yield
     logger.info("Stopping MathModelAgent")

@@ -33,9 +33,9 @@ const props = defineProps({
   user: {
     type: Object,
     default: () => ({
-      name: 'John Doe',
-      email: 'john.doe@example.com',
-      avatar: 'https://github.com/shadcn.png'
+      name: 'San Jin',
+      email: 'mathmodel@mathmodel.com',
+      avatar: 'https://github.com/jihe520.png'
     })
   }
 })

@@ -1,14 +1,44 @@
 from app.utils.enums import FormatOutPut
 
+
+COORDINATOR_PROMPT = """
+    判断用户输入的信息是否是数学建模问题
+    如果是关于数学建模的，你将按照如下要求
+    整理问题，将其交给建模手 ModelerAgent 分析
+    {FORMAT_QUESTIONS_PROMPT}
+    如果不是关于数学建模的，你将按照如下要求
+    你会拒绝用户请求，输出一段拒绝的文字
+"""
+
+FORMAT_QUESTIONS_PROMPT = """
+用户将提供给你一段题目信息，**请你不要更改题目信息，完整将用户输入的内容**，以 JSON 的形式输出，输出的 JSON 需遵守以下的格式：
+
+{
+  "title": <题目标题>      
+  "background": <题目背景，用户输入的一切不在title，ques1，ques2，ques3...中的内容都视为问题背景信息background>,
+  "ques_count": <问题数量,number,int>,
+  "ques1": <问题1>,
+  "ques2": <问题2>,
+  "ques3": <问题3,用户输入的存在多少问题，就输出多少问题ques1,ques2,ques3...以此类推>,
+}
+"""
+
 # TODO: 设计成一个类？
 
 MODELER_PROMPT = """
 role：你是一名数学建模经验丰富的建模手，负责建模部分。
-task：你需要根据用户要求和数据建立数学模型求解问题。
+task：你需要根据用户要求和数据对应每个问题建立数学模型求解问题。
 skill：熟练掌握各种数学建模的模型和思路
 output：数学建模的思路和使用到的模型
 attention：不需要给出代码，只需要给出思路和模型
-**不需要建立复杂的模型,简单规划需要步骤**
+format：以 JSON 的形式输出输出的 JSON,需遵守以下的格式：
+{
+  "eda": <数据分析EDA方案>,
+  "ques1": <问题1的建模思路和模型方案>,
+  "ques2": <问题2的建模思路和模型方案>,
+  "ques3": <问题3的建模思路和模型方案,用户输入的存在多少问题，就输出多少问题ques1,ques2,ques3...以此类推>,
+  "sensitivity_analysis": <敏感性分析方案>,
+}
 """
 
 # TODO : 对于特大 csv 读取
@@ -89,23 +119,11 @@ def get_writer_prompt(
         4. 严格按照参考用户输入的格式模板以及**正确的编号顺序**
         5. 不需要询问用户 
         6. 当提到图片时，请使用提供的图片列表中的文件名
-        7. when you write,check if you need to use tools search_papers to cite.if you need, markdown Footnote e.g.[^1]
-        8. 对于问题背景和模型介绍，需查询文献调用tools search_papers
+        7. when you write,check if you need to use tools search_papers to cite. if you need, markdown Footnote e.g.[^1]
+        8. List all references at the end in markdown footnote format.
+        9. Include an empty line between each citation for better readability.
+        10. 对于问题背景和模型介绍，需查询文献调用tools search_papers
         """
-
-
-FORMAT_QUESTIONS_PROMPT = """
-用户将提供给你一段题目信息，**请你不要更改题目信息，完整将用户输入的内容**，以 JSON 的形式输出，输出的 JSON 需遵守以下的格式：
-
-{
-  "title": <题目标题>      
-  "background": <题目背景，用户输入的一切不在title，ques1，ques2，ques3...中的内容都视为问题背景信息background>,
-  "ques_count": <问题数量,number,int>,
-  "ques1": <问题1>,
-  "ques2": <问题2>,
-  "ques3": <问题3,用户输入的存在多少问题，就输出多少问题ques1,ques2,ques3...以此类推>,
-}
-"""
 
 
 def get_reflection_prompt(error_message, code) -> str:

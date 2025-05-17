@@ -1,4 +1,4 @@
-from typing import List, Literal, Union
+from typing import Literal, Union
 from app.utils.enums import AgentType
 from pydantic import BaseModel, Field
 from uuid import uuid4
@@ -23,7 +23,7 @@ class UserMessage(Message):
 
 class AgentMessage(Message):
     msg_type: str = "agent"
-    agent_type: AgentType  # CoderAgent | WriterAgent
+    agent_type: AgentType  # CoordinatorAgent | ModelerAgent | CoderAgent | WriterAgent
 
 
 class CodeExecution(BaseModel):

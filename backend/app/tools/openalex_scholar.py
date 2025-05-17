@@ -47,7 +47,7 @@ class OpenAlexScholar:
         # 拼接单词形成文本
         return " ".join(words).strip()
 
-    def search_papers(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def search_papers(self, query: str, limit: int = 8) -> List[Dict[str, Any]]:
         """Search for papers using OpenAlex API.
 
         Args:
@@ -148,20 +148,21 @@ class OpenAlexScholar:
 
         return papers
 
-    def print_papers(self, papers: List[Dict[str, Any]]):
+    def papers_to_str(self, papers: List[Dict[str, Any]]) -> str:
+        """将文献列表转换为字符串"""
+        result = ""
         for paper in papers:
-            print("\n" + "=" * 80)
-            print(f"标题: {paper['title']}")
-            print(f"\n摘要: {paper['abstract']}")
-            print("\n作者:")
-        for author in paper["authors"]:
-            print(f"- {author['name']}")
-            if author["institution"]:
-                print(f"  所属机构: {author['institution']}")
-        print(f"\n引用次数: {paper['citations_count']}")
-        print(f"发表年份: {paper['publication_year']}")
-        print(f"\n引用格式:\n{paper['citation_format']}")
-        print("=" * 80)
+            result += "\n" + "=" * 80
+            result += f"\n标题: {paper['title']}"
+            result += f"\n摘要: {paper['abstract']}"
+            result += "\n作者:"
+            for author in paper["authors"]:
+                result += f"- {author['name']}"
+            result += f"\n引用次数: {paper['citations_count']}"
+            result += f"\n发表年份: {paper['publication_year']}"
+            result += f"\n引用格式:\n{paper['citation_format']}"
+            result += "=" * 80
+        return result
 
     def _format_citation(self, work: Dict[str, Any]) -> str:
         """Format citation in a readable format."""

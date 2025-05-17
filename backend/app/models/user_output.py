@@ -1,20 +1,30 @@
 import os
 from app.utils.data_recorder import DataRecorder
+from app.models.model import WriterResponse
 
 
 class UserOutput:
     def __init__(self, work_dir: str, data_recorder: DataRecorder | None = None):
         self.work_dir = work_dir
-        self.res: dict[str, str] = {
-            # "eda": "",
-            # "ques1": "",
+        self.res: dict[str, dict] = {
+            # "eda": {
+            #     "response_content": "",
+            #     "footnotes": "",
+            # },
+            # "ques1": {
+            #     "response_content": "",
+            #     "footnotes": "",
+            # },
         }
         self.data_recorder = data_recorder
         self.cost_time = 0.0
         self.initialized = True
 
-    def set_res(self, key: str, value: str):
-        self.res[key] = value  # TODO： 换种数据类型有顺序
+    def set_res(self, key: str, writer_response: WriterResponse):
+        self.res[key] = {
+            "response_content": writer_response.response_content,
+            "footnotes": writer_response.footnotes,
+        }
 
     def get_res(self):
         return self.res
@@ -44,7 +54,49 @@ class UserOutput:
             "judge",
             "reference",
         ]
-        return "\n".join([self.res.get(key, "") for key in seq])
+
+        # 收集所有内容和脚注
+        all_content = []
+        all_footnotes = []
+        footnote_counter = 1
+
+        for key in seq:
+            if key not in self.res:
+                continue
+
+            content = self.res[key]["response_content"]
+            footnotes = self.res[key]["footnotes"]
+
+            # 更新内容中的脚注引用编号
+            if footnotes:
+                # 获取当前内容中的所有脚注引用
+                current_footnotes = footnotes.split("\n")
+
+                # 更新内容中的脚注引用编号
+                for i, _ in enumerate(current_footnotes, start=footnote_counter):
+                    content = content.replace(
+                        f"[^{i - footnote_counter + 1}]", f"[^{i}]"
+                    )
+
+                # 更新脚注编号
+                updated_footnotes = []
+                for i, footnote in enumerate(current_footnotes, start=footnote_counter):
+                    updated_footnote = footnote.replace(
+                        f"[^{i - footnote_counter + 1}]:", f"[^{i}]:"
+                    )
+                    updated_footnotes.append(updated_footnote)
+
+                footnote_counter += len(current_footnotes)
+                all_footnotes.extend(updated_footnotes)
+
+            all_content.append(content)
+
+        # 合并所有内容和脚注
+        final_content = "\n".join(all_content)
+        if all_footnotes:
+            final_content += "\n\n" + "\n".join(all_footnotes)
+
+        return final_content
 
     def save_result(self, ques_count):
         res_path = os.path.join(self.work_dir, "res.md")

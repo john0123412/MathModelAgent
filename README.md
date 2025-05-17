@@ -24,10 +24,13 @@
 ## ✨ 功能特性
 
 - 🔍 自动分析问题，数学建模，编写代码，纠正错误，撰写论文
-- 💻 本地代码解释器
+- 💻 Code Interperter
+    - loacl Interperter: 基于 jupyter , 代码保存为 notebook 方便再编辑
+    - 云端 code interperter: [E2B](https://e2b.dev/) 和 [daytona](https://app.daytona.io/)
 - 📝 生成一份编排好格式的论文
-- 🤝 muti-agents: ~~建模手~~，代码手(反思模块，本地代码解释器)，论文手
+- 🤝 muti-agents: ~~建模手~~，代码手，论文手
 - 🔄 muti-llms: 每个agent设置不同的模型
+- 支持所有模型: [litellm](https://docs.litellm.ai/docs/providers)
 - 💰 成本低 agentless(单次任务成本约 1 rmb)
 
 ## 🚀 后期计划
@@ -55,6 +58,10 @@
 > 项目处于实验探索迭代demo阶段，有许多需要改进优化改进地方，我(项目作者)很忙，有时间会优化更新
 > 欢迎贡献
 
+
+案例参考 ./demo 文件夹下
+如果你有好的案例可以提交 PR 在该目录下
+
 ## 📖 使用教程
 
 > 确保电脑中安装好 Python, Nodejs, **Redis** 环境
@@ -66,16 +73,9 @@
 1. 配置模型
 
 复制`/backend/.env.dev.example`到`/backend/.env.dev`(删除`.example` 后缀)
-填写配置模型和 APIKEY
+**配置环境变量**
 推荐模型能力较强的、参数量大的模型。
 
-```bash
-# support all model, check out https://docs.litellm.ai/docs/ 
-API_KEY=
-# gpt-4.1,deepseek/deepseek-chat,gemini/gemini-2.5-flash-preview-04-17
-MODEL=
-# 确保安装 Redis
-```
 
 复制`/fronted/.env.example`到`/fronted/.env`(删除`.example` 后缀)
 
@@ -135,6 +135,7 @@ clone 项目后，下载 **Todo Tree** 插件，可以查看代码中所有具�
 ## 📄 版权License
 
 个人免费使用，请勿商业用途，商业用途联系我（作者）
+禁止闭源分发
 
 ## 🙏 Reference
 
@@ -147,8 +148,16 @@ Thanks to the following projects:
 
 ## 其他
 
+### Sponsor
+
+<div align="center">
+  <img src="./docs/sponser.png" alt="Buy Me a Coffee" width="280"/>
+</div>
+
 感谢赞助
 [danmo-tyc](https://github.com/danmo-tyc)
+
+### GROUP
 
 有问题可以进群问
 [QQ 群：699970403](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=rFKquDTSxKcWpEhRgpJD-dPhTtqLwJ9r&authKey=xYKvCFG5My4uYZTbIIoV5MIPQedW7hYzf0%2Fbs4EUZ100UegQWcQ8xEEgTczHsyU6&noverify=0&group_code=699970403)

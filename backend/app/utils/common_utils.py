@@ -7,6 +7,7 @@ from app.utils.log_util import logger
 import re
 import pypandoc
 from app.config.setting import settings
+from icecream import ic
 
 
 def create_task_id() -> str:
@@ -96,7 +97,6 @@ def md_2_docx(task_id: str):
         str(work_dir),
         "--mathml",  # MathML 格式公式
         "--standalone",
-        # "--extract-media=" + str(md_dir / "generated_images")  # 按需启用
     ]
 
     pypandoc.convert_file(
@@ -108,3 +108,12 @@ def md_2_docx(task_id: str):
     )
     print(f"转换完成: {docx_path}")
     logger.info(f"转换完成: {docx_path}")
+
+
+def get_footnotes(text: str):
+    # 匹配脚注定义
+    footnotes = re.findall(r"\[\^(\d+)\]:\s*(.+?)(?=\n\[\^|\n\n|\Z)", text, re.DOTALL)
+
+    for num, content in footnotes:
+        ic(f"[^{num}] {content.strip()}")
+    return footnotes

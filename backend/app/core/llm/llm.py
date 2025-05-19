@@ -2,10 +2,17 @@ import json
 from app.utils.common_utils import transform_link
 from app.utils.log_util import logger
 import time
-from app.schemas.response import CoderMessage, WriterMessage
-from app.utils.redis_manager import redis_manager
+from app.schemas.response import (
+    CoderMessage,
+    WriterMessage,
+    ModelerMessage,
+    SystemMessage,
+    CoordinatorMessage,
+)
+from app.services.redis_manager import redis_manager
 from litellm import acompletion
 import litellm
+from app.schemas.enums import AgentType
 
 
 class LLM:
@@ -31,7 +38,7 @@ class LLM:
         max_retries: int = 8,  # 添加最大重试次数
         retry_delay: float = 1.0,  # 添加重试延迟
         top_p: float | None = None,  # 添加top_p参数,
-        agent_name: str = "NO_NAME",  # CoderAgent or WriterAgent
+        agent_name: AgentType = AgentType.SYSTEM,  # CoderAgent or WriterAgent
         sub_title: str | None = None,
     ) -> str:
         logger.info(f"subtitle是:{sub_title}")
@@ -63,7 +70,7 @@ class LLM:
                 if not response or not hasattr(response, "choices"):
                     raise ValueError("无效的API响应")
                 self.chat_count += 1
-                await self.analyse_completion(response, agent_name, sub_title)
+                await self.send_message(response, agent_name, sub_title)
                 return response
             except (json.JSONDecodeError, litellm.InternalServerError) as e:
                 logger.error(f"第{attempt + 1}次重试: {str(e)}")
@@ -73,34 +80,28 @@ class LLM:
                 logger.debug(f"请求参数: {kwargs}")
                 raise  # 如果所有重试都失败，则抛出异常
 
-    async def analyse_completion(self, completion, agent_name, sub_title):
+    async def send_message(self, response, agent_name, sub_title=None):
         logger.info(f"subtitle是:{sub_title}")
+        content = response.choices[0].message.content
 
-        code = ""
-        if (
-            hasattr(completion.choices[0].message, "tool_calls")
-            and completion.choices[0].message.tool_calls
-        ):
-            tool_call = completion.choices[0].message.tool_calls[0]
-            if tool_call.function.name == "execute_code":
-                code = json.loads(tool_call.function.arguments)["code"]
-            await self.send_message(
-                agent_name, completion.choices[0].message.content, code, sub_title
-            )
-        # 处理文献查询
-
-    async def send_message(self, agent_name, content, code="", sub_title=None):
-        logger.info(f"subtitle是:{sub_title}")
-        if agent_name == "CoderAgent":
-            agent_msg: CoderMessage = CoderMessage(content=content, code=code)
-        elif agent_name == "WriterAgent":
-            # 处理 Markdown 格式的图片语法
-            content = transform_link(self.task_id, content)
-            agent_msg: WriterMessage = WriterMessage(
-                content=content, sub_title=sub_title
-            )
-        else:
-            raise ValueError(f"无效的agent_name: {agent_name}")
+        match agent_name:
+            case AgentType.CODER:
+                agent_msg: CoderMessage = CoderMessage(content=content)
+            case AgentType.WRITER:
+                # 处理 Markdown 格式的图片语法
+                content = transform_link(self.task_id, content)
+                agent_msg: WriterMessage = WriterMessage(
+                    content=content,
+                    sub_title=sub_title,
+                )
+            case AgentType.MODELER:
+                agent_msg: ModelerMessage = ModelerMessage(content=content)
+            case AgentType.SYSTEM:
+                agent_msg: SystemMessage = SystemMessage(content=content)
+            case AgentType.COORDINATOR:
+                agent_msg: CoordinatorMessage = CoordinatorMessage(content=content)
+            case _:
+                raise ValueError(f"不支持的agent类型: {agent_name}")
 
         await redis_manager.publish_message(
             self.task_id,

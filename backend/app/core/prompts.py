@@ -1,14 +1,5 @@
-from app.utils.enums import FormatOutPut
+from app.schemas.enums import FormatOutPut
 
-
-COORDINATOR_PROMPT = """
-    判断用户输入的信息是否是数学建模问题
-    如果是关于数学建模的，你将按照如下要求
-    整理问题，将其交给建模手 ModelerAgent 分析
-    {FORMAT_QUESTIONS_PROMPT}
-    如果不是关于数学建模的，你将按照如下要求
-    你会拒绝用户请求，输出一段拒绝的文字
-"""
 
 FORMAT_QUESTIONS_PROMPT = """
 用户将提供给你一段题目信息，**请你不要更改题目信息，完整将用户输入的内容**，以 JSON 的形式输出，输出的 JSON 需遵守以下的格式：
@@ -23,10 +14,20 @@ FORMAT_QUESTIONS_PROMPT = """
 }
 """
 
+
+COORDINATOR_PROMPT = f"""
+    判断用户输入的信息是否是数学建模问题
+    如果是关于数学建模的，你将按照如下要求,整理问题格式
+    {FORMAT_QUESTIONS_PROMPT}
+    如果不是关于数学建模的，你将按照如下要求
+    你会拒绝用户请求，输出一段拒绝的文字
+"""
+
+
 # TODO: 设计成一个类？
 
 MODELER_PROMPT = """
-role：你是一名数学建模经验丰富的建模手，负责建模部分。
+role：你是一名数学建模经验丰富,善于思考的建模手，负责建模部分。
 task：你需要根据用户要求和数据对应每个问题建立数学模型求解问题。
 skill：熟练掌握各种数学建模的模型和思路
 output：数学建模的思路和使用到的模型
@@ -39,6 +40,10 @@ format：以 JSON 的形式输出输出的 JSON,需遵守以下的格式：
   "ques3": <问题3的建模思路和模型方案,用户输入的存在多少问题，就输出多少问题ques1,ques2,ques3...以此类推>,
   "sensitivity_analysis": <敏感性分析方案>,
 }
+只需要以上 eda,ques1,ques2,ques3,ques.. ,sensitivity_analysis 方面建模思路，不需要要其他json key
+只需要 key value 的 dict，不要嵌套
+如果没有 ques num ，则不需要该 key
+用户可能会提出意见，你需要根据意见后，按格式修改建模思路
 """
 
 # TODO : 对于特大 csv 读取
@@ -98,7 +103,7 @@ Important:
 2. No need to check file existence
 3. No need to ask user about files
 4. Just proceed with data processing directly
-5. Don't ask user any thing about how to do and next to do,just do it by yourself
+5. ** Don't ask user any thing about how to do and next to do,just do it by yourself**
 
 """
 # 15. 在画图时候，matplotlib 需要正确显示中文，避免乱码问题

@@ -2,7 +2,7 @@ import os
 import datetime
 import hashlib
 import tomllib
-from app.utils.enums import CompTemplate
+from app.schemas.enums import CompTemplate
 from app.utils.log_util import logger
 import re
 import pypandoc
@@ -110,10 +110,12 @@ def md_2_docx(task_id: str):
     logger.info(f"转换完成: {docx_path}")
 
 
-def get_footnotes(text: str):
+def split_footnotes(text: str) -> tuple[str, list[tuple[str, str]]]:
+    main_text = re.sub(
+        r"\n\[\^\d+\]:.*?(?=\n\[\^|\n\n|\Z)", "", text, flags=re.DOTALL
+    ).strip()
+
     # 匹配脚注定义
     footnotes = re.findall(r"\[\^(\d+)\]:\s*(.+?)(?=\n\[\^|\n\n|\Z)", text, re.DOTALL)
 
-    for num, content in footnotes:
-        ic(f"[^{num}] {content.strip()}")
-    return footnotes
+    return main_text, footnotes

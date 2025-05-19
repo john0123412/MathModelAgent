@@ -117,6 +117,3 @@ docstring-code-format = false
 # enabled.
 docstring-code-line-length = "dynamic"
 
-[tool.pytest]
-pythonpath = "."
-

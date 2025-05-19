@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 import os
-from app.routers import modeling, ws
+from app.routers import modeling_router, ws_router, common_router, files_router
 from app.utils.log_util import logger
 from app.config.setting import settings
 from fastapi.staticfiles import StaticFiles
@@ -29,8 +29,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.include_router(modeling.router)
-app.include_router(ws.router)
+app.include_router(modeling_router.router)
+app.include_router(ws_router.router)
+app.include_router(common_router.router)
+app.include_router(files_router.router)
 
 
 # 跨域 CORS

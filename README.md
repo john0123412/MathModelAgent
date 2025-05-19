@@ -59,8 +59,8 @@
 > 欢迎贡献
 
 
-案例参考 ./demo 文件夹下
-如果你有好的案例可以提交 PR 在该目录下
+案例参考 [demo](./demo/) 文件夹下
+**如果你有跑出来好的案例可以提交 PR 在该目录下**
 
 ## 📖 使用教程
 
@@ -73,7 +73,9 @@
 1. 配置模型
 
 复制`/backend/.env.dev.example`到`/backend/.env.dev`(删除`.example` 后缀)
+
 **配置环境变量**
+
 推荐模型能力较强的、参数量大的模型。
 
 
@@ -114,10 +116,11 @@ pnpm i #确保电脑安装了 pnpm
 pnpm run dev
 ```
 
+[教程](./docs/md/tutorial.md)
 
 运行的结果和产生在`backend/project/work_dir/xxx/*`目录下
 - notebook.ipynb: 保存运行过程中产生的代码
-- res.md: 保存最后运行产生的结果为 markdown 格式，使用 markdown 转 word(研究下 pandoc)
+- res.md: 保存最后运行产生的结果为 markdown 格式
 
 ## 🤝 贡献和开发
 
@@ -134,8 +137,8 @@ clone 项目后，下载 **Todo Tree** 插件，可以查看代码中所有具�
 
 ## 📄 版权License
 
-个人免费使用，请勿商业用途，商业用途联系我（作者）
-禁止闭源分发
+个人免费使用，请勿商业用途。
+[License](./docs/md/License.md)
 
 ## 🙏 Reference
 
@@ -150,9 +153,7 @@ Thanks to the following projects:
 
 ### Sponsor
 
-<div align="center">
-  <img src="./docs/sponser.png" alt="Buy Me a Coffee" width="280"/>
-</div>
+[Buy Me a Coffee](./docs/sponser.md)
 
 感谢赞助
 [danmo-tyc](https://github.com/danmo-tyc)
@@ -162,4 +163,6 @@ Thanks to the following projects:
 有问题可以进群问
 [QQ 群：699970403](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=rFKquDTSxKcWpEhRgpJD-dPhTtqLwJ9r&authKey=xYKvCFG5My4uYZTbIIoV5MIPQedW7hYzf0%2Fbs4EUZ100UegQWcQ8xEEgTczHsyU6&noverify=0&group_code=699970403)
 
-<img src="./docs/qq.jpg" height="400px">
+<div align="center">
+    <img src="./docs/qq.jpg" height="400px">
+</div>

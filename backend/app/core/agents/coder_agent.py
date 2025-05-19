@@ -1,11 +1,11 @@
 from app.core.agents.agent import Agent
 from app.config.setting import settings
 from app.utils.log_util import logger
-from app.utils.redis_manager import redis_manager
-from app.schemas.response import SystemMessage
+from app.services.redis_manager import redis_manager
+from app.schemas.response import SystemMessage, InterpreterMessage
 from app.tools.base_interpreter import BaseCodeInterpreter
 from app.core.llm.llm import LLM
-from app.models.model import CoderToWriter
+from app.schemas.A2A import CoderToWriter
 from app.core.prompts import CODER_PROMPT
 from app.utils.common_utils import get_current_files
 import json
@@ -108,7 +108,16 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                             content=f"代码手调用{tool_call.function.name}工具"
                         ),
                     )
+
                     code = json.loads(tool_call.function.arguments)["code"]
+
+                    await redis_manager.publish_message(
+                        self.task_id,
+                        InterpreterMessage(
+                            input={"code": code},
+                        ),
+                    )
+
                     full_content = response.choices[0].message.content
                     # 更新对话历史 - 添加助手的响应
                     self.append_chat_history(
@@ -197,8 +206,6 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                         agent_name=self.__class__.__name__,
                     )
 
-                    # # TODO: 压缩对话历史
-
                     ## 没有调用工具，代表已经完成了
                     if not (
                         hasattr(completion_response.choices[0].message, "tool_calls")
@@ -209,10 +216,14 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                         return CoderToWriter(
                             coder_response=completion_response.choices[
                                 0
-                            ].message.content
+                            ].message.content,
+                            created_images=await self.code_interpreter.get_created_images(
+                                subtask_title
+                            ),
                         )
             else:
                 logger.info("没有工具，代表任务完成")
+                task_completed = True
 
             if retry_count >= self.max_retries:
                 logger.error(f"超过最大尝试次数: {self.max_retries}")
@@ -224,4 +235,9 @@ class CoderAgent(Agent):  # 同样继承自Agent类
 
         logger.info(f"{self.__class__.__name__}:完成:执行子任务: {subtask_title}")
 
-        return CoderToWriter(coder_response=response.choices[0].message.content)
+        return CoderToWriter(
+            coder_response=response.choices[0].message.content,
+            created_images=await self.code_interpreter.get_created_images(
+                subtask_title
+            ),
+        )

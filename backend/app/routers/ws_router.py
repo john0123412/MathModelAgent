@@ -1,8 +1,8 @@
 from fastapi import WebSocket, WebSocketDisconnect, APIRouter
-from app.utils.redis_manager import redis_manager
-from app.schemas.response import AgentMessage, AgentType, SystemMessage
+from app.services.redis_manager import redis_manager
+from app.schemas.response import SystemMessage
 import asyncio
-from app.utils.ws_manager import ws_manager
+from app.services.ws_manager import ws_manager
 import json
 
 router = APIRouter()

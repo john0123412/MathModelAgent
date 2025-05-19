@@ -1,10 +1,11 @@
 import requests
-import json
 from typing import List, Dict, Any
+from app.services.redis_manager import redis_manager
+from app.schemas.response import ScholarMessage
 
 
 class OpenAlexScholar:
-    def __init__(self, email: str = None):
+    def __init__(self, task_id: str, email: str = None):
         """Initialize OpenAlex client.
 
         Args:
@@ -12,6 +13,7 @@ class OpenAlexScholar:
         """
         self.base_url = "https://api.openalex.org"
         self.email = email
+        self.task_id = task_id
 
     def _get_request_url(self, endpoint: str) -> str:
         """Construct request URL with email parameter if provided."""
@@ -47,7 +49,7 @@ class OpenAlexScholar:
         # 拼接单词形成文本
         return " ".join(words).strip()
 
-    def search_papers(self, query: str, limit: int = 8) -> List[Dict[str, Any]]:
+    async def search_papers(self, query: str, limit: int = 8) -> List[Dict[str, Any]]:
         """Search for papers using OpenAlex API.
 
         Args:
@@ -102,6 +104,7 @@ class OpenAlexScholar:
             raise
 
         papers = []
+        paper_titles = []  # 用于存储论文标题
         for work in results.get("results", []):
             # 从倒排索引中获取摘要
             abstract = self._get_abstract_from_index(
@@ -145,6 +148,15 @@ class OpenAlexScholar:
                 "citation_format": self._format_citation(work),
             }
             papers.append(paper)
+            paper_titles.append(paper["title"])  # 添加标题到列表
+
+        await redis_manager.publish_message(
+            self.task_id,
+            ScholarMessage(
+                input={"query": query},
+                output=paper_titles,  # 只发送论文标题列表
+            ),
+        )
 
         return papers
 

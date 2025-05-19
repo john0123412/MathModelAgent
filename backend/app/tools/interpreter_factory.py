@@ -2,7 +2,7 @@
 from typing import Literal
 from app.tools.e2b_interpreter import E2BCodeInterpreter
 from app.tools.local_interpreter import LocalCodeInterpreter
-from app.utils.notebook_serializer import NotebookSerializer
+from app.tools.notebook_serializer import NotebookSerializer
 from app.config.setting import settings
 from app.utils.log_util import logger
 

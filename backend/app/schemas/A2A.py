@@ -12,11 +12,11 @@ class ModelerToCoder(BaseModel):
 
 
 class CoderToWriter(BaseModel):
-    code_response: str
-    code_output: str
-    created_images: list[str]
+    code_response: str | None = None
+    code_output: str | None = None
+    created_images: list[str] | None = None
 
 
 class WriterResponse(BaseModel):
     response_content: Any
-    footnotes: list[str] | None = None
+    footnotes: list[tuple[str, str]] | None = None

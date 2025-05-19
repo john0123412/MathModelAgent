@@ -3,7 +3,7 @@ from app.core.llm.llm import LLM
 from app.core.prompts import COORDINATOR_PROMPT
 import json
 from app.utils.log_util import logger
-from app.models.model import CoordinatorToModeler
+from app.schemas.A2A import CoordinatorToModeler
 
 
 class CoordinatorAgent(Agent):
@@ -18,7 +18,6 @@ class CoordinatorAgent(Agent):
 
     async def run(self, ques_all: str) -> CoordinatorToModeler:
         """用户输入问题 使用LLM 格式化 questions"""
-        # TODO:  "note": <补充说明,如果没有补充说明，请填 null>,
         self.append_chat_history({"role": "system", "content": self.system_prompt})
         self.append_chat_history({"role": "user", "content": ques_all})
 

@@ -1,6 +1,7 @@
 import os
+import re
 from app.utils.data_recorder import DataRecorder
-from app.models.model import WriterResponse
+from app.schemas.A2A import WriterResponse
 
 
 class UserOutput:
@@ -52,14 +53,15 @@ class UserOutput:
             *ques_str,
             "sensitivity_analysis",
             "judge",
-            "reference",
         ]
 
         # 收集所有内容和脚注
         all_content = []
         all_footnotes = []
         footnote_counter = 1
+        footnote_mapping = {}  # 用于存储原始编号到新编号的映射
 
+        # 第一遍：收集所有引用并建立映射
         for key in seq:
             if key not in self.res:
                 continue
@@ -67,26 +69,33 @@ class UserOutput:
             content = self.res[key]["response_content"]
             footnotes = self.res[key]["footnotes"]
 
-            # 更新内容中的脚注引用编号
             if footnotes:
-                # 获取当前内容中的所有脚注引用
-                current_footnotes = footnotes.split("\n")
+                for num, content in footnotes:  # 直接解构元组
+                    if num not in footnote_mapping:
+                        footnote_mapping[num] = str(footnote_counter)
+                        footnote_counter += 1
 
-                # 更新内容中的脚注引用编号
-                for i, _ in enumerate(current_footnotes, start=footnote_counter):
-                    content = content.replace(
-                        f"[^{i - footnote_counter + 1}]", f"[^{i}]"
-                    )
+        # 第二遍：更新内容和脚注
+        for key in seq:
+            if key not in self.res:
+                continue
 
-                # 更新脚注编号
+            content = self.res[key]["response_content"]
+            footnotes = self.res[key]["footnotes"]
+
+            # 更新内容中的引用编号
+            if footnotes:
+                # 更新正文中的引用
+                for old_num, new_num in footnote_mapping.items():
+                    content = content.replace(f"[^{old_num}]", f"[^{new_num}]")
+
+                # 更新脚注
                 updated_footnotes = []
-                for i, footnote in enumerate(current_footnotes, start=footnote_counter):
-                    updated_footnote = footnote.replace(
-                        f"[^{i - footnote_counter + 1}]:", f"[^{i}]:"
-                    )
+                for num, content in footnotes:  # 直接解构元组
+                    new_num = footnote_mapping[num]
+                    updated_footnote = f"[^{new_num}]: {content.strip()}"
                     updated_footnotes.append(updated_footnote)
 
-                footnote_counter += len(current_footnotes)
                 all_footnotes.extend(updated_footnotes)
 
             all_content.append(content)
@@ -94,7 +103,11 @@ class UserOutput:
         # 合并所有内容和脚注
         final_content = "\n".join(all_content)
         if all_footnotes:
-            final_content += "\n\n" + "\n".join(all_footnotes)
+            # 对脚注按编号排序
+            sorted_footnotes = sorted(
+                all_footnotes, key=lambda x: int(re.search(r"\[\^(\d+)\]:", x).group(1))
+            )
+            final_content += "\n\n" + "\n".join(sorted_footnotes)
 
         return final_content
 

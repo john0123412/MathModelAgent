@@ -7,9 +7,8 @@ from app.utils.common_utils import create_work_dir, get_config_template
 from app.models.user_output import UserOutput
 from app.config.setting import settings
 from app.tools.interpreter_factory import create_interpreter
-from app.utils.redis_manager import redis_manager
-from app.utils.notebook_serializer import NotebookSerializer
-from app.tools.base_interpreter import BaseCodeInterpreter
+from app.services.redis_manager import redis_manager
+from app.tools.notebook_serializer import NotebookSerializer
 from app.core.flows import Flows
 from app.core.llm.llm_factory import LLMFactory
 
@@ -39,6 +38,11 @@ class MathModelWorkFlow(WorkFlow):
 
         coordinator_agent = CoordinatorAgent(self.task_id, coordinator_llm)
 
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(content="识别用户意图和拆解问题ing..."),
+        )
+
         try:
             coordinator_response = await coordinator_agent.run(problem.ques_all)
             self.questions = coordinator_response.questions
@@ -48,14 +52,19 @@ class MathModelWorkFlow(WorkFlow):
             logger.error(f"CoordinatorAgent 执行失败: {e}")
             raise e
 
-        modeler_agent = ModelerAgent(self.task_id, modeler_llm)
-
-        modeler_response = await modeler_agent.run(coordinator_response)
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(content="识别用户意图和拆解问题完成,任务转交给建模手"),
+        )
 
         await redis_manager.publish_message(
             self.task_id,
-            SystemMessage(content="正在拆解问题问题"),
+            SystemMessage(content="建模手开始建模ing..."),
         )
+
+        modeler_agent = ModelerAgent(self.task_id, modeler_llm)
+
+        modeler_response = await modeler_agent.run(coordinator_response)
 
         user_output = UserOutput(work_dir=self.work_dir)
 
@@ -73,7 +82,7 @@ class MathModelWorkFlow(WorkFlow):
             timeout=3000,
         )
 
-        scholar = OpenAlexScholar(email=settings.OPENALEX_EMAIL)
+        scholar = OpenAlexScholar(task_id=self.task_id, email=settings.OPENALEX_EMAIL)
 
         await redis_manager.publish_message(
             self.task_id,
@@ -103,7 +112,7 @@ class MathModelWorkFlow(WorkFlow):
             scholar=scholar,
         )
 
-        flows = Flows()
+        flows = Flows(self.questions)
 
         ################################################ solution steps
         solution_flows = flows.get_solution_flows(self.questions, modeler_response)
@@ -136,7 +145,7 @@ class MathModelWorkFlow(WorkFlow):
             ## TODO: 图片引用错误
             writer_response = await writer_agent.run(
                 writer_prompt,
-                available_images=await code_interpreter.get_created_images(key),
+                available_images=coder_response.created_images,
                 sub_title=key,
             )
 

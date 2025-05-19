@@ -4,8 +4,9 @@ from app.core.agents.modeler_agent import ModelerToCoder
 
 
 class Flows:
-    def __init__(self):
+    def __init__(self, questions: dict[str, str | int]):
         self.flows: dict[str, dict] = {}
+        self.questions: dict[str, str | int] = questions
 
     def set_flows(self, ques_count: int):
         ques_str = [f"ques{i}" for i in range(1, ques_count + 1)]
@@ -139,6 +140,5 @@ class Flows:
             *ques_str,
             "sensitivity_analysis",
             "judge",
-            "reference",
         ]
         return {key: "" for key in seq}

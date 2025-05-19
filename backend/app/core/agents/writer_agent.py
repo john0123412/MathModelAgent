@@ -1,17 +1,16 @@
 from app.core.agents.agent import Agent
 from app.core.llm.llm import LLM
 from app.core.prompts import get_writer_prompt
-from app.utils.enums import CompTemplate, FormatOutPut
-from app.models.user_output import UserOutput
+from app.schemas.enums import CompTemplate, FormatOutPut
 from app.tools.openalex_scholar import OpenAlexScholar
 from app.utils.log_util import logger
-from app.utils.redis_manager import redis_manager
-from app.schemas.response import SystemMessage
+from app.services.redis_manager import redis_manager
+from app.schemas.response import SystemMessage, WriterMessage
 import json
 from app.core.functions import writer_tools
-from app.utils.common_utils import get_footnotes
+from app.utils.common_utils import split_footnotes
 from icecream import ic
-from app.models.model import WriterResponse
+from app.schemas.A2A import WriterResponse
 
 
 # 长文本
@@ -27,13 +26,14 @@ class WriterAgent(Agent):  # 同样继承自Agent类
         max_chat_turns: int = 10,  # 添加最大对话轮次限制
         comp_template: CompTemplate = CompTemplate,
         format_output: FormatOutPut = FormatOutPut.Markdown,
-        user_output: UserOutput = None,
         scholar: OpenAlexScholar = None,
+        max_memory: int = 25,  # 添加最大记忆轮次
     ) -> None:
-        super().__init__(task_id, model, max_chat_turns, user_output)
+        super().__init__(task_id, model, max_chat_turns, max_memory)
         self.format_out_put = format_output
         self.comp_template = comp_template
         self.scholar = scholar
+        self.is_first_run = True
         self.system_prompt = get_writer_prompt(format_output)
         self.available_images: list[str] = []
 
@@ -52,19 +52,21 @@ class WriterAgent(Agent):  # 同样继承自Agent类
         """
         logger.info(f"subtitle是:{sub_title}")
 
+        if self.is_first_run:
+            self.is_first_run = False
+            self.append_chat_history({"role": "system", "content": self.system_prompt})
+
         if available_images:
             self.available_images = available_images
             # 拼接成完整URL
             image_list = ",".join(available_images)
             image_prompt = f"\n可用的图片链接列表：\n{image_list}\n请在写作时适当引用这些图片链接。"
-            ic(image_prompt)
+            logger.info(f"image_prompt是:{image_prompt}")
             prompt = prompt + image_prompt
 
         logger.info(f"{self.__class__.__name__}:开始:执行对话")
         self.current_chat_turns += 1  # 重置对话轮次计数器
 
-        # 更新对话历史
-        self.append_chat_history({"role": "system", "content": self.system_prompt})
         self.append_chat_history({"role": "user", "content": prompt})
 
         # 获取历史消息用于本次对话
@@ -75,6 +77,8 @@ class WriterAgent(Agent):  # 同样继承自Agent类
             agent_name=self.__class__.__name__,
             sub_title=sub_title,
         )
+
+        footnotes = []
 
         if (
             hasattr(response.choices[0].message, "tool_calls")
@@ -92,7 +96,14 @@ class WriterAgent(Agent):  # 同样继承自Agent类
                 )
 
                 query = json.loads(tool_call.function.arguments)["query"]
-                footnotes = get_footnotes(query)
+
+                await redis_manager.publish_message(
+                    self.task_id,
+                    WriterMessage(
+                        input={"query": query},
+                    ),
+                )
+
                 full_content = response.choices[0].message.content
                 # 更新对话历史 - 添加助手的响应
                 self.append_chat_history(
@@ -113,10 +124,13 @@ class WriterAgent(Agent):  # 同样继承自Agent类
                 )
 
                 try:
-                    papers = self.scholar.search_papers(query)
+                    papers = await self.scholar.search_papers(query)
                 except Exception as e:
-                    logger.error(f"搜索文献失败: {str(e)}")
-                    return f"搜索文献失败: {str(e)}"
+                    error_msg = f"搜索文献失败: {str(e)}"
+                    logger.error(error_msg)
+                    return WriterResponse(
+                        response_content=error_msg, footnotes=footnotes
+                    )
                 # TODO: pass to frontend
                 papers_str = self.scholar.papers_to_str(papers)
                 logger.info(f"搜索文献结果\n{papers_str}")
@@ -136,6 +150,9 @@ class WriterAgent(Agent):  # 同样继承自Agent类
                     sub_title=sub_title,
                 )
                 response_content = next_response.choices[0].message.content
+                main_text, footnotes = split_footnotes(response_content)
+                logger.info(f"使用到的footnotes: {footnotes}")
+                response_content = main_text
         else:
             response_content = response.choices[0].message.content
         self.chat_history.append({"role": "assistant", "content": response_content})

@@ -3,7 +3,7 @@ import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from app.utils.enums import CompTemplate
+from app.schemas.enums import CompTemplate
 
 
 def test_get_config_template():

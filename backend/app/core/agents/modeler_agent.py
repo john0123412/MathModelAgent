@@ -1,9 +1,10 @@
 from app.core.agents.agent import Agent
 from app.core.llm.llm import LLM
 from app.core.prompts import MODELER_PROMPT
-from app.models.model import CoordinatorToModeler, ModelerToCoder
+from app.schemas.A2A import CoordinatorToModeler, ModelerToCoder
 from app.utils.log_util import logger
 import json
+from icecream import ic
 
 
 class ModelerAgent(Agent):  # 继承自Agent类
@@ -21,7 +22,7 @@ class ModelerAgent(Agent):  # 继承自Agent类
         self.append_chat_history(
             {
                 "role": "user",
-                "content": coordinator_to_modeler.questions.model_dump_json(),
+                "content": json.dumps(coordinator_to_modeler.questions),
             }
         )
 
@@ -36,9 +37,9 @@ class ModelerAgent(Agent):  # 继承自Agent类
 
         if not json_str:
             raise ValueError("返回的 JSON 字符串为空，请检查输入内容。")
-
         try:
             questions_solution = json.loads(json_str)
+            ic(questions_solution)
             return ModelerToCoder(questions_solution=questions_solution)
         except json.JSONDecodeError as e:
             raise ValueError(f"JSON 解析错误: {e}")

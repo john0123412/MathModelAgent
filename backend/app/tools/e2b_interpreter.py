@@ -1,8 +1,6 @@
 import os
-import re
 from e2b_code_interpreter import AsyncSandbox
 from app.schemas.response import (
-    CoderMessage,
     ErrorModel,
     OutputItem,
     ResultModel,
@@ -10,16 +8,11 @@ from app.schemas.response import (
     StdOutModel,
     SystemMessage,
 )
-from app.utils.enums import AgentType
-from app.utils.redis_manager import redis_manager
-from app.utils.notebook_serializer import NotebookSerializer
+from app.services.redis_manager import redis_manager
+from app.tools.notebook_serializer import NotebookSerializer
 from app.utils.log_util import logger
-import asyncio
 from app.config.setting import settings
 import json
-import base64
-
-from app.utils.common_utils import get_current_files
 from app.tools.base_interpreter import BaseCodeInterpreter
 
 
@@ -96,7 +89,7 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
         )
         await self.execute_code(init_code)
 
-    async def execute_code(self, code: str) -> tuple[str, bool, str]:
+    async def execute_code(self, code: str) -> tuple[str, bool, str, list[str]]:
         """执行代码并返回结果"""
 
         if not self.sbx:

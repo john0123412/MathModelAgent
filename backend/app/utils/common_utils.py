@@ -61,7 +61,6 @@ def get_current_files(folder_path: str, type: str = "all") -> list[str]:
     files = os.listdir(folder_path)
     if type == "all":
         return files
-
     elif type == "md":
         return [file for file in files if file.endswith(".md")]
     elif type == "ipynb":

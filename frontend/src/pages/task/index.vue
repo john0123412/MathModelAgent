@@ -14,8 +14,9 @@ import {
   Card,
   CardContent,
 } from '@/components/ui/card'
-import CoderEditor from '@/components/CoderEditor.vue'
-import WriterEditor from '@/components/WriterEditor.vue'
+import CoderEditor from '@/components/AgentEditor/CoderEditor.vue'
+import WriterEditor from '@/components/AgentEditor/WriterEditor.vue'
+import ModelerEditor from '@/components/AgentEditor/ModelerEditor.vue'
 import ChatArea from '@/components/ChatArea.vue'
 import { onMounted, onBeforeUnmount, ref } from 'vue'
 import { useTaskStore } from '@/stores/task'
@@ -23,7 +24,7 @@ import { getWriterSeque } from '@/apis/commonApi';
 import { Button } from '@/components/ui/button';
 import { openFolderAPI } from '@/apis/commonApi';
 import { useToast } from '@/components/ui/toast/use-toast'
-
+import { Folder } from 'lucide-vue-next'
 const { toast } = useToast()
 
 
@@ -68,6 +69,9 @@ onBeforeUnmount(() => {
           <Tabs default-value="coder" class="w-full h-full flex flex-col">
             <div class="border-b px-4 py-1 flex justify-between">
               <TabsList class="">
+                <TabsTrigger value="modeler" class="text-sm">
+                  ModelerAgent
+                </TabsTrigger>
                 <TabsTrigger value="coder" class="text-sm">
                   CoderAgent
                 </TabsTrigger>
@@ -81,12 +85,21 @@ onBeforeUnmount(() => {
                 <Button @click="taskStore.downloadMessages" class="flex justify-end">
                   下载消息
                 </Button>
+
                 <Button @click="openFolder" class="flex">
-                  打开工作目录
+                  <Folder class="w-5 h-5" /> workspace
                 </Button>
               </div>
 
             </div>
+
+            <TabsContent value="modeler" class="h-full p-1 flex-1 overflow-auto">
+              <Card class="h-full m-2">
+                <CardContent class="h-full p-1">
+                  <ModelerEditor />
+                </CardContent>
+              </Card>
+            </TabsContent>
 
             <TabsContent value="coder" class="h-full p-1 flex-1 overflow-auto">
               <Card class="h-full m-2">

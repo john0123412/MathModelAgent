@@ -1,11 +1,21 @@
 // 对应 response.py 的结构
+
 export type SystemMessageType = 'info' | 'warning' | 'success' | 'error';
-export type AgentType = 'CoderAgent' | 'WriterAgent';
+
+import { AgentType } from './enum';
+
 
 export interface BaseMessage {
   id: string;
-  msg_type: 'system' | 'agent' | 'user';
+  msg_type: 'system' | 'agent' | 'user' | 'tool';
   content?: string | null;
+}
+
+export interface ToolMessage extends BaseMessage {
+  msg_type: 'tool';
+  tool_name: 'execute_code' | 'search_scholar';
+  input: {};
+  output: [];
 }
 
 export interface SystemMessage extends BaseMessage {
@@ -21,6 +31,15 @@ export interface AgentMessage extends BaseMessage {
   msg_type: 'agent';
   agent_type: AgentType;
 }
+
+export interface ModelerMessage extends AgentMessage {
+  agent_type: AgentType.MODELER;
+}
+
+export interface CoordinatorMessage extends AgentMessage {
+  agent_type: AgentType.COORDINATOR;
+}
+
 
 // 代码执行结果类型
 export type ExecutionFormat = 
@@ -63,14 +82,11 @@ export interface ErrorExecution extends BaseCodeExecution {
 export type CodeExecutionResult = StdOutExecution | StdErrExecution | ResultExecution | ErrorExecution;
 
 export interface CoderMessage extends AgentMessage {
-  agent_type: 'CoderAgent';
-  code?: string;
-  code_results?: CodeExecutionResult[];
-  files?: string[];
+  agent_type: AgentType.CODER;
 }
 
 export interface WriterMessage extends AgentMessage {
-  agent_type: 'WriterAgent';
+  agent_type: AgentType.WRITER;
   sub_title?: string;
 }
 

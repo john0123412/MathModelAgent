@@ -2,6 +2,7 @@ from app.core.agents.agent import Agent
 from app.core.llm.llm import LLM
 from app.core.prompts import COORDINATOR_PROMPT
 import json
+import re
 from app.utils.log_util import logger
 from app.schemas.A2A import CoordinatorToModeler
 
@@ -31,7 +32,10 @@ class CoordinatorAgent(Agent):
             logger.info(f"拒绝回答用户非数学建模请求:{json_str}")
             raise ValueError(f"拒绝回答用户非数学建模请求:{json_str}")
 
+        # 清理 JSON 字符串
         json_str = json_str.replace("```json", "").replace("```", "").strip()
+        # 移除可能的控制字符
+        json_str = re.sub(r"[\x00-\x1F\x7F]", "", json_str)
 
         if not json_str:
             raise ValueError("返回的 JSON 字符串为空，请检查输入内容。")
@@ -42,4 +46,6 @@ class CoordinatorAgent(Agent):
             logger.info(f"questions:{questions}")
             return CoordinatorToModeler(questions=questions, ques_count=ques_count)
         except json.JSONDecodeError as e:
+            logger.error(f"JSON 解析错误，原始字符串: {json_str}")
+            logger.error(f"错误详情: {str(e)}")
             raise ValueError(f"JSON 解析错误: {e}")

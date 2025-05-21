@@ -131,8 +131,8 @@ async def run_modeling_task_async(
 
     # 创建任务并等待它完成
     task = asyncio.create_task(MathModelWorkFlow().execute(problem))
-    # 设置超时时间（比如 30 分钟）
-    await asyncio.wait_for(task, timeout=1800)
+    # 设置超时时间（比如 60 分钟）
+    await asyncio.wait_for(task, timeout=3600)
 
     # 发送任务完成状态
     await redis_manager.publish_message(

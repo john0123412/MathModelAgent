@@ -106,5 +106,10 @@ class WriterMessage(AgentMessage):
 
 # 所有可能的消息类型
 MessageType = Union[
-    SystemMessage, UserMessage, ModelerMessage, CoderMessage, WriterMessage
+    SystemMessage,
+    UserMessage,
+    ModelerMessage,
+    CoderMessage,
+    WriterMessage,
+    CoordinatorMessage,
 ]

@@ -1,9 +1,10 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { TaskWebSocket } from '@/utils/websocket'
-import type { Message, CoderMessage, WriterMessage } from '@/utils/response'
+import type { Message, CoderMessage, WriterMessage, UserMessage, ModelerMessage, CoordinatorMessage } from '@/utils/response'
 // import messageData from '@/test/20250524-115938-d4c84576.json'
 import messageData from '@/test/20250524-133152-0f9d6be8.json'
+import { AgentType } from '@/utils/enum'
 
 export const useTaskStore = defineStore('task', () => {
   // 初始化时直接加载测试数据，确保页面首次渲染时有数据
@@ -30,6 +31,14 @@ export const useTaskStore = defineStore('task', () => {
     ws?.close()
   }
 
+  function addUserMessage(content: string) {
+    messages.value.push({
+      id: Date.now().toString(),
+      msg_type: 'user',
+      content: content,
+    } as UserMessage)
+  }
+
   // 下载消息
   function downloadMessages() {
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(messages.value, null, 2))
@@ -45,10 +54,10 @@ export const useTaskStore = defineStore('task', () => {
   const chatMessages = computed(() =>
     messages.value.filter(
       (msg) => {
-        if (msg.msg_type === 'agent' && msg.agent_type === 'CoderAgent' && msg.content == null) {
+        if (msg.msg_type === 'agent' && msg.agent_type === AgentType.CODER && msg.content == null) {
           return false
         }
-        if (msg.msg_type === 'agent' && msg.agent_type === 'WriterAgent') {
+        if (msg.msg_type === 'agent' && msg.agent_type === AgentType.WRITER) {
           return false
         }
         return msg.msg_type === 'agent' && msg.content || msg.msg_type === 'system'
@@ -56,12 +65,30 @@ export const useTaskStore = defineStore('task', () => {
     )
   )
 
+  const coordinatorMessages = computed(() =>
+    messages.value.filter(
+      (msg): msg is CoordinatorMessage =>
+        msg.msg_type === 'agent' &&
+        msg.agent_type === AgentType.COORDINATOR &&
+        msg.content != null
+    )
+  )
+
+  const modelerMessages = computed(() =>
+    messages.value.filter(
+      (msg): msg is ModelerMessage =>
+        msg.msg_type === 'agent' &&
+        msg.agent_type === AgentType.MODELER &&
+        msg.content != null
+    )
+  )
+
   const coderMessages = computed(() =>
     messages.value.filter(
       (msg): msg is CoderMessage =>
         msg.msg_type === 'agent' &&
-        msg.agent_type === 'CoderAgent' &&
-        (msg.code != null || msg.code_results != null)
+        msg.agent_type === AgentType.CODER &&
+        msg.content != null
     )
   )
 
@@ -69,7 +96,7 @@ export const useTaskStore = defineStore('task', () => {
     messages.value.filter(
       (msg): msg is WriterMessage =>
         msg.msg_type === 'agent' &&
-        msg.agent_type === 'WriterAgent' &&
+        msg.agent_type === AgentType.WRITER &&
         msg.content != null
     )
   )
@@ -79,7 +106,7 @@ export const useTaskStore = defineStore('task', () => {
     // 反向遍历消息找到最新的文件列表
     for (let i = coderMessages.value.length - 1; i >= 0; i--) {
       const msg = coderMessages.value[i]
-      if ('files' in msg && msg.files?.length) {
+      if ('files' in msg && msg.files && Array.isArray(msg.files) && msg.files.length > 0) {
         console.log('找到文件列表:', msg.files)
         return msg.files
       }
@@ -96,11 +123,14 @@ export const useTaskStore = defineStore('task', () => {
   return {
     messages,
     chatMessages,
+    coordinatorMessages,
+    modelerMessages,
     coderMessages,
     writerMessages,
     files,
     connectWebSocket,
     closeWebSocket,
-    downloadMessages
+    downloadMessages,
+    addUserMessage
   }
 }) 

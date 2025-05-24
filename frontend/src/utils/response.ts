@@ -15,7 +15,7 @@ export interface ToolMessage extends BaseMessage {
   msg_type: 'tool';
   tool_name: 'execute_code' | 'search_scholar';
   input: {};
-  output: [];
+  output: string[] | OutputItem[];
 }
 
 export interface SystemMessage extends BaseMessage {
@@ -79,7 +79,20 @@ export interface ErrorExecution extends BaseCodeExecution {
   traceback: string;
 }
 
-export type CodeExecutionResult = StdOutExecution | StdErrExecution | ResultExecution | ErrorExecution;
+export type OutputItem = StdOutExecution | StdErrExecution | ResultExecution | ErrorExecution;
+
+export interface ScholarMessage extends ToolMessage {
+  tool_name: 'search_scholar';
+  input: {};
+  output: string[];
+}
+
+export interface InterpreterMessage extends ToolMessage {
+  tool_name: 'execute_code';
+  input: {};
+  output: OutputItem[];
+}
+
 
 export interface CoderMessage extends AgentMessage {
   agent_type: AgentType.CODER;
@@ -90,4 +103,4 @@ export interface WriterMessage extends AgentMessage {
   sub_title?: string;
 }
 
-export type Message = SystemMessage | UserMessage | CoderMessage | WriterMessage;
+export type Message = SystemMessage | UserMessage | CoderMessage | WriterMessage | ModelerMessage | CoordinatorMessage;

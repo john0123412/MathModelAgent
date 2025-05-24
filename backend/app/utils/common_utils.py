@@ -116,5 +116,5 @@ def split_footnotes(text: str) -> tuple[str, list[tuple[str, str]]]:
 
     # 匹配脚注定义
     footnotes = re.findall(r"\[\^(\d+)\]:\s*(.+?)(?=\n\[\^|\n\n|\Z)", text, re.DOTALL)
-
+    logger.info(f"main_text:{main_text} \n footnotes:{footnotes}")
     return main_text, footnotes

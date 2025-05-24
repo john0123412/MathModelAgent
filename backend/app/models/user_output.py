@@ -2,6 +2,7 @@ import os
 import re
 from app.utils.data_recorder import DataRecorder
 from app.schemas.A2A import WriterResponse
+from app.utils.log_util import logger
 
 
 class UserOutput:
@@ -41,6 +42,7 @@ class UserOutput:
         return model_build_solve
 
     def get_result_to_save(self, ques_count):
+        logger.info(f"开始处理结果保存，问题数量: {ques_count}")
         # 动态顺序获取拼接res value，正确拼接顺序
         ques_str = [f"ques{i}" for i in range(1, ques_count + 1)]
         seq = [
@@ -54,6 +56,7 @@ class UserOutput:
             "sensitivity_analysis",
             "judge",
         ]
+        logger.debug(f"处理序列: {seq}")
 
         # 收集所有内容和脚注
         all_content = []
@@ -62,20 +65,26 @@ class UserOutput:
         footnote_mapping = {}  # 用于存储原始编号到新编号的映射
 
         # 第一遍：收集所有引用并建立映射
+        logger.info("开始第一遍处理：收集引用并建立映射")
         for key in seq:
             if key not in self.res:
+                logger.debug(f"跳过不存在的键: {key}")
                 continue
 
             content = self.res[key]["response_content"]
             footnotes = self.res[key]["footnotes"]
 
             if footnotes:
+                logger.debug(f"处理 {key} 的脚注，数量: {len(footnotes)}")
                 for num, content in footnotes:  # 直接解构元组
                     if num not in footnote_mapping:
                         footnote_mapping[num] = str(footnote_counter)
                         footnote_counter += 1
 
+        logger.info(f"脚注映射完成，共有 {len(footnote_mapping)} 个脚注")
+
         # 第二遍：更新内容和脚注
+        logger.info("开始第二遍处理：更新内容和脚注")
         for key in seq:
             if key not in self.res:
                 continue
@@ -85,6 +94,7 @@ class UserOutput:
 
             # 更新内容中的引用编号
             if footnotes:
+                logger.debug(f"更新 {key} 的内容和脚注")
                 # 更新正文中的引用
                 for old_num, new_num in footnote_mapping.items():
                     content = content.replace(f"[^{old_num}]", f"[^{new_num}]")
@@ -109,6 +119,7 @@ class UserOutput:
             )
             final_content += "\n\n" + "\n".join(sorted_footnotes)
 
+        logger.info(f"结果处理完成，最终内容长度: {len(final_content)}")
         return final_content
 
     def save_result(self, ques_count):

@@ -118,14 +118,14 @@ def get_writer_prompt(
         skill：熟练掌握{format_output}排版,如图片、**公式**、表格、列表等
         output：你需要按照要求的格式排版,只输出正确的{format_output}排版的内容
         
-        1. 当你输入图像引用时候，使用![image_name](image_name.png)
+        1. 当你输入图像引用时候，使用![image_name](image_name.png),图片引用需换行，在段后。
         2. 你不需要输出markdown的这个```markdown格式，只需要输出markdown的内容，
-        3. LaTex: 行内公式（Inline Formula） 和 块级公式（Block Formula）
+        3. LaTex: 行内公式（Inline Formula）$ 和 块级公式（Block Formula）$$ 包裹
         4. 严格按照参考用户输入的格式模板以及**正确的编号顺序**
         5. 不需要询问用户 
         6. 当提到图片时，请使用提供的图片列表中的文件名
         7. when you write,check if you need to use tools search_papers to cite. if you need, markdown Footnote e.g.[^1]
-        8. List all references at the end in markdown footnote format.
+        8. List all references at the end in markdown footnote format. Dont't use title # ,just list in the end.
         9. Include an empty line between each citation for better readability.
         10. 对于问题背景和模型介绍，需查询文献调用tools search_papers
         """

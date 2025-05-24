@@ -44,11 +44,14 @@
 - [x] 添加正确文献引用
 - [x] 更多测试案例
 - [ ] docker 部署
-- [ ] 引入用户的交互（选择模型，@agent重写，等等）
+- [ ] human in loop: 引入用户的交互（选择模型，@agent重写，等等）
+- [ ] feedback: evaluate the result and modify
 - [x] codeinterpreter 接入云端 如 e2b 等供应商..
 - [ ] 多语言: R 语言, matlab
-- [ ] 绘图 napki,draw.io
+- [ ] 绘图 napki,draw.io,plantuml,svg, mermaid.js
 - [ ] 添加 benchmark
+- [ ] web search tool
+- [ ] RAG 知识库
 
 ## 视频demo
 
@@ -70,14 +73,13 @@
 
 
 
-1. 配置模型
+1. 配置环境变量
 
 复制`/backend/.env.dev.example`到`/backend/.env.dev`(删除`.example` 后缀)
 
 **配置环境变量**
 
 推荐模型能力较强的、参数量大的模型。
-
 
 复制`/fronted/.env.example`到`/fronted/.env`(删除`.example` 后缀)
 

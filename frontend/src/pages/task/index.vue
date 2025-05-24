@@ -60,11 +60,11 @@ onBeforeUnmount(() => {
 <template>
   <div class="fixed inset-0">
     <ResizablePanelGroup direction="horizontal" class="h-full rounded-lg border">
-      <ResizablePanel :default-size="30" class="h-full">
+      <ResizablePanel :default-size="40" class="h-full">
         <ChatArea :messages="taskStore.chatMessages" />
       </ResizablePanel>
       <ResizableHandle />
-      <ResizablePanel :default-size="70" class="h-full min-w-0">
+      <ResizablePanel :default-size="60" class="h-full min-w-0">
         <div class="flex h-full flex-col min-w-0">
           <Tabs default-value="coder" class="w-full h-full flex flex-col">
             <div class="border-b px-4 py-1 flex justify-between">
@@ -124,12 +124,4 @@ onBeforeUnmount(() => {
   </div>
 </template>
 
-<style scoped>
-:deep(body),
-:deep(html) {
-  overflow: hidden;
-  height: 100%;
-  margin: 0;
-  padding: 0;
-}
-</style>
+<style scoped></style>

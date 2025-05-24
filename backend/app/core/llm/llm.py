@@ -1,5 +1,5 @@
 import json
-from app.utils.common_utils import transform_link
+from app.utils.common_utils import transform_link, split_footnotes
 from app.utils.log_util import logger
 import time
 from app.schemas.response import (
@@ -89,6 +89,7 @@ class LLM:
                 agent_msg: CoderMessage = CoderMessage(content=content)
             case AgentType.WRITER:
                 # 处理 Markdown 格式的图片语法
+                content, _ = split_footnotes(content)
                 content = transform_link(self.task_id, content)
                 agent_msg: WriterMessage = WriterMessage(
                     content=content,

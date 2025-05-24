@@ -1,10 +1,18 @@
 <script setup lang="ts">
 import NotebookArea from '@/components/NotebookArea.vue'
-
 </script>
-<template>
-  <NotebookArea class="h-full min-w-0 pb-4" />
 
+<template>
+  <div class="h-full flex flex-col p-4">
+    <div class="h-full bg-white rounded-lg border shadow-sm">
+      <div class="border-b px-4 py-3">
+        <h2 class="text-lg font-semibold text-gray-900">代码执行</h2>
+      </div>
+      <div class="h-full pb-14">
+        <NotebookArea class="h-full" />
+      </div>
+    </div>
+  </div>
 </template>
 
 <style scoped>

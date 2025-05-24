@@ -6,30 +6,29 @@ import type { NoteCell, CodeCell, ResultCell } from '@/utils/interface'
 
 // 使用任务存储
 const taskStore = useTaskStore()
-
+console.log('interpreterMessage:', taskStore.interpreterMessage)
 // 将代码消息转换为Notebook单元格
 const cells = computed<NoteCell[]>(() => {
   const notebookCells: NoteCell[] = []
 
-  // 筛选出CoderAgent消息
-  for (const msg of taskStore.coderMessages) {
-    console.log('Coder message:', msg)
-    // 处理代码和执行结果
-    if (msg.code) {
-      // 添加代码单元格
+  // 获取代码执行工具消息，按顺序处理
+  for (const toolMsg of taskStore.interpreterMessage) {
+    console.log('Code execute message:', toolMsg)
+
+    // 处理代码输入消息
+    if (toolMsg.input && toolMsg.input.code) {
       const codeCell: CodeCell = {
         type: 'code',
-        content: msg.code
+        content: toolMsg.input.code
       }
       notebookCells.push(codeCell)
-  
     }
 
-    // 如果有执行结果，添加结果单元格
-    if (msg.code_results && msg.code_results.length > 0) {
+    // 处理执行结果消息
+    if (toolMsg.output && toolMsg.output.length > 0) {
       const resultCell: ResultCell = {
         type: 'result',
-        code_results: msg.code_results
+        code_results: toolMsg.output
       }
       notebookCells.push(resultCell)
     }
@@ -42,14 +41,13 @@ const cells = computed<NoteCell[]>(() => {
 <template>
   <div class="flex-1 px-1 pt-1 pb-4 h-full overflow-y-auto">
     <!-- 遍历所有单元格 -->
-    <div v-for="(cell, index) in cells" :key="index" 
-         :class="[
-           'transform transition-all duration-200 hover:shadow-lg', 
-           cell.type === 'code' ? 'pt-2' : 'pt-0'
-         ]">
+    <div v-for="(cell, index) in cells" :key="index" :class="[
+      'transform transition-all duration-200 hover:shadow-lg',
+      cell.type === 'code' ? 'pt-2' : 'pt-0'
+    ]">
       <NotebookCell :cell="cell" />
     </div>
-    
+
     <!-- 无内容时的提示 -->
     <div v-if="cells.length === 0" class="flex items-center justify-center h-full">
       <div class="text-gray-400 text-center p-8">

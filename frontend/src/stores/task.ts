@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { TaskWebSocket } from '@/utils/websocket'
-import type { Message, CoderMessage, WriterMessage, UserMessage, ModelerMessage, CoordinatorMessage } from '@/utils/response'
+import type { Message, CoderMessage, WriterMessage, UserMessage, ModelerMessage, CoordinatorMessage, InterpreterMessage } from '@/utils/response'
 // import messageData from '@/test/20250524-115938-d4c84576.json'
 import messageData from '@/test/20250524-133152-0f9d6be8.json'
 import { AgentType } from '@/utils/enum'
@@ -54,13 +54,19 @@ export const useTaskStore = defineStore('task', () => {
   const chatMessages = computed(() =>
     messages.value.filter(
       (msg) => {
-        if (msg.msg_type === 'agent' && msg.agent_type === AgentType.CODER && msg.content == null) {
-          return false
+        if (msg.msg_type === 'agent' && msg.agent_type === AgentType.CODER && msg.content != null && msg.content != '') {
+          return true
         }
-        if (msg.msg_type === 'agent' && msg.agent_type === AgentType.WRITER) {
-          return false
+        if (msg.msg_type === 'user') {
+          return true
         }
-        return msg.msg_type === 'agent' && msg.content || msg.msg_type === 'system'
+        if(msg.msg_type === 'system') {
+          return true
+        }
+        // if (msg.msg_type === 'tool' && msg.tool_name === 'execute_code') {
+          // return true
+        // }
+        return false
       }
     )
   )
@@ -101,6 +107,15 @@ export const useTaskStore = defineStore('task', () => {
     )
   )
 
+  // 添加代码执行工具消息的计算属性
+  const interpreterMessage = computed(() =>
+    messages.value.filter(
+      (msg): msg is InterpreterMessage =>
+        msg.msg_type === 'tool' &&
+        'tool_name' in msg &&
+        msg.tool_name === 'execute_code'
+    )
+  )
 
   const files = computed(() => {
     // 反向遍历消息找到最新的文件列表
@@ -127,6 +142,7 @@ export const useTaskStore = defineStore('task', () => {
     modelerMessages,
     coderMessages,
     writerMessages,
+    interpreterMessage,
     files,
     connectWebSocket,
     closeWebSocket,

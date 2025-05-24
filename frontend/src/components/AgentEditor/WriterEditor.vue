@@ -16,8 +16,6 @@ const props = defineProps<{
   writerSequence: string[]
 }>()
 
-
-
 const sections = ref<ContentSection[]>([]);
 let nextId = 0;
 
@@ -64,18 +62,29 @@ watch(() => props.messages, async (messages) => {
 </script>
 
 <template>
-  <ScrollArea class="h-full overflow-y-auto p-6">
-    <div class="max-w-4xl mx-auto overflow-y-auto space-y-6">
-      <TransitionGroup name="section" tag="div" class="space-y-6">
-        <div v-for="section in sortedSections" :key="section.id"
-          class="bg-white rounded-lg shadow-lg transform transition-all duration-500">
+  <div class="h-full flex flex-col p-4">
+    <div class="h-full bg-white rounded-lg border shadow-sm">
+      <div class="border-b px-4 py-3">
+        <h2 class="text-lg font-semibold text-gray-900">论文内容</h2>
+      </div>
+      <div class="h-full pb-14">
+        <ScrollArea class="h-full overflow-y-auto">
           <div class="p-6">
-            <div class="prose prose-slate max-w-none" v-html="section.renderedContent"></div>
+            <div class="max-w-4xl mx-auto overflow-y-auto space-y-6">
+              <TransitionGroup name="section" tag="div" class="space-y-6">
+                <div v-for="section in sortedSections" :key="section.id"
+                  class="bg-gray-50 rounded-lg shadow-sm transform transition-all duration-500">
+                  <div class="p-6">
+                    <div class="prose prose-slate max-w-none" v-html="section.renderedContent"></div>
+                  </div>
+                </div>
+              </TransitionGroup>
+            </div>
           </div>
-        </div>
-      </TransitionGroup>
+        </ScrollArea>
+      </div>
     </div>
-  </ScrollArea>
+  </div>
 </template>
 
 <style>

@@ -93,28 +93,16 @@ onBeforeUnmount(() => {
 
             </div>
 
-            <TabsContent value="modeler" class="h-full p-1 flex-1 overflow-auto">
-              <Card class="h-full m-2">
-                <CardContent class="h-full p-1">
-                  <ModelerEditor />
-                </CardContent>
-              </Card>
+            <TabsContent value="modeler" class="flex-1 p-1 min-w-0 h-full overflow-hidden">
+              <ModelerEditor />
             </TabsContent>
 
-            <TabsContent value="coder" class="h-full p-1 flex-1 overflow-auto">
-              <Card class="h-full m-2">
-                <CardContent class="h-full p-1">
-                  <CoderEditor />
-                </CardContent>
-              </Card>
+            <TabsContent value="coder" class="flex-1 p-1 min-w-0 h-full overflow-hidden">
+              <CoderEditor />
             </TabsContent>
 
-            <TabsContent value="writer" class="flex-1 p-1 min-w-0 h-full overflow-auto">
-              <Card class="min-w-0 rounded-lg">
-                <CardContent class="p-2 h-full min-w-0 overflow-auto">
-                  <WriterEditor :messages="taskStore.writerMessages" :writerSequence="writerSequence" />
-                </CardContent>
-              </Card>
+            <TabsContent value="writer" class="flex-1 p-1 min-w-0 h-full overflow-hidden">
+              <WriterEditor :messages="taskStore.writerMessages" :writerSequence="writerSequence" />
             </TabsContent>
           </Tabs>
         </div>

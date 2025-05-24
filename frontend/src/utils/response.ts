@@ -14,8 +14,8 @@ export interface BaseMessage {
 export interface ToolMessage extends BaseMessage {
   msg_type: 'tool';
   tool_name: 'execute_code' | 'search_scholar';
-  input: {};
-  output: string[] | OutputItem[];
+  input: any;
+  output: string[] | OutputItem[] | null;
 }
 
 export interface SystemMessage extends BaseMessage {
@@ -89,8 +89,10 @@ export interface ScholarMessage extends ToolMessage {
 
 export interface InterpreterMessage extends ToolMessage {
   tool_name: 'execute_code';
-  input: {};
-  output: OutputItem[];
+  input: {
+    code: string;
+  } | null;
+  output: OutputItem[] | null;
 }
 
 
@@ -103,4 +105,4 @@ export interface WriterMessage extends AgentMessage {
   sub_title?: string;
 }
 
-export type Message = SystemMessage | UserMessage | CoderMessage | WriterMessage | ModelerMessage | CoordinatorMessage;
+export type Message = SystemMessage | UserMessage | CoderMessage | WriterMessage | ModelerMessage | CoordinatorMessage | ToolMessage;

@@ -31,7 +31,7 @@ const sendMessage = () => {
           <Bubble v-if="message.msg_type === 'user'" type="user" :content="message.content || ''" />
           <!-- agent 消息（CoderAgent/WriterAgent，只显示 content） -->
           <Bubble v-else-if="message.msg_type === 'agent'" type="agent" :agentType="message.agent_type"
-            :content="message.content || ''" />
+            :content="message.content" />
           <!-- 系统消息 -->
           <SystemMessage v-else-if="message.msg_type === 'system'" :content="message.content || ''"
             :type="message.type" />

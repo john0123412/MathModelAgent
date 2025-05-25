@@ -28,10 +28,11 @@
     - loacl Interperter: 基于 jupyter , 代码保存为 notebook 方便再编辑
     - 云端 code interperter: [E2B](https://e2b.dev/) 和 [daytona](https://app.daytona.io/)
 - 📝 生成一份编排好格式的论文
-- 🤝 muti-agents: 建模手，代码手，论文手
-- 🔄 muti-llms: 每个agent设置不同的模型
+- 🤝 muti-agents: 建模手，代码手，论文手等
+- 🔄 muti-llms: 每个 agent 设置不同的、合适的模型
 - 支持所有模型: [litellm](https://docs.litellm.ai/docs/providers)
-- 💰 成本低 agentless(单次任务成本约 1 rmb)
+- 💰 成本低  workflow agentless，不依赖 agent 框架
+- 自定义模板: prompt inject
 
 ## 🚀 后期计划
 
@@ -125,6 +126,10 @@ pnpm run dev
 运行的结果和产生在`backend/project/work_dir/xxx/*`目录下
 - notebook.ipynb: 保存运行过程中产生的代码
 - res.md: 保存最后运行产生的结果为 markdown 格式
+
+需要自定义自定义提示词模板 template ？
+prompt inject : [prompt](./backend/app/config/md_template.toml)
+
 
 ## 🤝 贡献和开发
 

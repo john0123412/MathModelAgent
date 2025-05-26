@@ -150,9 +150,7 @@ class WriterAgent(Agent):  # 同样继承自Agent类
                     sub_title=sub_title,
                 )
                 response_content = next_response.choices[0].message.content
-                main_text, footnotes = split_footnotes(response_content)
-                logger.info(f"使用到的footnotes: {footnotes}")
-                response_content = main_text
+                # main_text, footnotes = split_footnotes(response_content)
         else:
             response_content = response.choices[0].message.content
         self.chat_history.append({"role": "assistant", "content": response_content})

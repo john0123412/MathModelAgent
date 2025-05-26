@@ -118,24 +118,8 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                         ),
                     )
 
-                    full_content = response.choices[0].message.content
                     # 更新对话历史 - 添加助手的响应
-                    self.append_chat_history(
-                        {
-                            "role": "assistant",
-                            "content": full_content,
-                            "tool_calls": [
-                                {
-                                    "id": tool_id,
-                                    "type": "function",
-                                    "function": {
-                                        "name": "execute_code",
-                                        "arguments": json.dumps({"code": code}),
-                                    },
-                                }
-                            ],
-                        }
-                    )
+                    self.append_chat_history(response.choices[0].message.model_dump())
 
                     # 执行工具调用
                     logger.info("执行工具调用")
@@ -151,9 +135,9 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                         self.append_chat_history(
                             {
                                 "role": "tool",
-                                "content": error_message,
                                 "tool_call_id": tool_id,
                                 "name": "execute_code",
+                                "content": error_message,
                             }
                         )
 
@@ -178,9 +162,9 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                         self.append_chat_history(
                             {
                                 "role": "tool",
-                                "content": text_to_gpt,
                                 "tool_call_id": tool_id,
                                 "name": "execute_code",
+                                "content": text_to_gpt,
                             }
                         )
 

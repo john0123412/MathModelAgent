@@ -87,15 +87,14 @@ You should:
    - Identify what's missing or wrong
    - Plan next steps
    - Continue execution until completion
-6. 你有能力在较少的步骤中完成任务，减少下一步操作和编排的任务轮次
+6. code step by step
 7. 如果一个任务反复无法完成，尝试切换路径、简化路径或直接跳过，千万别陷入反复重试，导致死循环
 8. Response in the same language as the user
 9. Remember save the output image to the working directory
 10. Remember to **print** the model evaluation results
 11. 保存的图片名称需要语义化，方便用户理解
 12. 在生成代码时，对于包含单引号的字符串，请使用双引号包裹，避免使用转义字符
-13. **你尽量在较少的对话轮次内完成任务。减少反复思考的次数**
-14. 在求解问题和建立模型**过程中**，进行充分可视化
+13. 在求解问题和建立模型**过程中**，进行充分可视化
 
 
 Important:
@@ -124,7 +123,7 @@ def get_writer_prompt(
         4. 严格按照参考用户输入的格式模板以及**正确的编号顺序**
         5. 不需要询问用户 
         6. 当提到图片时，请使用提供的图片列表中的文件名
-        7. when you write,check if you need to use tools search_papers to cite. if you need, markdown Footnote e.g.[^1]
+        7. when you write,check if you need to use tools search_papers to cite. if you need, markdown footnotes e.g.[^1]paper cite
         8. List all references at the end in markdown footnote format. Dont't use title # ,just list in the end.
         9. Include an empty line between each citation for better readability.
         10. 对于问题背景和模型介绍，需查询文献调用tools search_papers
@@ -142,7 +141,7 @@ Consider:
 3. Incorrect variable names or types
 4. File path issues
 5. Any other potential issues
-6. 如果一个任务反复无法完成，尝试切换路径、简化路径，千万别陷入反复重试，导致死循环。
+6. 如果一个任务反复无法完成，尝试拆解代码、切换思路、简化模型。你要是做不出来，我砍 🪓 你，给你断电 😡。
 7. Don't ask user any thing about how to do and next to do,just do it by yourself.
 
 Previous code:

@@ -44,7 +44,7 @@
 - [ ] 接入视觉模型
 - [x] 添加正确文献引用
 - [x] 更多测试案例
-- [ ] docker 部署
+- [x] docker 部署
 - [ ] human in loop: 引入用户的交互（选择模型，@agent重写，等等）
 - [ ] feedback: evaluate the result and modify
 - [x] codeinterpreter 接入云端 如 e2b 等供应商..
@@ -69,31 +69,68 @@
 
 ## 📖 使用教程
 
-> 确保电脑中安装好 Python, Nodejs, **Redis** 环境
 
-> 如果你想运行 命令行版本 cli 切换到 [master](https://github.com/jihe520/MathModelAgent/tree/master) 分支,部署更简单，但未来不会更新
+提供三种部署方式，请选择最适合你的方案：
+1. docker(最简单)
+2. 本地部署
+3. 脚本本地部署(社区)
 
-
-
-1. 配置环境变量
-
-复制`/backend/.env.dev.example`到`/backend/.env.dev`(删除`.example` 后缀)
-
-**配置环境变量**
-
-推荐模型能力较强的、参数量大的模型。
-
-复制`/fronted/.env.example`到`/fronted/.env`(删除`.example` 后缀)
-
-
-
-2. 安装依赖
 
 下载项目
 
 ```bash
 git clone https://github.com/jihe520/MathModelAgent.git # 克隆项目
 ```
+
+
+> 如果你想运行 命令行版本 cli 切换到 [master](https://github.com/jihe520/MathModelAgent/tree/master) 分支,部署更简单，但未来不会更新
+
+
+
+### 🐳 方案一：Docker 部署（推荐：最简单）
+
+> 确保电脑安装了 docker 环境
+
+
+1. 配置环境变量
+
+```bash
+cp backend/.env.dev.example backend/.env.dev
+cp frontend/.env.example frontend/.env.development
+```
+
+填入配置
+- backend/.env.dev
+- frontend/.env.development
+
+2. 启动服务
+
+```bash
+docker-compose up -d
+```
+
+3. 访问
+
+现在你可以访问：
+- 前端界面：http://localhost:5173
+- 后端API：http://localhost:8000
+
+
+### 💻 方案二: 本地部署
+
+> 确保电脑中安装好 Python, Nodejs, **Redis** 环境
+
+
+1. 配置环境变量
+
+复制`/backend/.env.dev.example`到`/backend/.env.dev`(删除`.example` 后缀)
+
+推荐模型能力较强的、参数量大的模型。
+
+复制`/fronted/.env.example`到`/fronted/.env.development`(删除`.example` 后缀)
+
+
+2. 安装依赖
 
 启动后端
 
@@ -122,14 +159,18 @@ pnpm i #确保电脑安装了 pnpm
 pnpm run dev
 ```
 
+
+### 🚀 方案三：自动脚本部署（来自社区）
+有没有自动部署的脚本 ？
+[mmaAutoSetupRun](https://github.com/Fitia-UCAS/mmaAutoSetupRun)
+
+
+
 [教程](./docs/md/tutorial.md)
 
 运行的结果和产生在`backend/project/work_dir/xxx/*`目录下
 - notebook.ipynb: 保存运行过程中产生的代码
 - res.md: 保存最后运行产生的结果为 markdown 格式
-
-有没有自动部署的脚本 ？
-[mmaAutoSetupRun](https://github.com/Fitia-UCAS/mmaAutoSetupRun)
 
 需要自定义自定义提示词模板 template ？
 Prompt Inject : [prompt](./backend/app/config/md_template.toml)
@@ -150,7 +191,8 @@ clone 项目后，下载 **Todo Tree** 插件，可以查看代码中所有具�
 
 ## 📄 版权License
 
-个人免费使用，请勿商业用途。
+个人免费使用，请勿商业用途，商业用途联系我（作者）
+
 [License](./docs/md/License.md)
 
 ## 🙏 Reference
@@ -164,16 +206,18 @@ Thanks to the following projects:
 
 ## 其他
 
-### Sponsor
+### 💖 Sponsor
 
-[Buy Me a Coffee](./docs/sponser.md)
+[Buy Me a Coffee](./docs/md/sponser.md)
 
 感谢赞助
+
 [danmo-tyc](https://github.com/danmo-tyc)
 
-### GROUP
+### 👥 GROUP
 
 有问题可以进群问
+
 [QQ 群：699970403](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=rFKquDTSxKcWpEhRgpJD-dPhTtqLwJ9r&authKey=xYKvCFG5My4uYZTbIIoV5MIPQedW7hYzf0%2Fbs4EUZ100UegQWcQ8xEEgTczHsyU6&noverify=0&group_code=699970403)
 
 <div align="center">

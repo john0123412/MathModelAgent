@@ -16,6 +16,7 @@ Automatically generate an award-level modeling paper
 
 <p align="center">
     <img src="./docs/index.png">
+    <img src="./docs/chat.png">
     <img src="./docs/coder.png">
     <img src="./docs/writer.png">
 </p>
@@ -23,11 +24,15 @@ Automatically generate an award-level modeling paper
 ## ✨ Features
 
 - 🔍 Automatic problem analysis, mathematical modeling, code writing, error correction, and paper writing
-- 💻 Local code interpreter
+- 💻 Code Interpreter
+    - Local Interpreter: Based on Jupyter, code saved as notebook for easy editing
+    - Cloud Code Interpreter: [E2B](https://e2b.dev/) and [daytona](https://app.daytona.io/)
 - 📝 Generate a well-formatted paper
-- 🤝 Multi-agents: ~~modeling expert~~, coding expert (reflection module, local code interpreter), paper expert
+- 🤝 Multi-agents: modeling expert, coding expert, paper expert, etc.
 - 🔄 Multi-LLMs: Different models for each agent
-- 💰 Low cost agentless (about 1 RMB per task)
+- 🤖 Support for all models: [litellm](https://docs.litellm.ai/docs/providers)
+- 💰 Low cost: workflow agentless, no dependency on agent framework
+- 🧩 Custom templates: prompt inject for setting requirements for each subtask separately
 
 ## 🚀 Future Plans
 
@@ -37,51 +42,77 @@ Automatically generate an award-level modeling paper
 - [ ] English support (MCM/ICM)
 - [ ] LaTeX template integration
 - [ ] Vision model integration
-- [ ] Proper citation implementation
-- [ ] More test cases
-- [ ] Docker deployment
-- [ ] User interaction (model selection, rewriting, etc.)
-- [ ] Cloud integration for code interpreter (e.g., e2b providers)
+- [x] Proper citation implementation
+- [x] More test cases
+- [x] Docker deployment
+- [ ] Human in loop: User interaction (model selection, @agent rewriting, etc.)
+- [ ] Feedback: evaluate the result and modify
+- [x] Cloud integration for code interpreter (e.g., e2b providers)
 - [ ] Multi-language: R, Matlab
-- [ ] Drawing: napki, draw.io
+- [ ] Drawing: napki, draw.io, plantuml, svg, mermaid.js
+- [ ] Add benchmark
+- [ ] Web search tool
+- [ ] RAG knowledge base
+- [ ] A2A hand off: Code expert reflects on errors multiple times, hands off to smarter model agent
 
 ## Video Demo
 
-<video src="https://github.com/user-attachments/assets/10b3145a-feb7-4894-aaca-30d44bb35b9e"></video>
+<video src="https://github.com/user-attachments/assets/954cb607-8e7e-45c6-8b15-f85e204a0c5d"></video>
+
+> [!CAUTION]
+> The project is in experimental development stage, with many areas needing improvement and optimization. I (the project author) am busy but will update when time permits.
+> Contributions are welcome.
+
+For case references, check the [demo](./demo/) folder.
+**If you have good cases, please submit a PR to this directory**
 
 ## 📖 Usage Guide
 
-> **Notice:** Please make sure Python, Nodejs, and **Redis** are installed on your computer.
->
+Three deployment options are available, choose the one that suits you best:
+1. Docker
+2. Local deployment
+3. Automated script deployment
+
 > If you want to run the CLI version, switch to the [master](https://github.com/jihe520/MathModelAgent/tree/master) branch. It's easier to deploy, but will not be updated in the future.
 
-1. Configure Model
+### 🐳 Option 1: Docker Deployment (Recommended: Simplest)
 
-Copy `/backend/.env.dev.example` to `/backend/.env.dev` (remove the `.example` suffix), and fill in the model configuration and APIKEY  
-[Deepseek Developer Platform](https://platform.deepseek.com/)
+1. Configure Environment Variables
 
 ```bash
-ENV=dev
-# Compatible with OpenAI format, refer to official docs
-DEEPSEEK_API_KEY=
-DEEPSEEK_MODEL=
-DEEPSEEK_BASE_URL=
-# Max Q&A turns
-MAX_CHAT_TURNS=60
-# Reflection retries
-MAX_RETRIES=5
-# https://e2b.dev/
-E2B_API_KEY=
-
-LOG_LEVEL=DEBUG
-DEBUG=true
-# Make sure Redis is installed
-REDIS_URL=redis://localhost:6379/0
-REDIS_MAX_CONNECTIONS=20
-CORS_ALLOW_ORIGINS=http://localhost:5173,http://localhost:3000
+cp backend/.env.dev.example backend/.env.dev
+cp frontend/.env.example frontend/.env.development
 ```
 
+Fill in the configuration in:
+- backend/.env.dev
+- frontend/.env.development
+
+2. Start Services
+
+```bash
+docker-compose up -d
+```
+
+3. Access
+
+You can now access:
+- Frontend interface: http://localhost:5173
+- Backend API: http://localhost:8000
+
+### 💻 Option 2: Local Deployment
+
+> Make sure Python, Nodejs, and **Redis** are installed on your computer
+
+1. Configure Environment Variables
+
+Copy `/backend/.env.dev.example` to `/backend/.env.dev` (remove the `.example` suffix)
+
+**Configure Environment Variables**
+
 It is recommended to use models with strong capabilities and large parameter counts.
+
+Copy `/frontend/.env.example` to `/frontend/.env.development` (remove the `.example` suffix)
 
 2. Install Dependencies
 
@@ -93,30 +124,47 @@ git clone https://github.com/jihe520/MathModelAgent.git
 
 Start backend
 
+*Start Redis*
+
 ```bash
 cd backend
 pip install uv # Recommended: use uv to manage python projects
 uv sync # Install dependencies
 # Start backend
-ENV=DEV uvicorn app.main:app --host 0.0.0.0 --port 8000 --ws-ping-interval 60 --ws-ping-timeout 120
+# Activate Python virtual environment
+source .venv/bin/activate # MacOS or Linux
+venv\Scripts\activate.bat # Windows
+# Run this command for MacOS or Linux
+ENV=DEV uvicorn app.main:app --host 0.0.0.0 --port 8000 --ws-ping-interval 60 --ws-ping-timeout 120 --reload
+# Run this command for Windows
+set ENV=DEV ; uvicorn app.main:app --host 0.0.0.0 --port 8000 --ws-ping-interval 60 --ws-ping-timeout 120
 ```
 
 Start frontend
 
 ```bash
 cd frontend
+npm install -g pnpm
 pnpm i # Make sure pnpm is installed
 pnpm run dev
 ```
 
+[Tutorial](./docs/md/tutorial.md)
+
 Results and outputs are generated in the `backend/project/work_dir/xxx/*` directory:
 - notebook.ipynb: code generated during execution
-- res.md: final results in markdown format, can be converted to Word (try pandoc)
+- res.md: final results in markdown format
+
+### 🚀 Option 3: Automated Script Deployment (Community Contribution)
+Need an automatic deployment script?
+[mmaAutoSetupRun](https://github.com/Fitia-UCAS/mmaAutoSetupRun)
+
+Need to customize prompt templates?
+Prompt Inject: [prompt](./backend/app/config/md_template.toml)
 
 ## 🤝 Contribution & Development
 
 [DeepWiki](https://deepwiki.com/jihe520/MathModelAgent)
-
 
 - The project is in **experimental development stage** (updated when I have time), with frequent changes and some bugs being fixed.
 - Everyone is welcome to participate and make the project better.
@@ -131,6 +179,8 @@ After cloning the project, install the **Todo Tree** plugin to view all todo loc
 
 Free for personal use. For commercial use, please contact me (the author).
 
+[License](./docs/md/License.md)
+
 ## 🙏 Reference
 
 Thanks to the following projects:
@@ -142,10 +192,19 @@ Thanks to the following projects:
 
 ## Others
 
-Thanks to sponsors  
+### 💖 Sponsor
+
+[Buy Me a Coffee](./docs/sponser.md)
+
+Thanks to sponsors:
 [danmo-tyc](https://github.com/danmo-tyc)
 
-For questions, join the group  
+### 👥 GROUP
+
+For questions, join the group
+
 [QQ Group: 699970403](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=rFKquDTSxKcWpEhRgpJD-dPhTtqLwJ9r&authKey=xYKvCFG5My4uYZTbIIoV5MIPQedW7hYzf0%2Fbs4EUZ100UegQWcQ8xEEgTczHsyU6&noverify=0&group_code=699970403)
 
-<img src="./docs/qq.jpg" height="400px">
+<div align="center">
+    <img src="./docs/qq.jpg" height="400px">
+</div>

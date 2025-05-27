@@ -30,9 +30,9 @@
 - 📝 生成一份编排好格式的论文
 - 🤝 muti-agents: 建模手，代码手，论文手等
 - 🔄 muti-llms: 每个 agent 设置不同的、合适的模型
-- 支持所有模型: [litellm](https://docs.litellm.ai/docs/providers)
-- 💰 成本低  workflow agentless，不依赖 agent 框架
-- 自定义模板: prompt inject
+- 🤖 支持所有模型: [litellm](https://docs.litellm.ai/docs/providers)
+- 💰 成本低：workflow agentless，不依赖 agent 框架
+- 🧩 自定义模板：prompt inject 为每个 subtask 单独设置需求
 
 ## 🚀 后期计划
 
@@ -53,6 +53,7 @@
 - [ ] 添加 benchmark
 - [ ] web search tool
 - [ ] RAG 知识库
+- [ ] A2A hand off: 代码手多次反思错误，hand off 更聪明模型 agent
 
 ## 视频demo
 
@@ -127,8 +128,11 @@ pnpm run dev
 - notebook.ipynb: 保存运行过程中产生的代码
 - res.md: 保存最后运行产生的结果为 markdown 格式
 
+有没有自动部署的脚本 ？
+[mmaAutoSetupRun](https://github.com/Fitia-UCAS/mmaAutoSetupRun)
+
 需要自定义自定义提示词模板 template ？
-prompt inject : [prompt](./backend/app/config/md_template.toml)
+Prompt Inject : [prompt](./backend/app/config/md_template.toml)
 
 
 ## 🤝 贡献和开发

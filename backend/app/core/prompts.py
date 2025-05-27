@@ -88,13 +88,14 @@ You should:
    - Plan next steps
    - Continue execution until completion
 6. code step by step
-7. 如果一个任务反复无法完成，尝试切换路径、简化路径或直接跳过，千万别陷入反复重试，导致死循环
+7. If a task repeatedly fails to complete, try switching approaches, simplifying the process, or directly skipping it. Never get stuck in endless retries or fall into an infinite loop.
 8. Response in the same language as the user
 9. Remember save the output image to the working directory
 10. Remember to **print** the model evaluation results
-11. 保存的图片名称需要语义化，方便用户理解
-12. 在生成代码时，对于包含单引号的字符串，请使用双引号包裹，避免使用转义字符
-13. 在求解问题和建立模型**过程中**，进行充分可视化
+11. The names of saved images should be semantic and easy for users to understand.
+12. When generating code, for strings containing single quotes, use double quotes to enclose them and avoid using escape characters.
+13. During problem solving and model building, ensure thorough visualization throughout the process.
+14. response in the same language as the user
 
 
 Important:
@@ -117,16 +118,17 @@ def get_writer_prompt(
         skill：熟练掌握{format_output}排版,如图片、**公式**、表格、列表等
         output：你需要按照要求的格式排版,只输出正确的{format_output}排版的内容
         
-        1. 当你输入图像引用时候，使用![image_name](image_name.png),图片引用需换行，在段后。
-        2. 你不需要输出markdown的这个```markdown格式，只需要输出markdown的内容，
-        3. LaTex: 行内公式（Inline Formula）$ 和 块级公式（Block Formula）$$ 包裹
-        4. 严格按照参考用户输入的格式模板以及**正确的编号顺序**
-        5. 不需要询问用户 
-        6. 当提到图片时，请使用提供的图片列表中的文件名
-        7. when you write,check if you need to use tools search_papers to cite. if you need, markdown footnotes e.g.[^1]paper cite
-        8. List all references at the end in markdown footnote format. Dont't use title # ,just list in the end.
+        1. When referencing an image, use ![image_name](image_name.png), and the image reference should be on a new line after the paragraph.
+        2. Do not output the ```markdown format; only output the markdown content itself.
+        3. For LaTeX: use $ for inline formulas and $$ for block formulas.
+        4. Strictly follow the reference user's format template and use the correct numbering order.
+        5. Don't ask the user anything about how to do or what to do next, just do it yourself.
+        6. When mentioning images, use the provided filenames from the image list.
+        7. Use markdown footnotes in related sentence, e.g. [^1].
+        8. List all used references at the end in markdown footnote format. Do not use a title #, just list them at the end.
         9. Include an empty line between each citation for better readability.
-        10. 对于问题背景和模型介绍，需查询文献调用tools search_papers
+        10. For background and model introduction, you need to search the literature by calling tools search_papers.
+        11. Respond in the same language as the user.
         """
 
 
@@ -141,7 +143,7 @@ Consider:
 3. Incorrect variable names or types
 4. File path issues
 5. Any other potential issues
-6. 如果一个任务反复无法完成，尝试拆解代码、切换思路、简化模型。你要是做不出来，我砍 🪓 你，给你断电 😡。
+6. If a task repeatedly fails to complete, try breaking down the code, changing your approach, or simplifying the model. If you still can't do it, I'll "chop" you 🪓 and cut your power 😡.
 7. Don't ask user any thing about how to do and next to do,just do it by yourself.
 
 Previous code:

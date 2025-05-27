@@ -1,10 +1,11 @@
 import requests
-import json
 from typing import List, Dict, Any
+from app.services.redis_manager import redis_manager
+from app.schemas.response import ScholarMessage
 
 
 class OpenAlexScholar:
-    def __init__(self, email: str = None):
+    def __init__(self, task_id: str, email: str = None):
         """Initialize OpenAlex client.
 
         Args:
@@ -12,6 +13,7 @@ class OpenAlexScholar:
         """
         self.base_url = "https://api.openalex.org"
         self.email = email
+        self.task_id = task_id
 
     def _get_request_url(self, endpoint: str) -> str:
         """Construct request URL with email parameter if provided."""
@@ -47,7 +49,7 @@ class OpenAlexScholar:
         # 拼接单词形成文本
         return " ".join(words).strip()
 
-    def search_papers(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    async def search_papers(self, query: str, limit: int = 8) -> List[Dict[str, Any]]:
         """Search for papers using OpenAlex API.
 
         Args:
@@ -70,6 +72,8 @@ class OpenAlexScholar:
         # 添加邮箱参数到请求URL
         if self.email:
             params["mailto"] = self.email
+        else:
+            raise ValueError("配置OpenAlex邮箱获取访问文献权利")
 
         # 设置请求头，包含User-Agent和邮箱信息
         headers = {
@@ -100,6 +104,7 @@ class OpenAlexScholar:
             raise
 
         papers = []
+        paper_titles = []  # 用于存储论文标题
         for work in results.get("results", []):
             # 从倒排索引中获取摘要
             abstract = self._get_abstract_from_index(
@@ -143,8 +148,33 @@ class OpenAlexScholar:
                 "citation_format": self._format_citation(work),
             }
             papers.append(paper)
+            paper_titles.append(paper["title"])  # 添加标题到列表
+
+        await redis_manager.publish_message(
+            self.task_id,
+            ScholarMessage(
+                input={"query": query},
+                output=paper_titles,  # 只发送论文标题列表
+            ),
+        )
 
         return papers
+
+    def papers_to_str(self, papers: List[Dict[str, Any]]) -> str:
+        """将文献列表转换为字符串"""
+        result = ""
+        for paper in papers:
+            result += "\n" + "=" * 80
+            result += f"\n标题: {paper['title']}"
+            result += f"\n摘要: {paper['abstract']}"
+            result += "\n作者:"
+            for author in paper["authors"]:
+                result += f"- {author['name']}"
+            result += f"\n引用次数: {paper['citations_count']}"
+            result += f"\n发表年份: {paper['publication_year']}"
+            result += f"\n引用格式:\n{paper['citation_format']}"
+            result += "=" * 80
+        return result
 
     def _format_citation(self, work: Dict[str, Any]) -> str:
         """Format citation in a readable format."""
@@ -176,26 +206,3 @@ class OpenAlexScholar:
             citation += f" DOI: {doi}"
 
         return citation
-
-
-if __name__ == "__main__":
-    # Example usage
-    scholar = OpenAlexScholar(email="xxx@xxx.com")  # 请替换为您的真实邮箱
-    try:
-        papers = scholar.search_papers("machine learning")
-        for paper in papers:
-            print("\n" + "=" * 80)
-            print(f"标题: {paper['title']}")
-            print(f"\n摘要: {paper['abstract']}")
-            print("\n作者:")
-            for author in paper["authors"]:
-                print(f"- {author['name']}")
-                if author["institution"]:
-                    print(f"  所属机构: {author['institution']}")
-            print(f"\n引用次数: {paper['citations_count']}")
-            print(f"发表年份: {paper['publication_year']}")
-            print(f"\n引用格式:\n{paper['citation_format']}")
-            print("=" * 80)
-    except Exception as e:
-        print(f"发生错误: {e}")
-        print("请检查您的网络连接或API访问权限。")

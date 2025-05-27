@@ -30,9 +30,9 @@ onMounted(() => {
       <div class="py-5 px-4">
         <div class="space-y-6">
           <div class="text-center space-y-2 mb-10">
-            <h1 class="text-2xl font-semibold">数模竞赛助手</h1>
+            <h1 class="text-2xl font-semibold">MathModelAgent</h1>
             <p class="text-muted-foreground">
-              让 AI 自主数学建模，代码撰写，论文写作
+              让 Agent 数学建模，代码编写，论文写作
             </p>
           </div>
 

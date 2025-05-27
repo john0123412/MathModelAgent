@@ -17,9 +17,27 @@ def parse_cors(value: str) -> list[str]:
 
 class Settings(BaseSettings):
     ENV: str
-    API_KEY: str
-    MODEL: str
-    BASE_URL: Optional[str] = None
+
+    COORDINATOR_API_KEY: str
+    COORDINATOR_MODEL: str
+    COORDINATOR_BASE_URL: Optional[str] = None
+
+    MODELER_API_KEY: str
+    MODELER_MODEL: str
+    MODELER_BASE_URL: Optional[str] = None
+
+    CODER_API_KEY: str
+    CODER_MODEL: str
+    CODER_BASE_URL: Optional[str] = None
+
+    WRITER_API_KEY: str
+    WRITER_MODEL: str
+    WRITER_BASE_URL: Optional[str] = None
+
+    DEFAULT_API_KEY: str
+    DEFAULT_MODEL: str
+    DEFAULT_BASE_URL: Optional[str] = None
+
     MAX_CHAT_TURNS: int
     MAX_RETRIES: int
     E2B_API_KEY: Optional[str] = None
@@ -29,6 +47,7 @@ class Settings(BaseSettings):
     REDIS_MAX_CONNECTIONS: int
     CORS_ALLOW_ORIGINS: Annotated[list[str] | str, BeforeValidator(parse_cors)]
     SERVER_HOST: str = "http://localhost:8000"  # 默认值
+    OPENALEX_EMAIL: Optional[str] = None
 
     model_config = SettingsConfigDict(
         env_file=".env.dev",

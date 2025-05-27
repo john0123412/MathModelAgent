@@ -2,11 +2,12 @@ import os
 import datetime
 import hashlib
 import tomllib
-from app.utils.enums import CompTemplate
+from app.schemas.enums import CompTemplate
 from app.utils.log_util import logger
 import re
 import pypandoc
 from app.config.setting import settings
+from icecream import ic
 
 
 def create_task_id() -> str:
@@ -60,7 +61,6 @@ def get_current_files(folder_path: str, type: str = "all") -> list[str]:
     files = os.listdir(folder_path)
     if type == "all":
         return files
-
     elif type == "md":
         return [file for file in files if file.endswith(".md")]
     elif type == "ipynb":
@@ -96,7 +96,6 @@ def md_2_docx(task_id: str):
         str(work_dir),
         "--mathml",  # MathML 格式公式
         "--standalone",
-        # "--extract-media=" + str(md_dir / "generated_images")  # 按需启用
     ]
 
     pypandoc.convert_file(
@@ -108,3 +107,14 @@ def md_2_docx(task_id: str):
     )
     print(f"转换完成: {docx_path}")
     logger.info(f"转换完成: {docx_path}")
+
+
+def split_footnotes(text: str) -> tuple[str, list[tuple[str, str]]]:
+    main_text = re.sub(
+        r"\n\[\^\d+\]:.*?(?=\n\[\^|\n\n|\Z)", "", text, flags=re.DOTALL
+    ).strip()
+
+    # 匹配脚注定义
+    footnotes = re.findall(r"\[\^(\d+)\]:\s*(.+?)(?=\n\[\^|\n\n|\Z)", text, re.DOTALL)
+    logger.info(f"main_text:{main_text} \n footnotes:{footnotes}")
+    return main_text, footnotes

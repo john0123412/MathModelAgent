@@ -1,16 +1,13 @@
 from app.tools.base_interpreter import BaseCodeInterpreter
-from app.utils.notebook_serializer import NotebookSerializer
+from app.tools.notebook_serializer import NotebookSerializer
 import jupyter_client
 from app.utils.log_util import logger
 import os
-from app.utils.redis_manager import redis_manager
+from app.services.redis_manager import redis_manager
 from app.schemas.response import (
-    CoderMessage,
-    ErrorModel,
     OutputItem,
     ResultModel,
     StdErrModel,
-    StdOutModel,
     SystemMessage,
 )
 
@@ -56,7 +53,7 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         )
         self.execute_code_(init_code)
 
-    async def execute_code(self, code: str) -> tuple[str, bool, str]:
+    async def execute_code(self, code: str) -> tuple[str, bool, str, list[str]]:
         logger.info(f"执行代码: {code}")
         #  添加代码到notebook
         self.notebook_serializer.add_code_cell_to_notebook(code)
@@ -196,18 +193,21 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         return all_output
 
     async def get_created_images(self, section: str) -> list[str]:
-        """获取当前 section 创建的图片列表"""
+        """获取新创建的图片列表"""
+        current_images = set()
         files = os.listdir(self.work_dir)
         for file in files:
-            if file.endswith(".png") or file.endswith(".jpg"):
-                self.add_section(section)
-                self.section_output[section]["images"].append(file)
+            if file.endswith((".png", ".jpg", ".jpeg")):
+                current_images.add(file)
 
-            self.created_images = list(
-                set(self.section_output[section]["images"]) - set(self.created_images)
-            )
-            logger.info(f"{section}-获取创建的图片列表: {self.created_images}")
-            return self.created_images
+        # 计算新增的图片
+        new_images = current_images - self.last_created_images
+
+        # 更新last_created_images为当前的图片集合
+        self.last_created_images = current_images
+
+        logger.info(f"新创建的图片列表: {new_images}")
+        return list(new_images)  # 最后转换为list返回
 
     async def cleanup(self):
         # 关闭内核

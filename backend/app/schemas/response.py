@@ -1,5 +1,5 @@
-from typing import List, Literal, Union
-from app.utils.enums import AgentType
+from typing import Literal, Union
+from app.schemas.enums import AgentType
 from pydantic import BaseModel, Field
 from uuid import uuid4
 
@@ -7,9 +7,16 @@ from uuid import uuid4
 class Message(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     msg_type: Literal[
-        "system", "agent", "user"
-    ]  # system msg | agent message | user message
+        "system", "agent", "user", "tool"
+    ]  # system msg | agent message | user message | tool message
     content: str | None = None
+
+
+class ToolMessage(Message):
+    msg_type: str = "tool"
+    tool_name: Literal["execute_code", "search_scholar"]
+    input: dict
+    output: list
 
 
 class SystemMessage(Message):
@@ -23,7 +30,15 @@ class UserMessage(Message):
 
 class AgentMessage(Message):
     msg_type: str = "agent"
-    agent_type: AgentType  # CoderAgent | WriterAgent
+    agent_type: AgentType  # CoordinatorAgent | ModelerAgent | CoderAgent | WriterAgent
+
+
+class ModelerMessage(AgentMessage):
+    agent_type: AgentType = AgentType.MODELER
+
+
+class CoordinatorMessage(AgentMessage):
+    agent_type: AgentType = AgentType.COORDINATOR
 
 
 class CodeExecution(BaseModel):
@@ -66,13 +81,22 @@ class ErrorModel(CodeExecution):
 OutputItem = Union[StdOutModel, StdErrModel, ResultModel, ErrorModel]
 
 
+class ScholarMessage(ToolMessage):
+    tool_name: str = "search_scholar"
+    input: dict | None = None  # query
+    output: list[str] | None = None  # cites
+
+
+class InterpreterMessage(ToolMessage):
+    tool_name: str = "execute_code"
+    input: dict | None = None  # code
+    output: list[OutputItem] | None = None  # code_results
+
+
 # 1. 只带 code
 # 2. 只带 code result
 class CoderMessage(AgentMessage):
     agent_type: AgentType = AgentType.CODER
-    code: str | None = None
-    code_results: list[OutputItem] | None = None
-    files: list[str] | None = None
 
 
 class WriterMessage(AgentMessage):
@@ -81,4 +105,11 @@ class WriterMessage(AgentMessage):
 
 
 # 所有可能的消息类型
-MessageType = Union[SystemMessage, UserMessage, CoderMessage, WriterMessage]
+MessageType = Union[
+    SystemMessage,
+    UserMessage,
+    ModelerMessage,
+    CoderMessage,
+    WriterMessage,
+    CoordinatorMessage,
+]

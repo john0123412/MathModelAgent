@@ -12,6 +12,8 @@ class FormatOutPut(str, Enum):
 
 
 class AgentType(str, Enum):
+    COORDINATOR = "CoordinatorAgent"
+    MODELER = "ModelerAgent"
     CODER = "CoderAgent"
     WRITER = "WriterAgent"
     SYSTEM = "SystemAgent"

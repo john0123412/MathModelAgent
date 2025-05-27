@@ -1,14 +1,12 @@
 # base_interpreter.py
 import abc
 import re
-from app.utils.notebook_serializer import NotebookSerializer
-from app.utils.redis_manager import redis_manager
-from app.utils.common_utils import get_current_files
+from app.tools.notebook_serializer import NotebookSerializer
+from app.services.redis_manager import redis_manager
 from app.utils.log_util import logger
 from app.schemas.response import (
-    CoderMessage,
     OutputItem,
-    AgentType,
+    InterpreterMessage,
 )
 
 
@@ -23,7 +21,7 @@ class BaseCodeInterpreter(abc.ABC):
         self.work_dir = work_dir
         self.notebook_serializer = notebook_serializer
         self.section_output: dict[str, dict[str, list[str]]] = {}
-        self.created_images: list[str] = []
+        self.last_created_images = set()
 
     @abc.abstractmethod
     async def initialize(self):
@@ -36,7 +34,7 @@ class BaseCodeInterpreter(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def execute_code(self, code: str) -> tuple[str, bool, str]:
+    async def execute_code(self, code: str) -> tuple[str, bool, str, list[str]]:
         """执行一段代码，返回 (输出文本, 是否出错, 错误信息)"""
         ...
 
@@ -45,13 +43,16 @@ class BaseCodeInterpreter(abc.ABC):
         """清理资源，比如关闭沙箱或内核"""
         ...
 
+    @abc.abstractmethod
+    async def get_created_images(self, section: str) -> list[str]:
+        """获取当前 section 创建的图片列表"""
+        ...
+
     async def _push_to_websocket(self, content_to_display: list[OutputItem] | None):
         logger.info("执行结果已推送到WebSocket")
 
-        agent_msg = CoderMessage(
-            agent_type=AgentType.CODER,
-            code_results=content_to_display,
-            files=get_current_files(self.work_dir, "all"),
+        agent_msg = InterpreterMessage(
+            output=content_to_display,
         )
         logger.debug(f"发送消息: {agent_msg.model_dump_json()}")
         await redis_manager.publish_message(

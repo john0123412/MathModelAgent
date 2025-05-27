@@ -16,6 +16,9 @@ import { submitModelingTask } from '@/apis/submitModelingApi'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Rocket } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
+import { useTaskStore } from '@/stores/task'
+
+const taskStore = useTaskStore()
 
 const currentStep = ref(1)
 const fileUploaded = ref(true)
@@ -102,6 +105,7 @@ const handleSubmit = async () => {
     )
 
     taskId.value = response?.data?.task_id ?? null
+    taskStore.addUserMessage(question.value)
 
     showSubmitSuccess.value = true
     setTimeout(() => {

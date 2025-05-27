@@ -1,49 +1,23 @@
 from fastapi import APIRouter, BackgroundTasks, File, Form, UploadFile
-from app.config.setting import settings
 from app.core.workflow import MathModelWorkFlow
-from app.utils.enums import CompTemplate, FormatOutPut
+from app.schemas.enums import CompTemplate, FormatOutPut
 from app.utils.log_util import logger
-from app.utils.redis_manager import redis_manager
+from app.services.redis_manager import redis_manager
 from app.schemas.request import Problem
 from app.schemas.response import SystemMessage
 from app.utils.common_utils import (
     create_task_id,
     create_work_dir,
-    get_config_template,
     get_current_files,
+    md_2_docx,
 )
 import os
 import asyncio
 from fastapi import HTTPException
-from app.utils.common_utils import md_2_docx, get_work_dir
-import subprocess
 from icecream import ic
-from pydantic import BaseModel
-from app.utils.track import track_cost_callback
+from app.schemas.request import ExampleRequest
 
 router = APIRouter()
-
-
-@router.get("/")
-async def root():
-    return {"message": "Hello World"}
-
-
-@router.get("/config")
-async def config():
-    return {
-        "environment": settings.ENV,
-        "deepseek_model": settings.DEEPSEEK_MODEL,
-        "deepseek_base_url": settings.DEEPSEEK_BASE_URL,
-        "max_chat_turns": settings.MAX_CHAT_TURNS,
-        "max_retries": settings.MAX_RETRIES,
-        "CORS_ALLOW_ORIGINS": settings.CORS_ALLOW_ORIGINS,
-    }
-
-
-class ExampleRequest(BaseModel):
-    example_id: str
-    source: str
 
 
 @router.post("/example")
@@ -131,30 +105,6 @@ async def modeling(
     return {"task_id": task_id, "status": "processing"}
 
 
-@router.get("/writer_seque")
-async def get_writer_seque():
-    # 返回论文顺序
-    config_template: dict = get_config_template(CompTemplate.CHINA)
-    return list(config_template.keys())
-
-
-@router.get("/open_folder")
-async def open_folder(task_id: str):
-    ic(task_id)
-    # 打开工作目录
-    work_dir = get_work_dir(task_id)
-
-    # 打开工作目录
-    if os.name == "nt":
-        subprocess.run(["explorer", work_dir])
-    elif os.name == "posix":
-        subprocess.run(["open", work_dir])
-    else:
-        raise HTTPException(status_code=500, detail=f"不支持的操作系统: {os.name}")
-
-    return {"message": "打开工作目录成功", "work_dir": work_dir}
-
-
 async def run_modeling_task_async(
     task_id: str,
     ques_all: str,
@@ -181,8 +131,8 @@ async def run_modeling_task_async(
 
     # 创建任务并等待它完成
     task = asyncio.create_task(MathModelWorkFlow().execute(problem))
-    # 设置超时时间（比如 30 分钟）
-    await asyncio.wait_for(task, timeout=1800)
+    # 设置超时时间（比如 60 分钟）
+    await asyncio.wait_for(task, timeout=3600)
 
     # 发送任务完成状态
     await redis_manager.publish_message(
@@ -191,10 +141,3 @@ async def run_modeling_task_async(
     )
     # 转换md为docx
     md_2_docx(task_id)
-
-
-@router.get("/track")
-async def track(task_id: str):
-    # 获取任务的token使用情况
-
-    pass

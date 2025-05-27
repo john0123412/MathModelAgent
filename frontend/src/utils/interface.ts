@@ -1,4 +1,4 @@
-import type { CodeExecutionResult } from './response'
+import type { OutputItem } from './response'
 
 // 代码单元格类型
 export interface CodeCell {
@@ -9,7 +9,7 @@ export interface CodeCell {
 // 结果单元格类型
 export interface ResultCell {
   type: 'result'
-  code_results: CodeExecutionResult[]
+  code_results: OutputItem[]
 }
 
 // 笔记本单元格类型（代码或结果）

@@ -24,11 +24,15 @@
 ## ✨ 功能特性
 
 - 🔍 自动分析问题，数学建模，编写代码，纠正错误，撰写论文
-- 💻 本地代码解释器
+- 💻 Code Interperter
+    - loacl Interperter: 基于 jupyter , 代码保存为 notebook 方便再编辑
+    - 云端 code interperter: [E2B](https://e2b.dev/) 和 [daytona](https://app.daytona.io/)
 - 📝 生成一份编排好格式的论文
-- 🤝 muti-agents: ~~建模手~~，代码手(反思模块，本地代码解释器)，论文手
-- 🔄 muti-llms: 每个agent设置不同的模型
-- 💰 成本低 agentless(单次任务成本约 1 rmb)
+- 🤝 muti-agents: 建模手，代码手，论文手等
+- 🔄 muti-llms: 每个 agent 设置不同的、合适的模型
+- 🤖 支持所有模型: [litellm](https://docs.litellm.ai/docs/providers)
+- 💰 成本低：workflow agentless，不依赖 agent 框架
+- 🧩 自定义模板：prompt inject 为每个 subtask 单独设置需求
 
 ## 🚀 后期计划
 
@@ -38,14 +42,18 @@
 - [ ] 英文支持（美赛）
 - [ ] 集成 latex 模板
 - [ ] 接入视觉模型
-- [ ] 添加正确文献引用
+- [x] 添加正确文献引用
 - [x] 更多测试案例
 - [ ] docker 部署
-- [ ] 引入用户的交互（选择模型，重写等等）
+- [ ] human in loop: 引入用户的交互（选择模型，@agent重写，等等）
+- [ ] feedback: evaluate the result and modify
 - [x] codeinterpreter 接入云端 如 e2b 等供应商..
 - [ ] 多语言: R 语言, matlab
-- [ ] 绘图 napki,draw.io
+- [ ] 绘图 napki,draw.io,plantuml,svg, mermaid.js
 - [ ] 添加 benchmark
+- [ ] web search tool
+- [ ] RAG 知识库
+- [ ] A2A hand off: 代码手多次反思错误，hand off 更聪明模型 agent
 
 ## 视频demo
 
@@ -55,6 +63,10 @@
 > 项目处于实验探索迭代demo阶段，有许多需要改进优化改进地方，我(项目作者)很忙，有时间会优化更新
 > 欢迎贡献
 
+
+案例参考 [demo](./demo/) 文件夹下
+**如果你有跑出来好的案例可以提交 PR 在该目录下**
+
 ## 📖 使用教程
 
 > 确保电脑中安装好 Python, Nodejs, **Redis** 环境
@@ -63,19 +75,13 @@
 
 
 
-1. 配置模型
+1. 配置环境变量
 
 复制`/backend/.env.dev.example`到`/backend/.env.dev`(删除`.example` 后缀)
-填写配置模型和 APIKEY
-推荐模型能力较强的、参数量大的模型。
 
-```bash
-# support all model, check out https://docs.litellm.ai/docs/ 
-API_KEY=
-# gpt-4.1,deepseek/deepseek-chat
-MODEL=
-# 确保安装 Redis
-```
+**配置环境变量**
+
+推荐模型能力较强的、参数量大的模型。
 
 复制`/fronted/.env.example`到`/fronted/.env`(删除`.example` 后缀)
 
@@ -90,6 +96,8 @@ git clone https://github.com/jihe520/MathModelAgent.git # 克隆项目
 ```
 
 启动后端
+
+*启动 redis*
 
 ```bash
 cd backend # 切换到 backend 目录下
@@ -114,10 +122,18 @@ pnpm i #确保电脑安装了 pnpm
 pnpm run dev
 ```
 
+[教程](./docs/md/tutorial.md)
 
 运行的结果和产生在`backend/project/work_dir/xxx/*`目录下
 - notebook.ipynb: 保存运行过程中产生的代码
-- res.md: 保存最后运行产生的结果为 markdown 格式，使用 markdown 转 word(研究下 pandoc)
+- res.md: 保存最后运行产生的结果为 markdown 格式
+
+有没有自动部署的脚本 ？
+[mmaAutoSetupRun](https://github.com/Fitia-UCAS/mmaAutoSetupRun)
+
+需要自定义自定义提示词模板 template ？
+Prompt Inject : [prompt](./backend/app/config/md_template.toml)
+
 
 ## 🤝 贡献和开发
 
@@ -134,7 +150,8 @@ clone 项目后，下载 **Todo Tree** 插件，可以查看代码中所有具�
 
 ## 📄 版权License
 
-个人免费使用，请勿商业用途，商业用途联系我（作者）
+个人免费使用，请勿商业用途。
+[License](./docs/md/License.md)
 
 ## 🙏 Reference
 
@@ -147,10 +164,18 @@ Thanks to the following projects:
 
 ## 其他
 
+### Sponsor
+
+[Buy Me a Coffee](./docs/sponser.md)
+
 感谢赞助
 [danmo-tyc](https://github.com/danmo-tyc)
+
+### GROUP
 
 有问题可以进群问
 [QQ 群：699970403](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=rFKquDTSxKcWpEhRgpJD-dPhTtqLwJ9r&authKey=xYKvCFG5My4uYZTbIIoV5MIPQedW7hYzf0%2Fbs4EUZ100UegQWcQ8xEEgTczHsyU6&noverify=0&group_code=699970403)
 
-<img src="./docs/qq.jpg" height="400px">
+<div align="center">
+    <img src="./docs/qq.jpg" height="400px">
+</div>

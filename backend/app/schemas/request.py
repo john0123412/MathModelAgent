@@ -1,5 +1,10 @@
 from pydantic import BaseModel
-from app.utils.enums import CompTemplate, FormatOutPut
+from app.schemas.enums import CompTemplate, FormatOutPut
+
+
+class ExampleRequest(BaseModel):
+    example_id: str
+    source: str
 
 
 class Problem(BaseModel):

@@ -1,5 +1,5 @@
 import litellm
-from app.utils.redis_manager import redis_manager
+from app.services.redis_manager import redis_manager
 
 
 # track_cost_callback

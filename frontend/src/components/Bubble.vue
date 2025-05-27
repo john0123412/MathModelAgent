@@ -3,10 +3,12 @@ import { cn } from '@/lib/utils'
 import type { HTMLAttributes } from 'vue'
 import { marked } from 'marked'
 import { computed } from 'vue'
+import { AgentType } from '@/utils/enum'
+
 
 interface BubbleProps {
   type: 'agent' | 'user'
-  agentType?: 'CoderAgent' | 'WriterAgent'
+  agentType?: AgentType
   class?: HTMLAttributes['class']
   content: string
 }

@@ -4,6 +4,7 @@ from app.schemas.enums import FormatOutPut
 FORMAT_QUESTIONS_PROMPT = """
 用户将提供给你一段题目信息，**请你不要更改题目信息，完整将用户输入的内容**，以 JSON 的形式输出，输出的 JSON 需遵守以下的格式：
 
+```json
 {
   "title": <题目标题>      
   "background": <题目背景，用户输入的一切不在title，ques1，ques2，ques3...中的内容都视为问题背景信息background>,
@@ -12,6 +13,7 @@ FORMAT_QUESTIONS_PROMPT = """
   "ques2": <问题2>,
   "ques3": <问题3,用户输入的存在多少问题，就输出多少问题ques1,ques2,ques3...以此类推>,
 }
+```
 """
 
 
@@ -124,11 +126,14 @@ def get_writer_prompt(
         4. Strictly follow the reference user's format template and use the correct numbering order.
         5. Don't ask the user anything about how to do or what to do next, just do it yourself.
         6. When mentioning images, use the provided filenames from the image list.
-        7. Use markdown footnotes in related sentence, e.g. [^1].
-        8. List all used references at the end in markdown footnote format. Do not use a title #, just list them at the end.
-        9. Include an empty line between each citation for better readability.
-        10. For background and model introduction, you need to search the literature by calling tools search_papers.
-        11. Respond in the same language as the user.
+        7. 重要：**确保每个文献只能引用一次，不要重复引用和多次引用**。如果需要文献，调用 tool
+        8. 在文中需要引用文献时，直接在相关句子或段落后内联写入完整的引用信息，格式如下：
+           **示例格式：研究表明部分母亲存在轻度创伤后应激症状[^1]: Jayne Smart, Harriet Hiscock (2007). Early infant crying and sleeping problems: A pilot study of impact on parental well‐being and parent‐endorsed strategies for management.。**
+        9. **每个文献引用都应该直接跟在相关内容后面，包含完整的文献信息。**
+        10. **脚注编号从[^1]开始，在本次回复中按顺序递增。**
+        11. **不要在文末单独列出参考文献，所有引用信息都直接内联在正文中。** 
+        11. For background and model introduction, you need to search the literature by calling tools search_papers.
+        12. Respond in the same language as the user.
         """
 
 

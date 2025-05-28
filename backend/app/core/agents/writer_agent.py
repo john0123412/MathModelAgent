@@ -87,7 +87,6 @@ class WriterAgent(Agent):  # 同样继承自Agent类
             logger.info("检测到工具调用")
             tool_call = response.choices[0].message.tool_calls[0]
             tool_id = tool_call.id
-            tool_call.function.name
             if tool_call.function.name == "search_papers":
                 logger.info("调用工具: search_papers")
                 await redis_manager.publish_message(
@@ -104,24 +103,9 @@ class WriterAgent(Agent):  # 同样继承自Agent类
                     ),
                 )
 
-                full_content = response.choices[0].message.content
                 # 更新对话历史 - 添加助手的响应
-                self.append_chat_history(
-                    {
-                        "role": "assistant",
-                        "content": full_content,
-                        "tool_calls": [
-                            {
-                                "id": tool_id,
-                                "type": "function",
-                                "function": {
-                                    "name": "search_papers",
-                                    "arguments": json.dumps({"query": query}),
-                                },
-                            }
-                        ],
-                    }
-                )
+                self.append_chat_history(response.choices[0].message.model_dump())
+                ic(response.choices[0].message.model_dump())
 
                 try:
                     papers = await self.scholar.search_papers(query)

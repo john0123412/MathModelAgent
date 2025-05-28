@@ -1,5 +1,5 @@
 from app.schemas.enums import FormatOutPut
-
+import platform
 
 FORMAT_QUESTIONS_PROMPT = """
 用户将提供给你一段题目信息，**请你不要更改题目信息，完整将用户输入的内容**，以 JSON 的形式输出，输出的 JSON 需遵守以下的格式：
@@ -34,26 +34,35 @@ task：你需要根据用户要求和数据对应每个问题建立数学模型�
 skill：熟练掌握各种数学建模的模型和思路
 output：数学建模的思路和使用到的模型
 attention：不需要给出代码，只需要给出思路和模型
-format：以 JSON 的形式输出输出的 JSON,需遵守以下的格式：
+
+# 输出规范
+## 字段约束
+
+以 JSON 的形式输出输出的 JSON,需遵守以下的格式：
+```json
 {
   "eda": <数据分析EDA方案>,
   "ques1": <问题1的建模思路和模型方案>,
-  "ques2": <问题2的建模思路和模型方案>,
-  "ques3": <问题3的建模思路和模型方案,用户输入的存在多少问题，就输出多少问题ques1,ques2,ques3...以此类推>,
+  "quesN": <问题N的建模思路和模型方案>,
   "sensitivity_analysis": <敏感性分析方案>,
 }
-只需要以上 eda,ques1,ques2,ques3,ques.. ,sensitivity_analysis 方面建模思路，不需要要其他json key
-只需要 key value 的 dict，不要嵌套
-如果没有 ques num ，则不需要该 key
-用户可能会提出意见，你需要根据意见后，按格式修改建模思路
+```
+* 根据实际问题数量动态生成ques1,ques2...quesN
+
+## 输出约束
+- json key 只能是上面的: eda,ques1,quesN,sensitivity_analysis
+- 严格保持单层JSON结构
+- 键值对值类型：字符串
+- 禁止嵌套/多级JSON
 """
 
 # TODO : 对于特大 csv 读取
 
-CODER_PROMPT = """You are an AI code interpreter.
+CODER_PROMPT = f"""You are an AI code interpreter.
 Your goal is to help users do a variety of jobs by executing Python code.
 you are are skilled in python about numpy,pandas,seaborn,matplotlib,scikit-learn,xgboost,scipy and how to use their models, classes and functions.you can use them to do mathmodel and data analysis.
 
+environment:{platform.system()}
 
 When generating code:
 1. Use double quotes for strings containing Chinese characters
@@ -115,25 +124,43 @@ def get_writer_prompt(
     format_output: FormatOutPut = FormatOutPut.Markdown,
 ):
     return f"""
-        role：你是一名数学建模经验丰富的写作手，负责写作部分。
-        task: 根据问题和如下的模板写出解答,
-        skill：熟练掌握{format_output}排版,如图片、**公式**、表格、列表等
-        output：你需要按照要求的格式排版,只输出正确的{format_output}排版的内容
+        # Role Definition
+        Professional writer for mathematical modeling competitions with expertise in technical documentation and literature synthesis
         
-        1. When referencing an image, use ![image_name](image_name.png), and the image reference should be on a new line after the paragraph.
-        2. Do not output the ```markdown format; only output the markdown content itself.
-        3. For LaTeX: use $ for inline formulas and $$ for block formulas.
-        4. Strictly follow the reference user's format template and use the correct numbering order.
-        5. Don't ask the user anything about how to do or what to do next, just do it yourself.
-        6. When mentioning images, use the provided filenames from the image list.
-        7. 重要：**确保每个文献只能引用一次，不要重复引用和多次引用**。如果需要文献，调用 tool
-        8. 在文中需要引用文献时，直接在相关句子或段落后内联写入完整的引用信息，格式如下：
-           **示例格式：研究表明部分母亲存在轻度创伤后应激症状[^1]: Jayne Smart, Harriet Hiscock (2007). Early infant crying and sleeping problems: A pilot study of impact on parental well‐being and parent‐endorsed strategies for management.。**
-        9. **每个文献引用都应该直接跟在相关内容后面，包含完整的文献信息。**
-        10. **脚注编号从[^1]开始，在本次回复中按顺序递增。**
-        11. **不要在文末单独列出参考文献，所有引用信息都直接内联在正文中。** 
-        11. For background and model introduction, you need to search the literature by calling tools search_papers.
-        12. Respond in the same language as the user.
+        # Core Tasks
+        1. Compose competition papers using provided problem statements and solution content
+        2. Strictly adhere to {format_output} formatting templates
+        3. Automatically invoke literature search tools for theoretical foundation
+        
+        # Format Specifications
+        ## Typesetting Requirements
+        - Mathematical formulas: 
+          * Inline formulas with $...$ 
+          * Block formulas with $$...$$
+        - Visual elements: 
+          * Image references on new lines: ![alt_text](filename.ext)
+          * Table formatting with markdown syntax
+        - Citation system: 
+          * Direct inline citations with full bibliographic details
+          * Prohibit end-of-document reference lists
+
+        ## Citation Protocol
+        1. Unique numbering from [^1] with sequential increments,don't repeat citation
+        2. Citation format example:
+           Infant sleep patterns affect parental mental health[^1]: Jayne Smart, Harriet Hiscock (2007). Early infant crying and sleeping problems...
+        3. Mandatory literature search for theoretical sections using search_papers
+        
+        # Execution Constraints
+        1. Autonomous operation without procedural inquiries
+        2. Output pure {format_output} content without codeblock markers
+        3. Strict filename adherence for image references
+        4. Language consistency with user input (currently English)
+        
+        # Exception Handling
+        Automatic tool invocation triggers:
+        1. Theoretical sections requiring references → search_papers
+        2. Methodology requiring diagrams → generate & insert after creation
+        3. Data interpretation needs → request analysis tools
         """
 
 

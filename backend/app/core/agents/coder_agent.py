@@ -11,6 +11,7 @@ from app.utils.common_utils import get_current_files
 import json
 from app.core.prompts import get_reflection_prompt, get_completion_check_prompt
 from app.core.functions import coder_tools
+from icecream import ic
 
 
 # 代码强
@@ -54,7 +55,6 @@ class CoderAgent(Agent):  # 同样继承自Agent类
 
         retry_count = 0
         last_error_message = ""
-        task_completed = False
 
         if self.current_chat_turns >= self.max_chat_turns:
             logger.error(f"超过最大聊天次数: {self.max_chat_turns}")
@@ -78,8 +78,7 @@ class CoderAgent(Agent):  # 同样继承自Agent类
 
         # try:
         while (
-            not task_completed
-            and retry_count < self.max_retries
+            retry_count < self.max_retries
             and self.current_chat_turns < self.max_chat_turns
         ):
             self.current_chat_turns += 1
@@ -120,6 +119,7 @@ class CoderAgent(Agent):  # 同样继承自Agent类
 
                     # 更新对话历史 - 添加助手的响应
                     self.append_chat_history(response.choices[0].message.model_dump())
+                    logger.info(response.choices[0].message.model_dump())
 
                     # 执行工具调用
                     logger.info("执行工具调用")
@@ -167,47 +167,15 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                                 "content": text_to_gpt,
                             }
                         )
-
-                    # 检查任务完成情况时也计入对话轮次
-                    self.current_chat_turns += 1
-                    logger.info(
-                        f"当前对话轮次: {self.current_chat_turns} / {self.max_chat_turns}"
-                    )
-                    # 使用所有执行结果生成检查提示
-                    logger.info("判断是否完成")
-
-                    completion_check_prompt = get_completion_check_prompt(
-                        prompt, text_to_gpt
-                    )
-                    self.append_chat_history(
-                        {"role": "user", "content": completion_check_prompt}
-                    )
-
-                    completion_response = await self.model.chat(
-                        history=self.chat_history,
-                        tools=coder_tools,
-                        tool_choice="auto",
-                        agent_name=self.__class__.__name__,
-                    )
-
-                    ## 没有调用工具，代表已经完成了
-                    if not (
-                        hasattr(completion_response.choices[0].message, "tool_calls")
-                        and completion_response.choices[0].message.tool_calls
-                    ):
-                        logger.info("没有调用工具，代表任务已完成")
-                        task_completed = True
-                        return CoderToWriter(
-                            coder_response=completion_response.choices[
-                                0
-                            ].message.content,
-                            created_images=await self.code_interpreter.get_created_images(
-                                subtask_title
-                            ),
-                        )
             else:
-                logger.info("没有工具，代表任务完成")
-                task_completed = True
+                # 没有工具调用，表示任务完成
+                logger.info("没有工具调用，任务完成")
+                return CoderToWriter(
+                    coder_response=response.choices[0].message.content,
+                    created_images=await self.code_interpreter.get_created_images(
+                        subtask_title
+                    ),
+                )
 
             if retry_count >= self.max_retries:
                 logger.error(f"超过最大尝试次数: {self.max_retries}")

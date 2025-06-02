@@ -3,12 +3,14 @@ import re
 from app.utils.data_recorder import DataRecorder
 from app.schemas.A2A import WriterResponse
 from app.utils.log_util import logger
-from app.utils.common_utils import split_footnotes
 import json
+import uuid
 
 
 class UserOutput:
-    def __init__(self, work_dir: str, data_recorder: DataRecorder | None = None):
+    def __init__(
+        self, work_dir: str, ques_count: int, data_recorder: DataRecorder | None = None
+    ):
         self.work_dir = work_dir
         self.res: dict[str, dict] = {
             # "eda": {
@@ -23,6 +25,26 @@ class UserOutput:
         self.data_recorder = data_recorder
         self.cost_time = 0.0
         self.initialized = True
+        self.ques_count: int = ques_count
+        self.footnotes = {}
+        self._init_seq()
+
+    def _init_seq(self):
+        # 动态顺序获取拼接res value，正确拼接顺序
+        ques_str = [f"ques{i}" for i in range(1, self.ques_count + 1)]
+
+        # 修改：调整章节顺序，确保符合论文结构
+        self.seq = [
+            "firstPage",  # 标题、摘要、关键词
+            "RepeatQues",  # 一、问题重述
+            "analysisQues",  # 二、问题分析
+            "modelAssumption",  # 三、模型假设
+            "symbol",  # 四、符号说明和数据预处理
+            "eda",  # 四、数据预处理（EDA部分）
+            *ques_str,  # 五、模型的建立与求解（问题1、2...）
+            "sensitivity_analysis",  # 六、模型的分析与检验
+            "judge",  # 七、模型的评价、改进与推广
+        ]
 
     def set_res(self, key: str, writer_response: WriterResponse):
         self.res[key] = {
@@ -43,72 +65,99 @@ class UserOutput:
 
         return model_build_solve
 
-    def get_result_to_save(self, ques_count):
-        # 保存 res.json 文件
+    def replace_references_with_uuid(self, text: str) -> str:
+        # 匹配引用内容，格式为 [^数字]: 引用内容
+        # 修改正则表达式，更精确地匹配单个引用，避免包含其他引用
+        references = re.findall(
+            r"\[\^(\d+)\]:\s*(.*?)(?=\s*!\[|\s*\[\^|\n\n|\Z)", text, re.DOTALL
+        )
 
-        logger.info(f"开始处理结果保存，问题数量: {ques_count}")
+        for ref_num, ref_content in references:
+            # 清理引用内容，去除末尾的空格和点号
+            ref_content = ref_content.strip().rstrip(".")
 
-        # 动态顺序获取拼接res value，正确拼接顺序
-        ques_str = [f"ques{i}" for i in range(1, ques_count + 1)]
+            # 检查当前引用内容是否已经存在于footnotes中
+            existing_uuid = None
+            for uuid_key, footnote_data in self.footnotes.items():
+                if footnote_data["content"] == ref_content:
+                    existing_uuid = uuid_key
+                    break
 
-        # 修改：调整章节顺序，确保符合论文结构
-        seq = [
-            "firstPage",  # 标题、摘要、关键词
-            "RepeatQues",  # 一、问题重述
-            "analysisQues",  # 二、问题分析
-            "modelAssumption",  # 三、模型假设
-            "symbol",  # 四、符号说明和数据预处理
-            "eda",  # 四、数据预处理（EDA部分）
-            *ques_str,  # 五、模型的建立与求解（问题1、2...）
-            "sensitivity_analysis",  # 六、模型的分析与检验
-            "judge",  # 七、模型的评价、改进与推广
-        ]
+            if existing_uuid:
+                # 如果已存在，使用现有的UUID
+                text = re.sub(
+                    rf"\[\^{ref_num}\]:.*?(?=\s*!\[|\s*\[\^|\n\n|\Z)",
+                    f"[{existing_uuid}]",
+                    text,
+                    flags=re.DOTALL,
+                )
+            else:
+                # 如果不存在，创建新的UUID和footnote条目
+                new_uuid = str(uuid.uuid4())
+                self.footnotes[new_uuid] = {
+                    "content": ref_content,
+                }
+                text = re.sub(
+                    rf"\[\^{ref_num}\]:.*?(?=\s*!\[|\s*\[\^|\n\n|\Z)",
+                    f"[{new_uuid}]",
+                    text,
+                    flags=re.DOTALL,
+                )
 
-        # 用于存储所有脚注
-        all_footnotes: dict[str, str] = {}
-        # 收集所有内容和处理脚注
-        all_content = []
+        return text
 
-        for key in seq:
-            if key not in self.res:
-                logger.debug(f"跳过不存在的键: {key}")
-                continue
+    def sort_text_with_footnotes(self, replace_res: dict) -> dict:
+        sort_res = {}
+        ref_index = 1
 
-            content = self.res[key]["response_content"]
-            # 分离正文和脚注
-            main_text, footnotes = split_footnotes(content)
-            # 存储脚注内容（去重）
-            for _, note_content in footnotes:
-                all_footnotes[note_content] = note_content
-            all_content.append(main_text)
+        for seq_key in self.seq:
+            text = replace_res[seq_key]["response_content"]
+            # 找到[uuid]
+            uuid_list = re.findall(r"\[([a-f0-9-]{36})\]", text)
+            for uid in uuid_list:
+                text = text.replace(f"[{uid}]", f"[^{ref_index}]")
+                if self.footnotes[uid].get("number") is None:
+                    self.footnotes[uid]["number"] = ref_index
 
-        # 合并所有内容
-        full_content = "\n".join(all_content)
+                ref_index += 1
+            sort_res[seq_key] = {
+                "response_content": text,
+            }
 
-        # 重新编号脚注引用
-        footnote_mapping = {}  # 旧编号到新编号的映射
-        for i, content in enumerate(all_footnotes.values(), 1):
-            footnote_mapping[content] = str(i)
+        return sort_res
 
-        # 更新正文中的脚注引用
-        for old_content, new_num in footnote_mapping.items():
-            # 在正文中查找并替换脚注引用
-            pattern = r"\[\^\d+\]"
-            # 只替换一次，确保引用的一致性
-            full_content = re.sub(pattern, f"[^{new_num}]", full_content, count=1)
+    def append_footnotes_to_text(self, text: str) -> str:
+        text += "\n\n ## 参考文献"
+        # 将脚注转换为列表并按 number 排序
+        sorted_footnotes = sorted(self.footnotes.items(), key=lambda x: x[1]["number"])
+        for _, footnote in sorted_footnotes:
+            text += f"\n\n[^{footnote['number']}]: {footnote['content']}"
+        return text
 
-        # 添加重新编号后的脚注到文档末尾
-        if all_footnotes:
-            full_content += "\n\n## 参考文献\n\n"
-            for content, num in footnote_mapping.items():
-                full_content += f"[^{num}]: {content}\n\n"
+    def get_result_to_save(self) -> str:
+        replace_res = {}
 
-        return full_content
+        for key, value in self.res.items():
+            new_text = self.replace_references_with_uuid(value["response_content"])
+            replace_res[key] = {
+                "response_content": new_text,
+            }
 
-    def save_result(self, ques_count):
+        sort_res = self.sort_text_with_footnotes(replace_res)
+
+        full_res_1 = "\n\n".join(
+            [sort_res[key]["response_content"] for key in self.seq]
+        )
+
+        full_res = self.append_footnotes_to_text(full_res_1)
+        return full_res
+
+    def save_result(
+        self,
+    ):
         with open(os.path.join(self.work_dir, "res.json"), "w", encoding="utf-8") as f:
             json.dump(self.res, f, ensure_ascii=False, indent=4)
 
         res_path = os.path.join(self.work_dir, "res.md")
         with open(res_path, "w", encoding="utf-8") as f:
-            f.write(self.get_result_to_save(ques_count))
+            f.write(self.get_result_to_save())

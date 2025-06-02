@@ -8,12 +8,10 @@ from app.services.redis_manager import redis_manager
 from app.schemas.response import SystemMessage, WriterMessage
 import json
 from app.core.functions import writer_tools
-from app.utils.common_utils import split_footnotes
 from icecream import ic
 from app.schemas.A2A import WriterResponse
 
 
-# 长文本
 # 长文本
 # TODO: 并行 parallel
 # TODO: 获取当前文件下的文件
@@ -134,7 +132,6 @@ class WriterAgent(Agent):  # 同样继承自Agent类
                     sub_title=sub_title,
                 )
                 response_content = next_response.choices[0].message.content
-                # main_text, footnotes = split_footnotes(response_content)
         else:
             response_content = response.choices[0].message.content
         self.chat_history.append({"role": "assistant", "content": response_content})

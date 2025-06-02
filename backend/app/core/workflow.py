@@ -66,7 +66,7 @@ class MathModelWorkFlow(WorkFlow):
 
         modeler_response = await modeler_agent.run(coordinator_response)
 
-        user_output = UserOutput(work_dir=self.work_dir)
+        user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
 
         await redis_manager.publish_message(
             self.task_id,
@@ -178,4 +178,4 @@ class MathModelWorkFlow(WorkFlow):
 
         logger.info(user_output.get_res())
 
-        user_output.save_result(ques_count=self.ques_count)
+        user_output.save_result()

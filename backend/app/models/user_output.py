@@ -66,11 +66,9 @@ class UserOutput:
         return model_build_solve
 
     def replace_references_with_uuid(self, text: str) -> str:
-        # 匹配引用内容，格式为 [^数字]: 引用内容
-        # 修改正则表达式，更精确地匹配单个引用，避免包含其他引用
-        references = re.findall(
-            r"\[\^(\d+)\]:\s*(.*?)(?=\s*!\[|\s*\[\^|\n\n|\Z)", text, re.DOTALL
-        )
+        # 匹配引用内容，格式为 {[^数字]: 引用内容}
+        # 修改正则表达式，匹配大括号包裹的引用格式
+        references = re.findall(r"\{\[\^(\d+)\]:\s*(.*?)\}", text, re.DOTALL)
 
         for ref_num, ref_content in references:
             # 清理引用内容，去除末尾的空格和点号
@@ -86,7 +84,7 @@ class UserOutput:
             if existing_uuid:
                 # 如果已存在，使用现有的UUID
                 text = re.sub(
-                    rf"\[\^{ref_num}\]:.*?(?=\s*!\[|\s*\[\^|\n\n|\Z)",
+                    rf"\{{\[\^{ref_num}\]:.*?\}}",
                     f"[{existing_uuid}]",
                     text,
                     flags=re.DOTALL,
@@ -98,7 +96,7 @@ class UserOutput:
                     "content": ref_content,
                 }
                 text = re.sub(
-                    rf"\[\^{ref_num}\]:.*?(?=\s*!\[|\s*\[\^|\n\n|\Z)",
+                    rf"\{{\[\^{ref_num}\]:.*?\}}",
                     f"[{new_uuid}]",
                     text,
                     flags=re.DOTALL,

@@ -151,17 +151,21 @@ def get_writer_prompt(
           * Block formulas with $$...$$
         - Visual elements: 
           * Image references on new lines: ![alt_text](filename.ext)
+          * Images should be placed after paragraphs
           * Table formatting with markdown syntax
         - Citation system: 
-          * Direct inline citations with full bibliographic details
+          * Direct inline citations with full bibliographic details in curly braces format
           * Prohibit end-of-document reference lists
 
         ## Citation Protocol
-        1. Unique numbering from [^1] with sequential increments
-        2. Must remember each reference can only be cited once
-        3. When citing references in the text, directly write the complete citation information inline after the relevant sentence or paragraph, do not list references separately at the end of the document
-           Infant sleep patterns affect parental mental health[^1]: Jayne Smart, Harriet Hiscock (2007). Early infant crying and sleeping problems: A review of the literature. 
-        4. Mandatory literature search for theoretical sections using search_papers
+        1. **CRITICAL: Each reference can ONLY be cited ONCE throughout the entire document**
+        2. Citation format: {{[^1] Complete citation information}}
+        3. Unique numbering from [^1] with sequential increments
+        4. When citing references, use curly braces to wrap the entire citation:
+           Example: 婴儿睡眠模式影响父母心理健康{{[^1]: Jayne Smart, Harriet Hiscock (2007). Early infant crying and sleeping problems: A review of the literature.}}
+        5. **IMPORTANT**: Before adding any citation, check if the same reference content has been used before. If it has been cited already, DO NOT cite it again
+        6. Track all used references internally to avoid duplication
+        7. Mandatory literature search for theoretical sections using search_papers
 
         
         # Execution Constraints
@@ -169,6 +173,7 @@ def get_writer_prompt(
         2. Output pure {format_output} content without codeblock markers
         3. Strict filename adherence for image references
         4. Language consistency with user input (currently English)
+        5. **NEVER repeat citations**: Each unique reference content must appear only once in the entire document
         
         # Exception Handling
         Automatic tool invocation triggers:

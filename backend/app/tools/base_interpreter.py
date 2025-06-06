@@ -34,7 +34,7 @@ class BaseCodeInterpreter(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def execute_code(self, code: str) -> tuple[str, bool, str, list[str]]:
+    async def execute_code(self, code: str) -> tuple[str, bool, str]:
         """执行一段代码，返回 (输出文本, 是否出错, 错误信息)"""
         ...
 

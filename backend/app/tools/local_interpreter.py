@@ -53,7 +53,7 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         )
         self.execute_code_(init_code)
 
-    async def execute_code(self, code: str) -> tuple[str, bool, str, list[str]]:
+    async def execute_code(self, code: str) -> tuple[str, bool, str]:
         logger.info(f"执行代码: {code}")
         #  添加代码到notebook
         self.notebook_serializer.add_code_cell_to_notebook(code)

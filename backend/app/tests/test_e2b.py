@@ -2,19 +2,35 @@ import os
 import asyncio
 import unittest
 
+
 from dotenv import load_dotenv
 
 from app.tools.e2b_interpreter import E2BCodeInterpreter
 from app.utils.common_utils import create_work_dir
-from app.tools.notebook_serializer import NotebookSerializer
+
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:  # Fallback if python-dotenv is not installed
+    def load_dotenv(*args, **kwargs):
+        return None
+
+try:
+    from app.tools.e2b_interpreter import E2BCodeInterpreter
+except ModuleNotFoundError:
+    E2BCodeInterpreter = None
+from app.utils.common_utils import create_task_id, create_work_dir
+
 
 
 class TestE2BCodeInterpreter(unittest.TestCase):
     def setUp(self):
         load_dotenv()
-        self.task_id = "20250312-104132-d3625cab"
-        self.work_dir = create_work_dir(self.task_id)
-        notebook = NotebookSerializer(self.work_dir)
+
+        if E2BCodeInterpreter is None:
+            self.skipTest("e2b_code_interpreter not available")
+        _, dirs = create_work_dir("20250312-104132-d3625cab")
+        notebook = NotebookSerializer(dirs["jupyter"])
+
         self.code_interpreter = E2BCodeInterpreter(
             self.task_id, self.work_dir, notebook
         )

@@ -89,7 +89,7 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
         )
         await self.execute_code(init_code)
 
-    async def execute_code(self, code: str) -> tuple[str, bool, str, list[str]]:
+    async def execute_code(self, code: str) -> tuple[str, bool, str]:
         """执行代码并返回结果"""
 
         if not self.sbx:

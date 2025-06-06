@@ -24,12 +24,12 @@
 ## ✨ 功能特性
 
 - 🔍 自动分析问题，数学建模，编写代码，纠正错误，撰写论文
-- 💻 Code Interperter
-    - loacl Interperter: 基于 jupyter , 代码保存为 notebook 方便再编辑
-    - 云端 code interperter: [E2B](https://e2b.dev/) 和 [daytona](https://app.daytona.io/)
+- 💻 Code Interpreter
+    - local Interpreter: 基于 jupyter , 代码保存为 notebook 方便再编辑
+    - 云端 code interpreter: [E2B](https://e2b.dev/) 和 [daytona](https://app.daytona.io/)
 - 📝 生成一份编排好格式的论文
-- 🤝 muti-agents: 建模手，代码手，论文手等
-- 🔄 muti-llms: 每个 agent 设置不同的、合适的模型
+- 🤝 multi-agents: 建模手，代码手，论文手等
+- 🔄 multi-llms: 每个 agent 设置不同的、合适的模型
 - 🤖 支持所有模型: [litellm](https://docs.litellm.ai/docs/providers)
 - 💰 成本低：workflow agentless，不依赖 agent 框架
 - 🧩 自定义模板：prompt inject 为每个 subtask 单独设置需求

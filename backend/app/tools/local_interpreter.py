@@ -219,9 +219,14 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         self.interrupt_signal = True
 
     def restart_jupyter_kernel(self):
-        self.kernel_client.shutdown()
-        self.kernel_manager, self.kernel_client = (
-            jupyter_client.manager.start_new_kernel(kernel_name="python3")
+        """Restart the Jupyter kernel and recreate the work directory."""
+        self.kc.shutdown()
+        self.km, self.kc = jupyter_client.manager.start_new_kernel(
+            kernel_name="python3"
         )
         self.interrupt_signal = False
         self._create_work_dir()
+
+    def _create_work_dir(self):
+        """Ensure the working directory exists after a restart."""
+        os.makedirs(self.work_dir, exist_ok=True)

@@ -13,6 +13,9 @@ from app.services.redis_manager import redis_manager
 from litellm import acompletion
 import litellm
 from app.schemas.enums import AgentType
+from app.utils.track import agent_metrics
+
+litellm.callbacks = [agent_metrics]
 
 
 class LLM:
@@ -49,6 +52,7 @@ class LLM:
             "messages": history,
             "stream": False,
             "top_p": top_p,
+            "metadata": {"agent_name": agent_name},
         }
 
         if tools:

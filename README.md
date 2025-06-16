@@ -54,6 +54,7 @@
 - [ ] web search tool
 - [ ] RAG 知识库
 - [ ] A2A hand off: 代码手多次反思错误，hand off 更聪明模型 agent
+- [ ] chat / agent mode
 
 ## 视频demo
 

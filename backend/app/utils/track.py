@@ -1,28 +1,21 @@
+from litellm.integrations.custom_logger import CustomLogger
 import litellm
-from app.services.redis_manager import redis_manager
 
 
-# track_cost_callback
-def track_cost_callback(
-    kwargs,  # kwargs to completion
-    completion_response,  # response from completion
-    start_time,
-    end_time,  # start/end time
-):
-    try:
-        response_cost = kwargs.get("response_cost", 0)
-        total_tokens = kwargs.get("total_tokens", 0)
+class AgentMetrics(CustomLogger):
+    #### ASYNC ####
 
-        # redis
-        print("streaming response_cost", response_cost)
-        print("streaming total_tokens", total_tokens)
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            # response_cost = kwargs.get("response_cost", 0)
+            # print("streaming response_cost", response_cost)
+            print("agent_name", kwargs["litellm_params"]["metadata"]["agent_name"])
+        except:
+            pass
 
-        # 更新redis
-        return
-    except Exception as e:
-        print(e)
-        pass
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Async Failure")
 
 
-# set callback
-litellm.success_callback = [track_cost_callback]  # set custom callback function
+# 全局指标收集器实例
+agent_metrics = AgentMetrics()

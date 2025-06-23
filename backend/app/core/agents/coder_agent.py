@@ -40,9 +40,11 @@ class CoderAgent(Agent):  # 同样继承自Agent类
         if self.is_first_run:
             logger.info("首次运行，添加系统提示和数据集文件信息")
             self.is_first_run = False
-            self.append_chat_history({"role": "system", "content": self.system_prompt})
+            await self.append_chat_history(
+                {"role": "system", "content": self.system_prompt}
+            )
             # 当前数据集文件
-            self.append_chat_history(
+            await self.append_chat_history(
                 {
                     "role": "user",
                     "content": f"当前文件夹下的数据集文件{get_current_files(self.work_dir, 'data')}",
@@ -51,7 +53,7 @@ class CoderAgent(Agent):  # 同样继承自Agent类
 
         # 添加 sub_task
         logger.info(f"添加子任务提示: {prompt}")
-        self.append_chat_history({"role": "user", "content": prompt})
+        await self.append_chat_history({"role": "user", "content": prompt})
 
         retry_count = 0
         last_error_message = ""
@@ -118,7 +120,9 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                     )
 
                     # 更新对话历史 - 添加助手的响应
-                    self.append_chat_history(response.choices[0].message.model_dump())
+                    await self.append_chat_history(
+                        response.choices[0].message.model_dump()
+                    )
                     logger.info(response.choices[0].message.model_dump())
 
                     # 执行工具调用
@@ -132,7 +136,7 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                     # 添加工具执行结果
                     if error_occurred:
                         # 即使发生错误也要添加tool响应
-                        self.append_chat_history(
+                        await self.append_chat_history(
                             {
                                 "role": "tool",
                                 "tool_call_id": tool_id,
@@ -152,14 +156,14 @@ class CoderAgent(Agent):  # 同样继承自Agent类
                             SystemMessage(content="代码手反思纠正错误", type="error"),
                         )
 
-                        self.append_chat_history(
+                        await self.append_chat_history(
                             {"role": "user", "content": reflection_prompt}
                         )
                         # 如果代码出错，返回重新开始
                         continue
                     else:
                         # 成功执行的tool响应
-                        self.append_chat_history(
+                        await self.append_chat_history(
                             {
                                 "role": "tool",
                                 "tool_call_id": tool_id,

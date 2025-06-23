@@ -18,8 +18,10 @@ class ModelerAgent(Agent):  # 继承自Agent类
         self.system_prompt = MODELER_PROMPT
 
     async def run(self, coordinator_to_modeler: CoordinatorToModeler) -> ModelerToCoder:
-        self.append_chat_history({"role": "system", "content": self.system_prompt})
-        self.append_chat_history(
+        await self.append_chat_history(
+            {"role": "system", "content": self.system_prompt}
+        )
+        await self.append_chat_history(
             {
                 "role": "user",
                 "content": json.dumps(coordinator_to_modeler.questions),

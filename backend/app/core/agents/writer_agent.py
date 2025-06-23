@@ -52,7 +52,9 @@ class WriterAgent(Agent):  # 同样继承自Agent类
 
         if self.is_first_run:
             self.is_first_run = False
-            self.append_chat_history({"role": "system", "content": self.system_prompt})
+            await self.append_chat_history(
+                {"role": "system", "content": self.system_prompt}
+            )
 
         if available_images:
             self.available_images = available_images
@@ -65,7 +67,7 @@ class WriterAgent(Agent):  # 同样继承自Agent类
         logger.info(f"{self.__class__.__name__}:开始:执行对话")
         self.current_chat_turns += 1  # 重置对话轮次计数器
 
-        self.append_chat_history({"role": "user", "content": prompt})
+        await self.append_chat_history({"role": "user", "content": prompt})
 
         # 获取历史消息用于本次对话
         response = await self.model.chat(
@@ -102,7 +104,7 @@ class WriterAgent(Agent):  # 同样继承自Agent类
                 )
 
                 # 更新对话历史 - 添加助手的响应
-                self.append_chat_history(response.choices[0].message.model_dump())
+                await self.append_chat_history(response.choices[0].message.model_dump())
                 ic(response.choices[0].message.model_dump())
 
                 try:
@@ -116,7 +118,7 @@ class WriterAgent(Agent):  # 同样继承自Agent类
                 # TODO: pass to frontend
                 papers_str = self.scholar.papers_to_str(papers)
                 logger.info(f"搜索文献结果\n{papers_str}")
-                self.append_chat_history(
+                await self.append_chat_history(
                     {
                         "role": "tool",
                         "content": papers_str,
@@ -143,14 +145,14 @@ class WriterAgent(Agent):  # 同样继承自Agent类
         总结对话内容
         """
         try:
-            self.append_chat_history(
+            await self.append_chat_history(
                 {"role": "user", "content": "请简单总结以上完成什么任务取得什么结果:"}
             )
             # 获取历史消息用于本次对话
             response = await self.model.chat(
                 history=self.chat_history, agent_name=self.__class__.__name__
             )
-            self.append_chat_history(
+            await self.append_chat_history(
                 {"role": "assistant", "content": response.choices[0].message.content}
             )
             return response.choices[0].message.content

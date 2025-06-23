@@ -19,8 +19,10 @@ class CoordinatorAgent(Agent):
 
     async def run(self, ques_all: str) -> CoordinatorToModeler:
         """用户输入问题 使用LLM 格式化 questions"""
-        self.append_chat_history({"role": "system", "content": self.system_prompt})
-        self.append_chat_history({"role": "user", "content": ques_all})
+        await self.append_chat_history(
+            {"role": "system", "content": self.system_prompt}
+        )
+        await self.append_chat_history({"role": "user", "content": ques_all})
 
         response = await self.model.chat(
             history=self.chat_history,

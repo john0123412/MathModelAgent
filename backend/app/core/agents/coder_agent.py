@@ -13,6 +13,10 @@ from app.core.prompts import get_reflection_prompt, get_completion_check_prompt
 from app.core.functions import coder_tools
 from icecream import ic
 
+# TODO: 时间等待过久，stop 进程
+# TODO: 支持 cuda
+# TODO: 引入创新方案：
+
 
 # 代码强
 class CoderAgent(Agent):  # 同样继承自Agent类

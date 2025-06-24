@@ -72,9 +72,9 @@
 
 
 提供三种部署方式，请选择最适合你的方案：
-1. docker(最简单)
-2. 本地部署
-3. 脚本本地部署(社区)
+1. [docker(最简单)](#-方案一docker-部署推荐最简单)
+2. [本地部署](#-方案二-本地部署)
+3. [脚本本地部署(社区)](#-方案三自动脚本部署来自社区)
 
 
 下载项目
@@ -204,6 +204,7 @@ Thanks to the following projects:
 - [Code-Interpreter](https://github.com/MrGreyfun/Local-Code-Interpreter/tree/main)
 - [Latex](https://github.com/Veni222987/MathModelingLatexTemplate/tree/main)
 - [Agent Laboratory](https://github.com/SamuelSchmidgall/AgentLaboratory)
+- [ai-manus](https://github.com/Simpleyyt/ai-manus)
 
 ## 其他
 

@@ -2,7 +2,6 @@ import os
 import re
 from app.utils.data_recorder import DataRecorder
 from app.schemas.A2A import WriterResponse
-from app.utils.log_util import logger
 import json
 import uuid
 

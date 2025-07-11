@@ -18,21 +18,24 @@
 
 等待 Docker Desktop 启动完成，确保系统托盘中的 Docker 图标显示为运行状态。
 
-![image-20250712005640730](./assets/image-20250712005640730.png)
+<img width="437" height="722" alt="image-20250712005640730" src="https://github.com/user-attachments/assets/257e620e-53b1-4761-aaaf-c6bdddc1169b" />
+
 
 此时会弹出命令行要求安装WSL。等待即可。
 
-![a33121ae9047c01153edebe7ed666a06](./assets/a33121ae9047c01153edebe7ed666a06.png)
+<img width="1920" height="1080" alt="a33121ae9047c01153edebe7ed666a06" src="https://github.com/user-attachments/assets/e83841b3-abd3-4aa6-b811-09ecdd08b905" />
+
 
 本机使用VPN的时候Github一直都能ping通的，但是WSL的安装进度会卡在30%左右，
 
-![c4c65346b2914b38da56a7ee5065702f](./assets/c4c65346b2914b38da56a7ee5065702f.jpeg)
+![c4c65346b2914b38da56a7ee5065702f](https://github.com/user-attachments/assets/6d91a444-587c-4920-a2ef-ce2ba0bd0e25)
+
 
 安装完毕。
 
 根据自己的网络状态自行配置。
 
-![image-20250712005715579](./assets/image-20250712005715579.png)
+<img width="1590" height="900" alt="image-20250712005715579" src="https://github.com/user-attachments/assets/d60d7ed3-50ee-4ea1-82bb-84c45c9b9231" />
 
 
 
@@ -461,7 +464,7 @@ FINDSTR: 写入错误
 
 如果一切正常，会看到`MathModelAgent`的前端界面，此时可以尝试使用项目功能（比如输入数学建模问题，让系统自动处理）。
 
-![image-20250712013002471](./assets/image-20250712013002471.png)
+<img width="1920" height="1020" alt="image-20250712013002471" src="https://github.com/user-attachments/assets/b69265d7-d207-4938-b0b5-fddbe0992774" />
 
 ### 2. 验证后端服务是否正常
 
@@ -469,7 +472,8 @@ FINDSTR: 写入错误
 
 如果后端正常启动，会看到类似 API 文档或状态提示的页面（具体取决于项目设计）。
 
-![image-20250712013024423](./assets/image-20250712013024423.png)
+<img width="1920" height="1020" alt="image-20250712013024423" src="https://github.com/user-attachments/assets/977a5989-b8cb-4c9a-b227-9d4942fc602d" />
+
 
 ### 3. 检查服务日志（若有问题）
 
@@ -480,14 +484,14 @@ FINDSTR: 写入错误
 docker logs mathmodelagent_frontend
 ```
 
-![image-20250712013102332](./assets/image-20250712013102332.png)
+<img width="1482" height="762" alt="image-20250712013102332" src="https://github.com/user-attachments/assets/381ff9db-2582-438d-872f-3d769e91002d" />
 
 ```powershell
 # 查看Redis日志（比如启动失败）
 docker logs mathmodelagent_redis
 ```
 
-![image-20250712013128563](./assets/image-20250712013128563.png)
+<img width="1482" height="762" alt="image-20250712013128563" src="https://github.com/user-attachments/assets/028b41fc-f9d8-454a-b18e-e604641bc099" />
 
 日志中会显示具体错误信息（如依赖缺失、配置错误等），根据提示调整即可。
 

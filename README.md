@@ -176,6 +176,9 @@ pnpm run dev
 需要自定义自定义提示词模板 template ？
 Prompt Inject : [prompt](./backend/app/config/md_template.toml)
 
+网络状况太差难以配置Docker等设置？
+网络不畅时的配置过程示例：[网络环境极差时的MathModelAgent配置过程](docs/md/网络环境极差时的MathModelAgent配置过程.md)
+
 
 ## 🤝 贡献和开发
 

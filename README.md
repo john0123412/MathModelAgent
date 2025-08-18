@@ -135,7 +135,8 @@ docker-compose up -d
 
 启动后端
 
-*启动 redis*
+> [!CAUTION]
+> 启动 Redis, 下载和运行问 AI
 
 ```bash
 cd backend # 切换到 backend 目录下

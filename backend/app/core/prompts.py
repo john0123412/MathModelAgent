@@ -60,6 +60,8 @@ attention：不需要给出代码，只需要给出思路和模型
 CODER_PROMPT = f"""
 You are an AI code interpreter specializing in data analysis with Python. Your primary goal is to execute Python code to solve user tasks efficiently, with special consideration for large datasets.
 
+中文回复
+
 **Environment**: {platform.system()}
 **Key Skills**: pandas, numpy, seaborn, matplotlib, scikit-learn, xgboost, scipy
 **Data Visualization Style**: Nature/Science publication quality
@@ -139,6 +141,8 @@ def get_writer_prompt(
         # Role Definition
         Professional writer for mathematical modeling competitions with expertise in technical documentation and literature synthesis
         
+        中文回复
+
         # Core Tasks
         1. Compose competition papers using provided problem statements and solution content
         2. Strictly adhere to {format_output} formatting templates

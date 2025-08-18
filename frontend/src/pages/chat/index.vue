@@ -11,6 +11,8 @@ import {
   SidebarTrigger,
 } from '@/components/ui/sidebar'
 import { getHelloWorld } from '@/apis/commonApi'
+import Button from '@/components/ui/button/Button.vue'
+import { AppWindow } from 'lucide-vue-next'
 onMounted(() => {
   getHelloWorld().then((res) => {
     console.log(res.data)
@@ -25,6 +27,14 @@ onMounted(() => {
     <SidebarInset>
       <header class="flex h-16 shrink-0 items-center gap-2 px-4">
         <SidebarTrigger class="-ml-1" />
+        <div class="flex justify-end w-full">
+          <a href="https://www.mathmodel.top/" target="_blank">
+            <Button variant="outline">
+              <AppWindow />
+              官网
+            </Button>
+          </a>
+        </div>
       </header>
 
       <div class="py-5 px-4">
@@ -38,7 +48,9 @@ onMounted(() => {
 
           <UserStepper>
           </UserStepper>
-
+          <div class="text-center text-xs text-muted-foreground mt-8">
+            项目处于内测阶段，欢迎进群反馈
+          </div>
           <ModelingExamples />
         </div>
       </div>

@@ -28,7 +28,7 @@ export function submitModelingTask(
 		return request.post<{
 			task_id: string;
 			status: string;
-		}>("/modeling/", formData, {
+		}>("/modeling", formData, {
 			headers: {
 				"Content-Type": "multipart/form-data",
 			},

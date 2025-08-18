@@ -17,9 +17,13 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Rocket } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import { useTaskStore } from '@/stores/task'
+import { useToast } from '@/components/ui/toast'
+import { useApiKeyStore } from '@/stores/apiKeys'
+import { saveApiConfig } from '@/apis/apiKeyApi'
 
 const taskStore = useTaskStore()
-
+const { toast } = useToast()
+const apiKeyStore = useApiKeyStore()
 const currentStep = ref(1)
 const fileUploaded = ref(true)
 
@@ -86,15 +90,41 @@ const handleFileUpload = (event: Event) => {
 
 const router = useRouter()
 
+
 const handleSubmit = async () => {
   try {
+
+    if (apiKeyStore.isEmpty) {
+      toast({
+        title: '请先配置 API Key',
+        description: '在侧边栏 -> 头像 -> API Key 中配置 API Key',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    // 保存 API Key
+    await saveApiConfig({
+      coordinator: apiKeyStore.coordinatorConfig,
+      modeler: apiKeyStore.modelerConfig,
+      coder: apiKeyStore.coderConfig,
+      writer: apiKeyStore.writerConfig
+    })
+
+
+
+
     if (uploadedFiles.value.length === 0) {
-      throw new Error('请先上传文件')
+      toast({
+        title: '请先上传文件',
+        description: '请先上传文件',
+        variant: 'destructive',
+      })
+      return
     }
     console.log(selectedOptions.value)
     console.log(question.value)
     console.log(uploadedFiles.value)
-
     const response = await submitModelingTask(
       {
         ques_all: question.value,
@@ -112,11 +142,17 @@ const handleSubmit = async () => {
       showSubmitSuccess.value = false // 3秒后自动隐藏
     }, 3000)
     router.push(`/task/${taskId.value}`)
-    console.log('任务提交成功:', response?.data)
-    // 这里可以添加跳转或状态更新逻辑
+    toast({
+      title: '任务提交成功',
+      description: '任务提交成功，编号为：' + taskId.value,
+    })
   } catch (error) {
     console.error('任务提交失败:', error)
-    // 这里可以添加错误处理逻辑
+    toast({
+      title: '任务提交失败',
+      description: '请检查 API Key 是否正确',
+      variant: 'destructive',
+    })
   }
 }
 </script>

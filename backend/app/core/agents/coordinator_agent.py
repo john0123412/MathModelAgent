@@ -30,9 +30,9 @@ class CoordinatorAgent(Agent):
         )
         json_str = response.choices[0].message.content
 
-        if not json_str.startswith("```json"):
-            logger.info(f"拒绝回答用户非数学建模请求:{json_str}")
-            raise ValueError(f"拒绝回答用户非数学建模请求:{json_str}")
+        # if not json_str.startswith("```json"):
+        #     logger.info(f"拒绝回答用户非数学建模请求:{json_str}")
+        #     raise ValueError(f"拒绝回答用户非数学建模请求:{json_str}")
 
         # 清理 JSON 字符串
         json_str = json_str.replace("```json", "").replace("```", "").strip()

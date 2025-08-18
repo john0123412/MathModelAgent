@@ -18,35 +18,31 @@ def parse_cors(value: str) -> list[str]:
 class Settings(BaseSettings):
     ENV: str
 
-    COORDINATOR_API_KEY: str
-    COORDINATOR_MODEL: str
+    COORDINATOR_API_KEY: Optional[str] = None
+    COORDINATOR_MODEL: Optional[str] = None
     COORDINATOR_BASE_URL: Optional[str] = None
 
-    MODELER_API_KEY: str
-    MODELER_MODEL: str
+    MODELER_API_KEY: Optional[str] = None
+    MODELER_MODEL: Optional[str] = None
     MODELER_BASE_URL: Optional[str] = None
 
-    CODER_API_KEY: str
-    CODER_MODEL: str
+    CODER_API_KEY: Optional[str] = None
+    CODER_MODEL: Optional[str] = None
     CODER_BASE_URL: Optional[str] = None
 
-    WRITER_API_KEY: str
-    WRITER_MODEL: str
+    WRITER_API_KEY: Optional[str] = None
+    WRITER_MODEL: Optional[str] = None
     WRITER_BASE_URL: Optional[str] = None
 
-    DEFAULT_API_KEY: str
-    DEFAULT_MODEL: str
-    DEFAULT_BASE_URL: Optional[str] = None
-
-    MAX_CHAT_TURNS: int
-    MAX_RETRIES: int
+    MAX_CHAT_TURNS: int = 60
+    MAX_RETRIES: int = 5
     E2B_API_KEY: Optional[str] = None
-    LOG_LEVEL: str
-    DEBUG: bool
-    REDIS_URL: str
-    REDIS_MAX_CONNECTIONS: int
-    CORS_ALLOW_ORIGINS: Annotated[list[str] | str, BeforeValidator(parse_cors)]
-    SERVER_HOST: str = "http://localhost:8000"  # 默认值
+    LOG_LEVEL: str = "DEBUG"
+    DEBUG: bool = True
+    REDIS_URL: str = "redis://redis:6379/0"
+    REDIS_MAX_CONNECTIONS: int = 10
+    CORS_ALLOW_ORIGINS: Annotated[list[str] | str, BeforeValidator(parse_cors)] = "*"
+    SERVER_HOST: str = "http://localhost:8000"
     OPENALEX_EMAIL: Optional[str] = None
 
     model_config = SettingsConfigDict(
@@ -54,13 +50,6 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="allow",
     )
-
-    def get_deepseek_config(self) -> dict:
-        return {
-            "api_key": self.DEEPSEEK_API_KEY,
-            "model": self.DEEPSEEK_MODEL,
-            "base_url": self.DEEPSEEK_BASE_URL,
-        }
 
     @classmethod
     def from_env(cls, env: str = None):

@@ -14,3 +14,10 @@ export interface ResultCell {
 
 // 笔记本单元格类型（代码或结果）
 export type NoteCell = CodeCell | ResultCell
+
+
+export interface ModelConfig {
+  apiKey: string;
+  baseUrl: string;
+  modelId: string;
+}

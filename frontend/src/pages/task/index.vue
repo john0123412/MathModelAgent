@@ -120,7 +120,7 @@ onBeforeUnmount(() => {
               </div>
               <!--  TODO: 其他选项 -->
 
-              <div class="flex justify-end gap-2">
+              <div class="flex justify-end gap-2 items-center">
                 <Button @click="taskStore.downloadMessages" class="flex justify-end">
                   下载消息
                 </Button>

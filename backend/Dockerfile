@@ -22,4 +22,5 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 EXPOSE 8000
 
+# 直接使用 uvicorn，因为依赖已安装到系统 Python
 CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--ws-ping-interval", "60", "--ws-ping-timeout", "120"]

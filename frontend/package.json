@@ -20,6 +20,7 @@
     "md-editor-v3": "^5.4.1",
     "motion-v": "1.0.0-alpha.0",
     "pinia": "^3.0.1",
+    "pinia-plugin-persistedstate": "^4.5.0",
     "reka-ui": "^2.0.0",
     "render-jupyter-notebook-vue": "^2.2.4",
     "theme-colors": "^0.1.0",

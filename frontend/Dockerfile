@@ -1,15 +1,20 @@
-# 构建阶段
-FROM node:20 AS build
+FROM node:20-alpine
 
 WORKDIR /app
+
+# 复制依赖文件
 COPY package.json pnpm-lock.yaml ./
+
+# 安装 pnpm
 RUN npm install -g pnpm
-RUN pnpm install
+
+# 清理 npm 缓存并安装依赖
+RUN pnpm install --frozen-lockfile
+
+# 复制源代码
 COPY . .
 
-# 应用将运行的端口 (Vite 开发环境通常是 5173)
 EXPOSE 5173
 
-# 运行开发服务器的命令
-# --host 确保可以从容器外部访问
+# 运行开发服务器
 CMD ["pnpm", "run", "dev", "--host"]

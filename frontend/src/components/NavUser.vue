@@ -26,8 +26,10 @@ import {
   ChevronsUpDown,
   CreditCard,
   LogOut,
-  Sparkles,
+  KeyRound,
 } from 'lucide-vue-next'
+import { ref } from 'vue'
+import ApiKeyDialog from '@/pages/chat/components/ApiDialog.vue'
 
 const props = defineProps({
   user: {
@@ -41,6 +43,15 @@ const props = defineProps({
 })
 
 const { isMobile } = useSidebar()
+
+
+// API Key 对话框控制
+const isApiKeyDialogOpen = ref(false)
+
+const openApiKeyDialog = () => {
+  isApiKeyDialogOpen.value = true
+}
+
 </script>
 
 <template>
@@ -81,9 +92,9 @@ const { isMobile } = useSidebar()
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuGroup>
-            <DropdownMenuItem>
-              <Sparkles />
-              Upgrade to Pro
+            <DropdownMenuItem @click="openApiKeyDialog">
+              <KeyRound />
+              API Key
             </DropdownMenuItem>
           </DropdownMenuGroup>
           <DropdownMenuSeparator />
@@ -110,4 +121,6 @@ const { isMobile } = useSidebar()
       </DropdownMenu>
     </SidebarMenuItem>
   </SidebarMenu>
+  <ApiKeyDialog v-model:open="isApiKeyDialogOpen" />
+
 </template>

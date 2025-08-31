@@ -267,7 +267,7 @@ const links = {
             <div class="space-y-1">
               <Label :for="`${config.key}-api-key`" class="text-xs text-muted-foreground">API Key</Label>
               <div class="flex items-center gap-2">
-                <Input :id="`${config.key}-api-key`" v-model="(form as any)[config.key].apiKey" type="password"
+                <Input :id="`${config.key}-api-key`" v-model.trim="(form as any)[config.key].apiKey" type="password"
                   placeholder="请输入 API Key" class="h-7 text-xs flex-1" />
                 <div v-if="validationResults[config.key as keyof typeof validationResults].message"
                   class="flex items-center">
@@ -280,12 +280,12 @@ const links = {
             <div class="grid grid-cols-2 gap-2">
               <div class="space-y-1">
                 <Label :for="`${config.key}-base-url`" class="text-xs text-muted-foreground">Base URL</Label>
-                <Input :id="`${config.key}-base-url`" v-model="(form as any)[config.key].baseUrl"
+                <Input :id="`${config.key}-base-url`" v-model.trim="(form as any)[config.key].baseUrl"
                   placeholder="https://api.deepseek.com" class="h-7 text-xs" />
               </div>
               <div class="space-y-1">
                 <Label :for="`${config.key}-model-id`" class="text-xs text-muted-foreground">Model ID</Label>
-                <Input :id="`${config.key}-model-id`" v-model="(form as any)[config.key].modelId"
+                <Input :id="`${config.key}-model-id`" v-model.trim="(form as any)[config.key].modelId"
                   placeholder="provider/model_id" class="h-7 text-xs" />
               </div>
             </div>

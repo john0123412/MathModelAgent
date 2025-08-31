@@ -81,7 +81,7 @@ class MathModelWorkFlow(WorkFlow):
             notebook_serializer=notebook_serializer,
             timeout=3000,
         )
-
+        
         scholar = OpenAlexScholar(task_id=self.task_id, email=settings.OPENALEX_EMAIL)
 
         await redis_manager.publish_message(

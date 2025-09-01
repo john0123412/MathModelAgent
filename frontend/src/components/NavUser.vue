@@ -24,7 +24,6 @@ import {
   BadgeCheck,
   Bell,
   ChevronsUpDown,
-  CreditCard,
   LogOut,
   KeyRound,
 } from 'lucide-vue-next'
@@ -102,10 +101,6 @@ const openApiKeyDialog = () => {
             <DropdownMenuItem>
               <BadgeCheck />
               Account
-            </DropdownMenuItem>
-            <DropdownMenuItem>
-              <CreditCard />
-              Billing
             </DropdownMenuItem>
             <DropdownMenuItem>
               <Bell />

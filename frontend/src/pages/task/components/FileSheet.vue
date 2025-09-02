@@ -188,8 +188,6 @@ const downloadAll = async () => {
 
         </SheetTitle>
         <SheetDescription>
-          当前会话的工作区文件列表
-          <br>
           运行的结果和产生在<span class="font-mono">backend/project/work_dir/{{ taskId }}/*</span> 目录下
         </SheetDescription>
       </SheetHeader>
@@ -211,7 +209,7 @@ const downloadAll = async () => {
                 <div class="text-xs text-gray-500 flex gap-2">
                   <span v-if="file.size">{{ formatFileSize(file.size) }}</span>
                   <span v-if="file.modified_time">{{ new Date(file.modified_time).toLocaleDateString()
-                  }}</span>
+                    }}</span>
                   <span v-if="file.type">{{ file.type }}</span>
                 </div>
               </div>

@@ -108,7 +108,8 @@ const handleSubmit = async () => {
       coordinator: apiKeyStore.coordinatorConfig,
       modeler: apiKeyStore.modelerConfig,
       coder: apiKeyStore.coderConfig,
-      writer: apiKeyStore.writerConfig
+      writer: apiKeyStore.writerConfig,
+      openalex_email: apiKeyStore.openalexEmail
     })
 
 

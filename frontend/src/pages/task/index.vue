@@ -18,9 +18,8 @@ import { onMounted, onBeforeUnmount, ref } from 'vue'
 import { useTaskStore } from '@/stores/task'
 import { getWriterSeque } from '@/apis/commonApi';
 import { Button } from '@/components/ui/button';
-import { openFolderAPI } from '@/apis/commonApi';
 import { useToast } from '@/components/ui/toast/use-toast'
-import { Folder } from 'lucide-vue-next'
+import FilesSheet from '@/pages/task/components/FileSheet.vue'
 const { toast } = useToast()
 
 
@@ -69,15 +68,6 @@ onMounted(async () => {
   updateDuration() // 立即更新一次
 })
 
-const openFolder = async () => {
-  const res = await openFolderAPI(props.task_id);
-  console.log(res);
-  toast({
-    title: '打开工作目录成功',
-    description: res.data.message,
-  })
-}
-
 
 onBeforeUnmount(() => {
   taskStore.closeWebSocket()
@@ -125,9 +115,8 @@ onBeforeUnmount(() => {
                   下载消息
                 </Button>
 
-                <Button @click="openFolder" class="flex">
-                  <Folder class="w-5 h-5" /> workspace
-                </Button>
+                <FilesSheet />
+
               </div>
 
             </div>

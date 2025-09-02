@@ -19,6 +19,7 @@ from app.schemas.request import ExampleRequest
 from pydantic import BaseModel
 import litellm
 from app.config.setting import settings
+import requests
 
 router = APIRouter()
 
@@ -27,6 +28,15 @@ class ValidateApiKeyRequest(BaseModel):
     api_key: str
     base_url: str = "https://api.openai.com/v1"
     model_id: str
+
+
+class ValidateOpenalexEmailRequest(BaseModel):
+    email: str
+
+
+class ValidateOpenalexEmailResponse(BaseModel):
+    valid: bool
+    message: str
 
 
 class ValidateApiKeyResponse(BaseModel):
@@ -39,6 +49,7 @@ class SaveApiConfigRequest(BaseModel):
     modeler: dict
     coder: dict
     writer: dict
+    openalex_email: str
 
 
 @router.post("/save-api-config")
@@ -49,25 +60,28 @@ async def save_api_config(request: SaveApiConfigRequest):
     try:
         # 更新各个模块的设置
         if request.coordinator:
-            settings.COORDINATOR_API_KEY = request.coordinator.get('apiKey', '')
-            settings.COORDINATOR_MODEL = request.coordinator.get('modelId', '')
-            settings.COORDINATOR_BASE_URL = request.coordinator.get('baseUrl', '')
-        
+            settings.COORDINATOR_API_KEY = request.coordinator.get("apiKey", "")
+            settings.COORDINATOR_MODEL = request.coordinator.get("modelId", "")
+            settings.COORDINATOR_BASE_URL = request.coordinator.get("baseUrl", "")
+
         if request.modeler:
-            settings.MODELER_API_KEY = request.modeler.get('apiKey', '')
-            settings.MODELER_MODEL = request.modeler.get('modelId', '')
-            settings.MODELER_BASE_URL = request.modeler.get('baseUrl', '')
-        
+            settings.MODELER_API_KEY = request.modeler.get("apiKey", "")
+            settings.MODELER_MODEL = request.modeler.get("modelId", "")
+            settings.MODELER_BASE_URL = request.modeler.get("baseUrl", "")
+
         if request.coder:
-            settings.CODER_API_KEY = request.coder.get('apiKey', '')
-            settings.CODER_MODEL = request.coder.get('modelId', '')
-            settings.CODER_BASE_URL = request.coder.get('baseUrl', '')
-        
+            settings.CODER_API_KEY = request.coder.get("apiKey", "")
+            settings.CODER_MODEL = request.coder.get("modelId", "")
+            settings.CODER_BASE_URL = request.coder.get("baseUrl", "")
+
         if request.writer:
-            settings.WRITER_API_KEY = request.writer.get('apiKey', '')
-            settings.WRITER_MODEL = request.writer.get('modelId', '')
-            settings.WRITER_BASE_URL = request.writer.get('baseUrl', '')
-        
+            settings.WRITER_API_KEY = request.writer.get("apiKey", "")
+            settings.WRITER_MODEL = request.writer.get("modelId", "")
+            settings.WRITER_BASE_URL = request.writer.get("baseUrl", "")
+
+        if request.openalex_email:
+            settings.OPENALEX_EMAIL = request.openalex_email
+
         return {"success": True, "message": "配置保存成功"}
     except Exception as e:
         logger.error(f"保存配置失败: {str(e)}")
@@ -86,42 +100,54 @@ async def validate_api_key(request: ValidateApiKeyRequest):
             messages=[{"role": "user", "content": "Hi"}],
             max_tokens=1,
             api_key=request.api_key,
-            base_url=request.base_url if request.base_url != "https://api.openai.com/v1" else None,
+            base_url=request.base_url
+            if request.base_url != "https://api.openai.com/v1"
+            else None,
         )
-        
-        return ValidateApiKeyResponse(
-            valid=True,
-            message="✓ 模型 API 验证成功"
-        )
+
+        return ValidateApiKeyResponse(valid=True, message="✓ 模型 API 验证成功")
     except Exception as e:
         error_msg = str(e)
-        
+
         # 解析不同类型的错误
         if "401" in error_msg or "Unauthorized" in error_msg:
-            return ValidateApiKeyResponse(
-                valid=False,
-                message="✗ API Key 无效或已过期"
-            )
+            return ValidateApiKeyResponse(valid=False, message="✗ API Key 无效或已过期")
         elif "404" in error_msg or "Not Found" in error_msg:
             return ValidateApiKeyResponse(
-                valid=False,
-                message="✗ 模型 ID 不存在或 Base URL 错误"
+                valid=False, message="✗ 模型 ID 不存在或 Base URL 错误"
             )
         elif "429" in error_msg or "rate limit" in error_msg.lower():
             return ValidateApiKeyResponse(
-                valid=False,
-                message="✗ 请求过于频繁，请稍后再试"
+                valid=False, message="✗ 请求过于频繁，请稍后再试"
             )
         elif "403" in error_msg or "Forbidden" in error_msg:
             return ValidateApiKeyResponse(
-                valid=False,
-                message="✗ API 权限不足或账户余额不足"
+                valid=False, message="✗ API 权限不足或账户余额不足"
             )
         else:
             return ValidateApiKeyResponse(
-                valid=False,
-                message=f"✗ 验证失败: {error_msg[:50]}..."
+                valid=False, message=f"✗ 验证失败: {error_msg[:50]}..."
             )
+
+
+@router.post("/validate-openalex-email", response_model=ValidateOpenalexEmailResponse)
+async def validate_openalex_email(request: ValidateOpenalexEmailRequest):
+    """
+    验证 OpenAlex Email 的有效性
+    """
+    try:
+        response = requests.get(
+            f"https://api.openalex.org/works?mailto={request.email}"
+        )
+        logger.debug(f"OpenAlex Email 验证响应: {response}")
+        response.raise_for_status()
+        return ValidateOpenalexEmailResponse(
+            valid=True, message="✓ OpenAlex Email 验证成功"
+        )
+    except Exception as e:
+        return ValidateOpenalexEmailResponse(
+            valid=False, message=f"✗ OpenAlex Email 验证失败: {str(e)}"
+        )
 
 
 @router.post("/example")
@@ -235,8 +261,8 @@ async def run_modeling_task_async(
 
     # 创建任务并等待它完成
     task = asyncio.create_task(MathModelWorkFlow().execute(problem))
-    # 设置超时时间（比如 60 分钟）
-    await asyncio.wait_for(task, timeout=3600)
+    # 设置超时时间（比如 300 分钟）
+    await asyncio.wait_for(task, timeout=3600 * 5)
 
     # 发送任务完成状态
     await redis_manager.publish_message(

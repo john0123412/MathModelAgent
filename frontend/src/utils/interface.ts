@@ -20,4 +20,5 @@ export interface ModelConfig {
   apiKey: string;
   baseUrl: string;
   modelId: string;
+  provider: string;
 }

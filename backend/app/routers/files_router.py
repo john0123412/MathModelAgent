@@ -8,12 +8,27 @@ from fastapi import HTTPException
 router = APIRouter()
 
 
+@router.get("/download_url")
+async def get_download_url(task_id: str, filename: str):
+    return {"download_url": f"http://localhost:8000/static/{task_id}/{filename}"}
+
+
+@router.get("/download_all_url")
+async def get_download_all_url(task_id: str):
+    return {"download_url": f"http://localhost:8000/static/{task_id}/all.zip"}
+
+
 @router.get("/files")
 async def get_files(task_id: str):
     work_dir = get_work_dir(task_id)
     files = get_current_files(work_dir, "all")
+    file_all = []
 
-    return {"files": files}
+    for i in files:
+        file_type = i.split(".")[-1]
+        file_all.append({"filename": i, "file_type": file_type})
+
+    return file_all
 
 
 @router.get("/open_folder")

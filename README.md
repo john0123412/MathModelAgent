@@ -88,33 +88,25 @@ git clone https://github.com/jihe520/MathModelAgent.git # 克隆项目
 
 
 
-### 🐳 方案一：Docker 部署（推荐：最简单）
+### 🐳 方案一：Docker 部署（推荐：安全简单）
 
 > 确保电脑安装了 docker 环境
 
-
-1. 配置环境变量
-
-```bash
-cp backend/.env.dev.example backend/.env.dev
-cp frontend/.env.example frontend/.env.development
-```
-
-填入配置
-- backend/.env.dev
-- frontend/.env.development
-
-2. 启动服务
+1. 启动服务
 
 ```bash
-docker-compose up -d
+docker-compose up
 ```
 
-3. 访问
+2. 访问
 
 现在你可以访问：
 - 前端界面：http://localhost:5173
 - 后端API：http://localhost:8000
+
+3. 配置
+
+侧边栏 -> 头像 -> API Key
 
 
 ### 💻 方案二: 本地部署
@@ -122,16 +114,7 @@ docker-compose up -d
 > 确保电脑中安装好 Python, Nodejs, **Redis** 环境
 
 
-1. 配置环境变量
-
-复制`/backend/.env.dev.example`到`/backend/.env.dev`(删除`.example` 后缀)
-
-推荐模型能力较强的、参数量大的模型。
-
-复制`/fronted/.env.example`到`/fronted/.env.development`(删除`.example` 后缀)
-
-
-2. 安装依赖
+1. 安装依赖
 
 启动后端
 
@@ -143,7 +126,7 @@ cd backend # 切换到 backend 目录下
 pip install uv # 推荐使用 uv 管理 python 项目
 uv sync # 安装依赖
 # 启动后端
-# 激活 python 蓄虚拟环境
+# 激活 python 虚拟环境
 source .venv/bin/activate # MacOS or Linux
 venv\Scripts\activate.bat # Windows
 # MacOS or Linux 运行这条命令
@@ -160,6 +143,12 @@ npm install -g pnpm
 pnpm i #确保电脑安装了 pnpm 
 pnpm run dev
 ```
+修改 backend/.env.dev 的环境变量 **REDIS_URL**
+
+2. 配置
+
+侧边栏 -> 头像 -> API Key
+
 
 
 ### 🚀 方案三：自动脚本部署（来自社区）
@@ -214,9 +203,19 @@ Thanks to the following projects:
 
 ### 💖 Sponsor
 
-[Buy Me a Coffee](./docs/md/sponser.md)
+[☕️ 给作者买一杯咖啡](./docs/md/sponser.md)
 
 感谢赞助
+
+#### 企业
+
+<div align="center">
+    <img src="./docs/302ai.jpg">
+</div>
+
+302.AI 是一个按用量付费的企业级AI资源平台，提供市场上最新、最全面的AI模型和API，以及多种开箱即用的在线AI应用
+
+#### 用户
 
 [danmo-tyc](https://github.com/danmo-tyc)
 

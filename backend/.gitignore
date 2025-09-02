@@ -2,8 +2,6 @@ venv/
 _pycache_/
 *.pyc
 .venv/
-.env.dev
-.env.prod
 .idea/
 .vscode/
 

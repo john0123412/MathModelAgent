@@ -19,27 +19,45 @@ export interface SaveApiConfigRequest {
     apiKey: string;
     baseUrl: string;
     modelId: string;
+    provider: string;
   };
   modeler: {
     apiKey: string;
     baseUrl: string;
     modelId: string;
+    provider: string;
   };
   coder: {
     apiKey: string;
     baseUrl: string;
     modelId: string;
+    provider: string;
   };
   writer: {
     apiKey: string;
     baseUrl: string;
     modelId: string;
+    provider: string;
   };
+  openalex_email: string;
+}
+
+export interface ValidateOpenalexEmailRequest {
+  email: string;
+}
+
+export interface ValidateOpenalexEmailResponse {
+  valid: boolean;
+  message: string;
 }
 
 // 验证 API Key
 export function validateApiKey(params: ValidateApiKeyRequest) {
   return request.post<ValidateApiKeyResponse>("/validate-api-key", params);
+}
+
+export function validateOpenalexEmail(params: ValidateOpenalexEmailRequest) {
+  return request.post<ValidateOpenalexEmailResponse>("/validate-openalex-email", params);
 }
 
 // 保存 API 配置

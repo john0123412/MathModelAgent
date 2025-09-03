@@ -210,10 +210,12 @@ Thanks to the following projects:
 #### 企业
 
 <div align="center">
+    <a href="https://share.302.ai/UoTruU" >
     <img src="./docs/302ai.jpg">
+    </a>
 </div>
 
-302.AI 是一个按用量付费的企业级AI资源平台，提供市场上最新、最全面的AI模型和API，以及多种开箱即用的在线AI应用
+[302.AI](https://share.302.ai/UoTruU) 是一个按用量付费的企业级AI资源平台，提供市场上最新、最全面的AI模型和API，以及多种开箱即用的在线AI应用
 
 #### 用户
 

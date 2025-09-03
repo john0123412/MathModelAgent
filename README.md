@@ -210,7 +210,7 @@ Thanks to the following projects:
 #### 企业
 
 <div align="center">
-    <a href="https://share.302.ai/UoTruU" >
+    <a href="https://share.302.ai/UoTruU" target="_blank">
     <img src="./docs/302ai.jpg">
     </a>
 </div>

@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/sidebar'
 import { getHelloWorld } from '@/apis/commonApi'
 import Button from '@/components/ui/button/Button.vue'
-import { AppWindow } from 'lucide-vue-next'
+import { AppWindow, CircleEllipsis } from 'lucide-vue-next'
 onMounted(() => {
   getHelloWorld().then((res) => {
     console.log(res.data)
@@ -27,7 +27,11 @@ onMounted(() => {
     <SidebarInset>
       <header class="flex h-16 shrink-0 items-center gap-2 px-4">
         <SidebarTrigger class="-ml-1" />
-        <div class="flex justify-end w-full">
+        <div class="flex justify-end w-full gap-2">
+          <Button variant="outline">
+            <CircleEllipsis />
+            更多
+          </Button>
           <a href="https://www.mathmodel.top/" target="_blank">
             <Button variant="outline">
               <AppWindow />

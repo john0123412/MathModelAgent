@@ -253,7 +253,7 @@ const providers = {
     "modelId": "openai/gpt-5"
   },
   "302.AI": {
-    "url": "https://302.ai/",
+    "url": "https://share.302.ai/UoTruU",
     "key": "302.AI",
     "baseUrl": "https://api.302.ai",
     "modelId": "openai/deepseek-chat"

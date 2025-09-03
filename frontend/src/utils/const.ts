@@ -8,3 +8,5 @@ export const BILLBILL = "https://space.bilibili.com/400340982"
 export const XHS = "https://www.xiaohongshu.com/user/profile/647a0857000000002a037c03"
 
 export const GITHUB_LINK = "https://github.com/jihe520/MathModelAgent"
+
+export const DISCORD = "https://discord.gg/3Jmpqg5J"

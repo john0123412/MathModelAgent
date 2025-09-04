@@ -225,6 +225,8 @@ Thanks to the following projects:
 
 有问题可以进群问
 
+[Discord](https://discord.gg/3Jmpqg5J)
+
 [QQ 群：699970403](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=rFKquDTSxKcWpEhRgpJD-dPhTtqLwJ9r&authKey=xYKvCFG5My4uYZTbIIoV5MIPQedW7hYzf0%2Fbs4EUZ100UegQWcQ8xEEgTczHsyU6&noverify=0&group_code=699970403)
 
 <div align="center">

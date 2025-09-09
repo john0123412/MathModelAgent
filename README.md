@@ -232,3 +232,6 @@ Thanks to the following projects:
 <div align="center">
     <img src="./docs/qq.jpg" height="400px">
 </div>
+
+> [!CAUTION]
+> 注意，AI 生成仅供参考

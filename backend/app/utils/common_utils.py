@@ -13,6 +13,10 @@ from app.config.setting import settings
 
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
+# 所有任务工作目录的根路径约定，供 create_work_dir/get_work_dir 及路由层复用，
+# 避免各处硬编码 "project/work_dir" 字符串。
+WORK_DIR_ROOT = os.path.join("project", "work_dir")
+
 
 def create_task_id() -> str:
     """生成基于时间戳和随机哈希的唯一任务 ID。"""
@@ -50,7 +54,7 @@ def create_work_dir(task_id: str) -> str:
         工作目录路径。
     """
     # 设置主工作目录和子目录
-    work_dir = os.path.join("project", "work_dir", task_id)
+    work_dir = os.path.join(WORK_DIR_ROOT, task_id)
 
     try:
         # 创建目录，如果目录已存在也不会报错
@@ -103,7 +107,7 @@ def get_work_dir(task_id: str) -> str:
     Raises:
         FileNotFoundError: 工作目录不存在时抛出。
     """
-    work_dir = os.path.join("project", "work_dir", task_id)
+    work_dir = os.path.join(WORK_DIR_ROOT, task_id)
     if os.path.exists(work_dir):
         return work_dir
     else:

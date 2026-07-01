@@ -1,9 +1,11 @@
 """OpenAlex 学术文献搜索模块。"""
 
+import asyncio
 import requests
 from typing import List, Dict, Any
 from app.services.redis_manager import redis_manager
 from app.schemas.response import ScholarMessage
+from app.utils.log_util import logger
 
 
 class OpenAlexScholar:
@@ -61,7 +63,7 @@ class OpenAlexScholar:
         return " ".join(words).strip()
 
     async def search_papers(self, query: str, limit: int = 8) -> List[Dict[str, Any]]:
-        """使用 OpenAlex API 搜索学术论文。
+        """使用 OpenAlex API 搜索学术论文，带重试和 fallback。
 
         Args:
             query: 搜索关键词。
@@ -70,17 +72,40 @@ class OpenAlexScholar:
         Returns:
             包含论文详细信息的字典列表。
         """
-        # 构建基础 URL
-        base_url = self._get_request_url("works")
+        # 尝试 OpenAlex（带重试）
+        for attempt in range(3):
+            try:
+                papers = await self._search_openalex(query, limit)
+                if papers:
+                    return papers
+            except Exception as e:
+                logger.warning(f"OpenAlex 第{attempt+1}次尝试失败: {e}")
+                if attempt < 2:
+                    await asyncio.sleep(2 * (attempt + 1))
 
-        # 设置请求参数，根据API支持的字段进行选择
+        # Fallback: Semantic Scholar
+        logger.info(f"OpenAlex 搜索失败（query={query!r}），fallback 到 Semantic Scholar")
+        try:
+            papers = await self._search_semantic_scholar(query, limit)
+            if papers:
+                logger.info(f"Semantic Scholar fallback 成功，返回 {len(papers)} 篇论文")
+                return papers
+            logger.warning(f"Semantic Scholar fallback 未返回结果（query={query!r}）")
+        except Exception as e:
+            logger.error(f"Semantic Scholar fallback 失败（query={query!r}）: {e}")
+
+        # 最终 fallback: 返回空列表，避免中断任务
+        logger.error(f"所有学术搜索 API 均失败，返回空列表（query={query!r}）")
+        return []
+
+    async def _search_openalex(self, query: str, limit: int) -> List[Dict[str, Any]]:
+        """OpenAlex 搜索实现。"""
+        base_url = self._get_request_url("works")
         params = {
             "search": query,
             "per_page": limit,
-            "select": "id,title,display_name,authorships,cited_by_count,doi,publication_year,biblio,abstract_inverted_index",
+            "select": "id,title,display_name,authorships,cited_by_count,doi,publication_year,biblio,abstract_inverted_index,primary_location",
         }
-
-        # 添加邮箱参数到请求URL
         if self.email:
             params["mailto"] = self.email
         else:
@@ -88,68 +113,28 @@ class OpenAlexScholar:
         if self.api_key:
             params["api_key"] = self.api_key
 
-        # 设置请求头，包含User-Agent和邮箱信息
         headers = {
-            "User-Agent": f"OpenAlexScholar/1.0 (mailto:{self.email})"
-            if self.email
-            else "OpenAlexScholar/1.0"
+            "User-Agent": f"OpenAlexScholar/1.0 (mailto:{self.email})" if self.email else "OpenAlexScholar/1.0"
         }
 
-        # 让 requests 处理参数编码和 URL 构建
-        response: requests.Response | None = None
-        try:
-            print(f"请求 URL: {base_url} 参数: {params}")
-            response = requests.get(base_url, params=params, headers=headers)
-            print(f"响应状态: {response.status_code}")
-
-            response.raise_for_status()
-            results = response.json()
-        except requests.exceptions.HTTPError as e:
-            print(f"HTTP 错误: {e}")
-            if response is not None and response.status_code == 403:
-                print(
-                    "提示: 403错误通常意味着您需要提供有效的邮箱地址或者遵循礼貌池（polite pool）规则"
-                )
-            if response is not None and hasattr(response, "text"):
-                print(f"响应内容: {response.text}")
-            raise
-        except Exception as e:
-            print(f"请求出错: {e}")
-            raise
+        response = requests.get(base_url, params=params, headers=headers, timeout=30)
+        response.raise_for_status()
+        results = response.json()
 
         papers = []
-        paper_titles = []  # 用于存储论文标题
         for work in results.get("results", []):
-            # 从倒排索引中获取摘要
-            abstract = self._get_abstract_from_index(
-                work.get("abstract_inverted_index", {})
-            )
-
-            # 获取作者信息
+            abstract = self._get_abstract_from_index(work.get("abstract_inverted_index", {}))
             authors = []
             for authorship in work.get("authorships", []):
                 author = authorship.get("author", {})
                 if author:
-                    author_info = {
+                    authors.append({
                         "name": author.get("display_name"),
                         "position": authorship.get("author_position"),
-                        "institution": authorship.get("institutions", [{}])[0].get(
-                            "display_name"
-                        )
-                        if authorship.get("institutions")
-                        else None,
-                    }
-                    authors.append(author_info)
-
-            # 获取引用格式信息
+                        "institution": authorship.get("institutions", [{}])[0].get("display_name")
+                        if authorship.get("institutions") else None,
+                    })
             biblio = work.get("biblio", {})
-            citation = {
-                "volume": biblio.get("volume"),
-                "issue": biblio.get("issue"),
-                "first_page": biblio.get("first_page"),
-                "last_page": biblio.get("last_page"),
-            }
-
             paper = {
                 "title": work.get("display_name") or work.get("title", ""),
                 "abstract": abstract,
@@ -157,22 +142,78 @@ class OpenAlexScholar:
                 "citations_count": work.get("cited_by_count"),
                 "doi": work.get("doi"),
                 "publication_year": work.get("publication_year"),
-                "citation_info": citation,
-                # 构建引用格式
+                "citation_info": {
+                    "volume": biblio.get("volume"),
+                    "issue": biblio.get("issue"),
+                    "first_page": biblio.get("first_page"),
+                    "last_page": biblio.get("last_page"),
+                },
                 "citation_format": self._format_citation(work),
             }
             papers.append(paper)
-            paper_titles.append(paper["title"])  # 添加标题到列表
 
         await redis_manager.publish_message(
             self.task_id,
-            ScholarMessage(
-                input={"query": query},
-                output=paper_titles,  # 只发送论文标题列表
-            ),
+            ScholarMessage(input={"query": query}, output=[p["title"] for p in papers]),
         )
+        return papers
+
+    async def _search_semantic_scholar(self, query: str, limit: int) -> List[Dict[str, Any]]:
+        """Semantic Scholar API fallback 搜索。"""
+        url = "https://api.semanticscholar.org/graph/v1/paper/search"
+        params = {
+            "query": query,
+            "limit": limit,
+            "fields": "title,authors,year,venue,citationCount,externalIds,url",
+        }
+        response = requests.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+
+        papers = []
+        for item in data.get("data", []):
+            authors = [
+                {"name": a.get("name", ""), "position": "author"}
+                for a in item.get("authors", [])
+            ]
+            ext_ids = item.get("externalIds", {})
+            paper = {
+                "title": item.get("title", ""),
+                "abstract": item.get("abstract", "") or "",
+                "authors": authors,
+                "citations_count": item.get("citationCount"),
+                "doi": ext_ids.get("DOI"),
+                "publication_year": item.get("year"),
+                "citation_info": {"volume": None, "issue": None, "first_page": None, "last_page": None},
+                "citation_format": self._format_s2_citation(item),
+            }
+            papers.append(paper)
 
         return papers
+
+    def _format_s2_citation(self, item: Dict[str, Any]) -> str:
+        """Semantic Scholar 论文格式化为 GB/T 7714-2015 格式。"""
+        authors = [a.get("name", "") for a in item.get("authors", [])]
+        if len(authors) == 0:
+            authors_str = "Unknown"
+        elif len(authors) <= 3:
+            authors_str = ", ".join(authors)
+        else:
+            authors_str = ", ".join(authors[:3]) + ", et al."
+
+        title = item.get("title", "")
+        year = item.get("year", "")
+        venue = item.get("venue", "")
+        doi = (item.get("externalIds") or {}).get("DOI", "")
+
+        citation = f"{authors_str}. {title}[J]. "
+        if venue:
+            citation += f"{venue}, {year}."
+        else:
+            citation += f"{year}."
+        if doi:
+            citation += f" DOI: {doi}."
+        return citation
 
     def papers_to_str(self, papers: List[Dict[str, Any]]) -> str:
         """将文献列表转换为可读字符串。"""
@@ -191,7 +232,10 @@ class OpenAlexScholar:
         return result
 
     def _format_citation(self, work: Dict[str, Any]) -> str:
-        """将论文数据格式化为引用字符串。"""
+        """将论文数据格式化为 GB/T 7714-2015 引用格式。
+
+        格式: 作者. 题名[J]. 刊名, 年, 卷(期): 页码.
+        """
         # 获取所有作者
         authors = [
             authorship.get("author", {}).get("display_name")
@@ -199,11 +243,13 @@ class OpenAlexScholar:
             if authorship.get("author")
         ]
 
-        # 格式化作者列表
-        if len(authors) > 3:
-            authors_str = f"{authors[0]} et al."
-        else:
+        # 格式化作者列表（GB/T 7714: 前3位用逗号分隔，超过3位加"等"或"et al."）
+        if len(authors) == 0:
+            authors_str = "Unknown"
+        elif len(authors) <= 3:
             authors_str = ", ".join(authors)
+        else:
+            authors_str = ", ".join(authors[:3]) + ", et al."
 
         # 获取标题
         title = work.get("display_name") or work.get("title", "")
@@ -211,12 +257,40 @@ class OpenAlexScholar:
         # 获取年份
         year = work.get("publication_year", "")
 
-        # 获取DOI
+        # 获取期刊/会议信息
+        biblio = work.get("biblio", {})
+        volume = biblio.get("volume", "")
+        issue = biblio.get("issue", "")
+        first_page = biblio.get("first_page", "")
+        last_page = biblio.get("last_page", "")
+
+        # 获取来源（期刊名或会议名）
+        primary_location = work.get("primary_location") or {}
+        source = primary_location.get("source") or {}
+        source_name = source.get("display_name", "")
+
+        # 获取 DOI
         doi = work.get("doi", "")
 
-        # 构建引用格式
-        citation = f"{authors_str} ({year}). {title}."
+        # 构建 GB/T 7714 格式
+        # 作者. 题名[J]. 刊名, 年, 卷(期): 页码.
+        citation = f"{authors_str}. {title}[J]. "
+
+        if source_name:
+            citation += f"{source_name}, {year}"
+            if volume:
+                citation += f", {volume}"
+            if issue:
+                citation += f"({issue})"
+            if first_page:
+                citation += f": {first_page}"
+                if last_page and last_page != first_page:
+                    citation += f"-{last_page}"
+            citation += "."
+        else:
+            citation += f"{year}."
+
         if doi:
-            citation += f" DOI: {doi}"
+            citation += f" DOI: {doi}."
 
         return citation

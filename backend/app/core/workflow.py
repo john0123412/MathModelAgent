@@ -1,6 +1,8 @@
 """工作流模块，编排多 Agent 协作完成数学建模任务。"""
 
 import asyncio
+import json
+import os
 from app.core.agents import WriterAgent, CoderAgent, CoordinatorAgent, ModelerAgent
 from app.schemas.request import Problem
 from app.schemas.response import SystemMessage
@@ -12,6 +14,8 @@ from app.config.setting import settings
 from app.tools.interpreter_factory import create_interpreter
 from app.services.redis_manager import redis_manager
 from app.tools.notebook_serializer import NotebookSerializer
+from app.tools.pdf_exporter import export_markdown_to_pdf
+from app.tools.candidate_exporter import write_candidate_manifest
 from app.core.flows import Flows
 from app.core.llm.llm_factory import LLMFactory
 
@@ -226,3 +230,55 @@ class MathModelWorkFlow(WorkFlow):
         logger.info(user_output.get_res())
 
         user_output.save_result()
+
+        ################################################ generate PDF
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(content="正在生成 PDF 论文..."),
+        )
+        md_path = os.path.join(self.work_dir, "res.md")
+        pdf_path = os.path.join(self.work_dir, "res.pdf")
+        pdf_result = export_markdown_to_pdf(md_path, pdf_path, self.work_dir)
+
+        if pdf_result["success"]:
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content="PDF 论文生成完成"),
+            )
+        elif pdf_result["enabled"]:
+            # pandoc/xelatex 都存在，但转换本身失败
+            logger.error(f"PDF 生成失败: {pdf_result['reason']}, stderr={pdf_result['stderr']}")
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(
+                    content=f"PDF 论文生成失败: {pdf_result['reason']}，其余结果（Markdown/Word）不受影响",
+                    type="error",
+                ),
+            )
+        else:
+            # 环境缺失（文件不存在、pandoc/xelatex 未安装），主动跳过
+            logger.warning(f"PDF 生成跳过: {pdf_result['reason']}")
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(
+                    content=f"已跳过 PDF 生成: {pdf_result['reason']}，其余结果（Markdown/Word）不受影响",
+                    type="warning",
+                ),
+            )
+
+        export_status_path = os.path.join(self.work_dir, "export_status.json")
+        try:
+            with open(export_status_path, "w", encoding="utf-8") as f:
+                json.dump({"pdf": pdf_result}, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"写入 export_status.json 失败: {e}")
+
+        ################################################ generate candidate manifest
+        try:
+            write_candidate_manifest(self.work_dir, self.task_id)
+        except Exception as e:
+            logger.error(f"candidate_manifest.json 生成失败: {e}")
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content=f"candidate_manifest.json 生成失败: {e}", type="error"),
+            )

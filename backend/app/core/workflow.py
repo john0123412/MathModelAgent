@@ -134,46 +134,103 @@ class MathModelWorkFlow(WorkFlow):
 
         return notebook_serializer, code_interpreter, coder_agent, writer_agent
 
-    async def _replay_notebook(self, code_interpreter: BaseCodeInterpreter) -> None:
+    async def _replay_notebook(
+        self,
+        code_interpreter: BaseCodeInterpreter,
+        checkpoint_manager: CheckpointManager | None = None,
+    ) -> None:
         """重放 notebook.ipynb 中已成功执行的代码单元格，重建内核变量状态（仅续传时调用）。
 
-        跳过包含 error 输出的单元格（对应失败/反思重试留下的痕迹），只重放成功的单元格。
+        优先级：
+        1. 从变量快照恢复（最快，秒级）
+        2. 增量重放（只重放新单元格）
+        3. 全量重放（fallback）
 
         Args:
             code_interpreter: 新建的代码解释器实例。
+            checkpoint_manager: 检查点管理器，用于增量重放。
         """
         notebook_path = os.path.join(self.work_dir, "notebook.ipynb")
         if not os.path.exists(notebook_path):
             logger.info("未找到 notebook.ipynb，跳过内核状态重放")
             return
 
-        await redis_manager.publish_message(
-            self.task_id,
-            SystemMessage(content="正在重放已执行的代码单元格，重建计算环境..."),
-        )
+        # 尝试从变量快照恢复（最快）
+        from app.tools.variable_snapshot import VariableSnapshot
+        snapshot = VariableSnapshot(self.work_dir)
+        
+        if snapshot.exists():
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content="从变量快照恢复计算环境..."),
+            )
+            
+            # 获取内核客户端
+            kernel_client = getattr(code_interpreter, 'kc', None)
+            if kernel_client and await snapshot.load(kernel_client):
+                logger.info("变量快照恢复成功，跳过单元格重放")
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(content="计算环境恢复完成（从快照）"),
+                )
+                return
+            else:
+                logger.warning("变量快照恢复失败，降级为增量重放")
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(content="快照恢复失败，使用增量重放..."),
+                )
 
+        # 读取 notebook
         nb = nbformat.read(notebook_path, as_version=4)
-        cells_to_replay = [
-            cell for cell in nb.get("cells", [])
+        
+        # 筛选所有有效的代码单元格（带索引）
+        all_code_cells = [
+            (i, cell) for i, cell in enumerate(nb.get("cells", []))
             if cell.get("cell_type") == "code"
             and not any(o.get("output_type") == "error" for o in (cell.get("outputs") or []))
             and (cell.get("source") or "").strip()
         ]
+        
+        # 增量重放：只重放未执行的单元格
+        if checkpoint_manager is not None:
+            executed_indices = set(checkpoint_manager.get_executed_cells())
+            cells_to_replay = [
+                (i, cell) for i, cell in all_code_cells
+                if i not in executed_indices
+            ]
+            mode = "增量重放"
+        else:
+            cells_to_replay = all_code_cells
+            mode = "全量重放"
+        
         total = len(cells_to_replay)
+        total_all = len(all_code_cells)
+        
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(content=f"正在{mode}计算环境: {total}/{total_all} 个单元格..."),
+        )
+
         replayed = 0
-        for cell in cells_to_replay:
+        for cell_index, cell in cells_to_replay:
             await code_interpreter.execute_code(cell["source"])
             replayed += 1
+            
+            # 记录已执行的单元格索引
+            if checkpoint_manager is not None:
+                checkpoint_manager.add_executed_cell(cell_index)
+            
             if replayed % 10 == 0 or replayed == total:
                 await redis_manager.publish_message(
                     self.task_id,
                     SystemMessage(content=f"重建计算环境: {replayed}/{total} 个单元格"),
                 )
 
-        logger.info(f"内核状态重放完成，共重放 {replayed} 个代码单元格")
+        logger.info(f"内核状态重放完成（{mode}），共重放 {replayed} 个代码单元格")
         await redis_manager.publish_message(
             self.task_id,
-            SystemMessage(content=f"计算环境重建完成，共重放 {replayed} 个代码单元格"),
+            SystemMessage(content=f"计算环境重建完成（{mode}），共重放 {replayed} 个单元格"),
         )
 
     async def _run_solution_flows(
@@ -240,6 +297,18 @@ class MathModelWorkFlow(WorkFlow):
             checkpoint_manager.mark_phase_completed(
                 key, coder_response.model_dump(), writer_response.model_dump()
             )
+            
+            # 保存变量快照（用于下次快速恢复）
+            from app.tools.variable_snapshot import VariableSnapshot
+            snapshot = VariableSnapshot(self.work_dir)
+            kernel_client = getattr(code_interpreter, 'kc', None)
+            if kernel_client:
+                try:
+                    await snapshot.save(kernel_client)
+                    checkpoint_manager.set_variable_snapshot_exists(True)
+                    logger.info(f"变量快照已保存: {key}")
+                except Exception as e:
+                    logger.warning(f"保存变量快照失败: {e}")
 
     async def _run_write_flows(
         self,
@@ -533,7 +602,7 @@ class MathModelWorkFlow(WorkFlow):
         )
 
         # 重建 Jupyter 内核变量状态
-        await self._replay_notebook(code_interpreter)
+        await self._replay_notebook(code_interpreter, checkpoint_manager)
 
         flows = Flows(self.questions)
         config_template = get_config_template(comp_template)

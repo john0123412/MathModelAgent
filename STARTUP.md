@@ -37,6 +37,12 @@ docker-compose down -v      # 停止并删除数据卷（⚠️ 清空 Redis 数
 - **frontend**（:5173）→ 连接 :8000
 - **redis**（内部网络）
 
+### Restart 策略
+所有容器配置了 `restart: unless-stopped`：
+- Docker Desktop 重启 → 容器自动恢复
+- 系统重启 → 容器自动恢复
+- 手动 `docker stop` → 不会自动恢复
+
 ---
 
 ## 方案二：本地开发
@@ -80,7 +86,32 @@ pnpm run dev
 | Backend | 8000 | 8003 |
 | Redis | 内部网络 | 6379 |
 
-> **两种方式不能同时运行**，因为前端都映射到 5173。
+---
+
+## 功能说明
+
+### 断点续传（Checkpoint/Resume）
+
+**原理**：
+1. 任务在每个阶段（eda/ques1/ques2...）完成后自动保存检查点到 `checkpoint.json`
+2. 中断后重启，通过 `GET /tasks` 检测到 `status: "interrupted"`
+3. 点击"继续任务"，调用 `POST /modeling/{task_id}/resume`
+4. 系统从检查点恢复，跳过已完成阶段，通过重放 notebook 单元格重建内核变量状态
+
+**重建计算环境机制**：
+- 读取 `notebook.ipynb` 中所有代码单元格
+- 跳过包含 error 输出的单元格（失败/反思重试留下的痕迹）
+- 按顺序重新执行成功的单元格
+- 每 10 个单元格发送进度消息
+- 重建完成后继续执行未完成阶段
+
+### 实时消息干预
+
+**原理**：
+1. WebSocket 双向通信：前端发送 → 后端接收 → 推入队列
+2. Agent 在每次 LLM 调用前检查队列
+3. 用户消息作为额外上下文注入到 `chat_history`
+4. 前端实时回显用户输入
 
 ---
 
@@ -93,17 +124,11 @@ pnpm run dev
 3. 等待任务运行（观察聊天区出现代码执行日志）
 4. 模拟崩溃：停止后端
    ```powershell
-   # Docker 方式
    docker-compose stop backend
-   
-   # 本地方式：关闭后端终端窗口
    ```
 5. 重启后端
    ```powershell
-   # Docker 方式
    docker-compose up -d
-   
-   # 本地方式：重新运行启动命令
    ```
 6. 刷新浏览器，任务应显示 `interrupted` 状态
 7. 点击"继续任务"按钮
@@ -121,22 +146,6 @@ pnpm run dev
    - 前端回显消息
    - 后端日志显示收到用户输入
    - Agent 行为是否有变化
-
----
-
-## 功能说明
-
-### 断点续传（Checkpoint/Resume）
-
-- 任务在每个阶段完成后自动保存检查点
-- 中断后可从检查点恢复，跳过已完成阶段
-- 通过重放 notebook 单元格重建内核变量状态
-
-### 实时消息干预
-
-- 用户在任务运行中发送的消息会注入到 Agent 的下一次 LLM 调用
-- 消息通过 WebSocket 双向通信传输
-- 前端实时回显用户输入
 
 ---
 

@@ -27,6 +27,10 @@ class TaskCheckpoint(BaseModel):
     modeler_response: dict  # ModelerToCoder.model_dump()
     completed_phases: dict[str, PhaseCheckpoint] = Field(default_factory=dict)
     updated_at: str
+    
+    # 新增：增量重放支持
+    executed_cell_indices: list[int] = Field(default_factory=list)  # 已执行的单元格索引
+    has_variable_snapshot: bool = False  # 是否有变量快照
 
 
 class CheckpointManager:
@@ -103,3 +107,42 @@ class CheckpointManager:
         )
         self._checkpoint.updated_at = datetime.datetime.now().isoformat()
         self.save(self._checkpoint)
+    
+    def add_executed_cell(self, cell_index: int) -> None:
+        """记录已执行的单元格索引（增量重放支持）。
+        
+        Args:
+            cell_index: 单元格在 notebook 中的索引
+        """
+        if self._checkpoint is None:
+            raise RuntimeError("CheckpointManager 尚未初始化")
+        
+        if cell_index not in self._checkpoint.executed_cell_indices:
+            self._checkpoint.executed_cell_indices.append(cell_index)
+            self._checkpoint.updated_at = datetime.datetime.now().isoformat()
+            self.save(self._checkpoint)
+    
+    def set_variable_snapshot_exists(self, exists: bool) -> None:
+        """设置变量快照是否存在标志。
+        
+        Args:
+            exists: 是否有变量快照
+        """
+        if self._checkpoint is None:
+            raise RuntimeError("CheckpointManager 尚未初始化")
+        
+        self._checkpoint.has_variable_snapshot = exists
+        self._checkpoint.updated_at = datetime.datetime.now().isoformat()
+        self.save(self._checkpoint)
+    
+    def get_executed_cells(self) -> list[int]:
+        """获取已执行的单元格索引列表。"""
+        if self._checkpoint is None:
+            return []
+        return self._checkpoint.executed_cell_indices
+    
+    def has_variable_snapshot(self) -> bool:
+        """检查是否有变量快照。"""
+        if self._checkpoint is None:
+            return False
+        return self._checkpoint.has_variable_snapshot

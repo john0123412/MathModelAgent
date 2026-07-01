@@ -1,6 +1,7 @@
 """文件管理路由模块，提供文件下载、列表和目录打开等接口。"""
 
 from fastapi import APIRouter
+from app.config.setting import settings
 from app.utils.common_utils import get_current_files, get_work_dir
 import os
 import subprocess
@@ -12,12 +13,12 @@ router = APIRouter()
 
 @router.get("/download_url")
 async def get_download_url(task_id: str, filename: str):
-    return {"download_url": f"http://localhost:8000/static/{task_id}/{filename}"}
+    return {"download_url": f"{settings.SERVER_HOST}/static/{task_id}/{filename}"}
 
 
 @router.get("/download_all_url")
 async def get_download_all_url(task_id: str):
-    return {"download_url": f"http://localhost:8000/static/{task_id}/all.zip"}
+    return {"download_url": f"{settings.SERVER_HOST}/static/{task_id}/all.zip"}
 
 
 @router.get("/files")

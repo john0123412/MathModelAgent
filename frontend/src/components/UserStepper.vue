@@ -105,16 +105,8 @@ const router = useRouter();
 /** 提交建模任务 */
 const handleSubmit = async () => {
 	try {
-		if (apiKeyStore.isEmpty) {
-			toast({
-				title: "请先配置 API Key",
-				description: "在侧边栏 -> 头像 -> API Key 中配置 API Key",
-				variant: "destructive",
-			});
-			return;
-		}
-
-		// 保存 API Key
+		// 保存 API Key（若未在 WebUI 中填写，字段为空，后端会保留
+		// .env.dev 中已加载的默认配置，不会被空值覆盖）
 		await saveApiConfig({
 			coordinator: apiKeyStore.coordinatorConfig,
 			modeler: apiKeyStore.modelerConfig,

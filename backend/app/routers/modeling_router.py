@@ -68,38 +68,51 @@ async def save_api_config(request: SaveApiConfigRequest):
     保存验证成功的 API 配置到 settings
     """
     try:
-        # 更新各个模块的设置
+        # 更新各个模块的设置：仅当字段非空时才覆盖，空字段保留 .env.dev 中
+        # 已加载的默认配置，避免前端未填写时把可用的 key 覆盖成空字符串
         if request.coordinator:
-            settings.COORDINATOR_API_KEY = request.coordinator.get("apiKey", "")
-            settings.COORDINATOR_MODEL = request.coordinator.get("modelId", "")
-            settings.COORDINATOR_BASE_URL = request.coordinator.get("baseUrl", "")
+            if api_key := request.coordinator.get("apiKey"):
+                settings.COORDINATOR_API_KEY = api_key
+            if model_id := request.coordinator.get("modelId"):
+                settings.COORDINATOR_MODEL = model_id
+            if base_url := request.coordinator.get("baseUrl"):
+                settings.COORDINATOR_BASE_URL = base_url
             if api_type := request.coordinator.get("apiType"):
                 settings.COORDINATOR_API_TYPE = api_type
             if cw := request.coordinator.get("contextWindow"):
                 settings.COORDINATOR_CONTEXT_WINDOW = int(cw)
 
         if request.modeler:
-            settings.MODELER_API_KEY = request.modeler.get("apiKey", "")
-            settings.MODELER_MODEL = request.modeler.get("modelId", "")
-            settings.MODELER_BASE_URL = request.modeler.get("baseUrl", "")
+            if api_key := request.modeler.get("apiKey"):
+                settings.MODELER_API_KEY = api_key
+            if model_id := request.modeler.get("modelId"):
+                settings.MODELER_MODEL = model_id
+            if base_url := request.modeler.get("baseUrl"):
+                settings.MODELER_BASE_URL = base_url
             if api_type := request.modeler.get("apiType"):
                 settings.MODELER_API_TYPE = api_type
             if cw := request.modeler.get("contextWindow"):
                 settings.MODELER_CONTEXT_WINDOW = int(cw)
 
         if request.coder:
-            settings.CODER_API_KEY = request.coder.get("apiKey", "")
-            settings.CODER_MODEL = request.coder.get("modelId", "")
-            settings.CODER_BASE_URL = request.coder.get("baseUrl", "")
+            if api_key := request.coder.get("apiKey"):
+                settings.CODER_API_KEY = api_key
+            if model_id := request.coder.get("modelId"):
+                settings.CODER_MODEL = model_id
+            if base_url := request.coder.get("baseUrl"):
+                settings.CODER_BASE_URL = base_url
             if api_type := request.coder.get("apiType"):
                 settings.CODER_API_TYPE = api_type
             if cw := request.coder.get("contextWindow"):
                 settings.CODER_CONTEXT_WINDOW = int(cw)
 
         if request.writer:
-            settings.WRITER_API_KEY = request.writer.get("apiKey", "")
-            settings.WRITER_MODEL = request.writer.get("modelId", "")
-            settings.WRITER_BASE_URL = request.writer.get("baseUrl", "")
+            if api_key := request.writer.get("apiKey"):
+                settings.WRITER_API_KEY = api_key
+            if model_id := request.writer.get("modelId"):
+                settings.WRITER_MODEL = model_id
+            if base_url := request.writer.get("baseUrl"):
+                settings.WRITER_BASE_URL = base_url
             if api_type := request.writer.get("apiType"):
                 settings.WRITER_API_TYPE = api_type
             if cw := request.writer.get("contextWindow"):

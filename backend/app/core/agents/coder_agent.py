@@ -1,6 +1,7 @@
 """代码手 Agent 模块，负责生成和执行 Python 代码完成建模任务。"""
 
 import asyncio
+from typing import Callable
 from app.core.agents.agent import Agent
 from app.config.setting import settings, ApiType
 from app.utils.log_util import logger
@@ -32,8 +33,15 @@ class CoderAgent(Agent):
         code_interpreter: BaseCodeInterpreter | None = None,
         context_window: int = 128000,
         cancel_event: asyncio.Event | None = None,
+        user_input_provider: Callable[[], list[str]] | None = None,
     ) -> None:
-        super().__init__(task_id, model, context_window, cancel_event=cancel_event)
+        super().__init__(
+            task_id,
+            model,
+            context_window,
+            cancel_event=cancel_event,
+            user_input_provider=user_input_provider,
+        )
         self.work_dir = work_dir
         self.max_chat_turns = max_chat_turns
         self.current_chat_turns = 0

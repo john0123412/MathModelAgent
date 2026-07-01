@@ -1,7 +1,7 @@
 """Agent 基类模块，提供对话管理和记忆压缩功能。"""
 
 import asyncio
-from typing import Any
+from typing import Any, Callable
 from app.core.llm.llm import LLM, simple_chat
 from app.utils.log_util import logger
 
@@ -23,6 +23,7 @@ class Agent:
         context_window: int = 128000,  # 模型上下文窗口大小（token）
         token_threshold_ratio: float = _DEFAULT_TOKEN_THRESHOLD_RATIO,
         cancel_event: asyncio.Event | None = None,
+        user_input_provider: Callable[[], list[str]] | None = None,
     ) -> None:
         self.task_id = task_id
         self.model = model
@@ -31,6 +32,16 @@ class Agent:
         self.token_threshold_ratio = token_threshold_ratio
         self.current_token_count = 0  # 当前历史的估算 token 数
         self.cancel_event = cancel_event  # 取消信号
+        self.user_input_provider = user_input_provider  # 实时消息干预：取出排队的用户输入
+
+    async def _inject_pending_user_input(self) -> None:
+        """将排队中的用户输入作为补充上下文注入对话历史。"""
+        if not self.user_input_provider:
+            return
+        for content in self.user_input_provider():
+            await self.append_chat_history(
+                {"role": "user", "content": f"[用户插入的补充信息]: {content}"}
+            )
 
     def _estimate_tokens(self, text: str) -> int:
         """估算文本的 token 数量。"""
@@ -51,6 +62,8 @@ class Agent:
         Returns:
             模型响应对象。
         """
+        await self._inject_pending_user_input()
+
         if not self.cancel_event:
             return await self.model.chat(**kwargs)
 

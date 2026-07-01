@@ -1,14 +1,21 @@
 """工作流模块，编排多 Agent 协作完成数学建模任务。"""
 
 import asyncio
+import datetime
 import json
 import os
+import nbformat
 from app.core.agents import WriterAgent, CoderAgent, CoordinatorAgent, ModelerAgent
+from app.core.checkpoint import CheckpointManager, TaskCheckpoint
+from app.schemas.A2A import ModelerToCoder, WriterResponse
+from app.schemas.enums import CompTemplate, FormatOutPut
 from app.schemas.request import Problem
 from app.schemas.response import SystemMessage
+from app.services import user_input_queue
+from app.tools.base_interpreter import BaseCodeInterpreter
 from app.tools.openalex_scholar import OpenAlexScholar
 from app.utils.log_util import logger
-from app.utils.common_utils import create_work_dir, get_config_template
+from app.utils.common_utils import create_work_dir, get_config_template, get_work_dir
 from app.models.user_output import UserOutput
 from app.config.setting import settings
 from app.tools.interpreter_factory import create_interpreter
@@ -51,62 +58,26 @@ class MathModelWorkFlow(WorkFlow):
             )
             raise asyncio.CancelledError("任务被用户停止")
 
-    async def execute(self, problem: Problem):  # type: ignore[reportIncompatibleMethodOverride]
-        """执行数学建模工作流。
+    async def _build_agents(
+        self,
+        coder_llm,
+        writer_llm,
+        comp_template: CompTemplate,
+        format_output: FormatOutPut,
+        user_input_provider,
+    ) -> tuple[NotebookSerializer, BaseCodeInterpreter, CoderAgent, WriterAgent]:
+        """构建代码手/写作手 Agent 及其依赖的沙盒环境（execute 与 resume 共享）。
 
         Args:
-            problem: 包含题目信息、模板配置等的 Problem 对象。
+            coder_llm: 代码手使用的 LLM 实例。
+            writer_llm: 写作手使用的 LLM 实例。
+            comp_template: 竞赛模板类型。
+            format_output: 输出格式。
+            user_input_provider: 实时消息干预的输入提供函数。
+
+        Returns:
+            (notebook_serializer, code_interpreter, coder_agent, writer_agent) 元组。
         """
-        self.task_id = problem.task_id
-        self.work_dir = create_work_dir(self.task_id)
-
-        llm_factory = LLMFactory(self.task_id)
-        coordinator_llm, modeler_llm, coder_llm, writer_llm = llm_factory.get_all_llms()
-
-        coordinator_agent = CoordinatorAgent(
-            self.task_id, coordinator_llm,
-            context_window=settings.COORDINATOR_CONTEXT_WINDOW,
-            cancel_event=self.cancel_event,
-        )
-
-        await redis_manager.publish_message(
-            self.task_id,
-            SystemMessage(content="识别用户意图和拆解问题ing..."),
-        )
-
-        await self._check_cancelled()
-
-        try:
-            coordinator_response = await coordinator_agent.run(problem.ques_all)
-            self.questions = coordinator_response.questions
-            self.ques_count = coordinator_response.ques_count
-        except Exception as e:
-            #  非数学建模问题
-            logger.error(f"CoordinatorAgent 执行失败: {e}")
-            raise e
-
-        await redis_manager.publish_message(
-            self.task_id,
-            SystemMessage(content="识别用户意图和拆解问题完成,任务转交给建模手"),
-        )
-
-        await redis_manager.publish_message(
-            self.task_id,
-            SystemMessage(content="建模手开始建模ing..."),
-        )
-
-        await self._check_cancelled()
-
-        modeler_agent = ModelerAgent(
-            self.task_id, modeler_llm,
-            context_window=settings.MODELER_CONTEXT_WINDOW,
-            cancel_event=self.cancel_event,
-        )
-
-        modeler_response = await modeler_agent.run(coordinator_response)
-
-        user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
-
         await redis_manager.publish_message(
             self.task_id,
             SystemMessage(content="正在创建代码沙盒环境"),
@@ -120,7 +91,7 @@ class MathModelWorkFlow(WorkFlow):
             notebook_serializer=notebook_serializer,
             timeout=3000,
         )
-        
+
         assert settings.OPENALEX_EMAIL is not None, "OPENALEX_EMAIL 未配置"
         scholar = OpenAlexScholar(
             task_id=self.task_id,
@@ -138,9 +109,8 @@ class MathModelWorkFlow(WorkFlow):
             SystemMessage(content="初始化代码手"),
         )
 
-        # modeler_agent
         coder_agent = CoderAgent(
-            task_id=problem.task_id,
+            task_id=self.task_id,
             model=coder_llm,
             work_dir=self.work_dir,
             max_chat_turns=settings.MAX_CHAT_TURNS,
@@ -148,26 +118,88 @@ class MathModelWorkFlow(WorkFlow):
             code_interpreter=code_interpreter,
             context_window=settings.CODER_CONTEXT_WINDOW,
             cancel_event=self.cancel_event,
+            user_input_provider=user_input_provider,
         )
 
         writer_agent = WriterAgent(
-            task_id=problem.task_id,
+            task_id=self.task_id,
             model=writer_llm,
-            comp_template=problem.comp_template,
-            format_output=problem.format_output,
+            comp_template=comp_template,
+            format_output=format_output,
             scholar=scholar,
             context_window=settings.WRITER_CONTEXT_WINDOW,
             cancel_event=self.cancel_event,
+            user_input_provider=user_input_provider,
         )
 
-        flows = Flows(self.questions)
+        return notebook_serializer, code_interpreter, coder_agent, writer_agent
 
-        ################################################ solution steps
+    async def _replay_notebook(self, code_interpreter: BaseCodeInterpreter) -> None:
+        """重放 notebook.ipynb 中已成功执行的代码单元格，重建内核变量状态（仅续传时调用）。
+
+        跳过包含 error 输出的单元格（对应失败/反思重试留下的痕迹），只重放成功的单元格。
+
+        Args:
+            code_interpreter: 新建的代码解释器实例。
+        """
+        notebook_path = os.path.join(self.work_dir, "notebook.ipynb")
+        if not os.path.exists(notebook_path):
+            logger.info("未找到 notebook.ipynb，跳过内核状态重放")
+            return
+
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(content="正在重放已执行的代码单元格，重建计算环境..."),
+        )
+
+        nb = nbformat.read(notebook_path, as_version=4)
+        cells_to_replay = [
+            cell for cell in nb.get("cells", [])
+            if cell.get("cell_type") == "code"
+            and not any(o.get("output_type") == "error" for o in (cell.get("outputs") or []))
+            and (cell.get("source") or "").strip()
+        ]
+        total = len(cells_to_replay)
+        replayed = 0
+        for cell in cells_to_replay:
+            await code_interpreter.execute_code(cell["source"])
+            replayed += 1
+            if replayed % 10 == 0 or replayed == total:
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(content=f"重建计算环境: {replayed}/{total} 个单元格"),
+                )
+
+        logger.info(f"内核状态重放完成，共重放 {replayed} 个代码单元格")
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(content=f"计算环境重建完成，共重放 {replayed} 个代码单元格"),
+        )
+
+    async def _run_solution_flows(
+        self,
+        flows: Flows,
+        modeler_response: ModelerToCoder,
+        coder_agent: CoderAgent,
+        writer_agent: WriterAgent,
+        code_interpreter: BaseCodeInterpreter,
+        user_output: UserOutput,
+        checkpoint_manager: CheckpointManager,
+        config_template: dict,
+    ) -> None:
+        """执行 solution_flows 循环（代码手求解 + 写作手撰写），已完成的阶段直接跳过。"""
         solution_flows = flows.get_solution_flows(self.questions, modeler_response)
-        config_template = get_config_template(problem.comp_template)
 
         for key, value in solution_flows.items():
             await self._check_cancelled()
+
+            phase = checkpoint_manager.get_phase(key)
+            if phase is not None:
+                logger.info(f"跳过已完成阶段: {key}")
+                user_output.set_res(
+                    key, WriterResponse.model_validate(phase.writer_response)
+                )
+                continue
 
             await redis_manager.publish_message(
                 self.task_id,
@@ -205,19 +237,31 @@ class MathModelWorkFlow(WorkFlow):
             )
 
             user_output.set_res(key, writer_response)
+            checkpoint_manager.mark_phase_completed(
+                key, coder_response.model_dump(), writer_response.model_dump()
+            )
 
-        # 关闭沙盒
-
-        await code_interpreter.cleanup()
-        logger.info(user_output.get_res())
-
-        ################################################ write steps
-
-        write_flows = flows.get_write_flows(
-            user_output, config_template, problem.ques_all
-        )
+    async def _run_write_flows(
+        self,
+        flows: Flows,
+        writer_agent: WriterAgent,
+        user_output: UserOutput,
+        checkpoint_manager: CheckpointManager,
+        config_template: dict,
+        ques_all: str,
+    ) -> None:
+        """执行 write_flows 循环（写作手独立撰写各章节），已完成的阶段直接跳过。"""
+        write_flows = flows.get_write_flows(user_output, config_template, ques_all)
         for key, value in write_flows.items():
             await self._check_cancelled()
+
+            phase = checkpoint_manager.get_phase(key)
+            if phase is not None:
+                logger.info(f"跳过已完成阶段: {key}")
+                user_output.set_res(
+                    key, WriterResponse.model_validate(phase.writer_response)
+                )
+                continue
 
             await redis_manager.publish_message(
                 self.task_id,
@@ -227,7 +271,12 @@ class MathModelWorkFlow(WorkFlow):
             writer_response = await writer_agent.run(prompt=value, sub_title=key)
 
             user_output.set_res(key, writer_response)
+            checkpoint_manager.mark_phase_completed(
+                key, None, writer_response.model_dump()
+            )
 
+    async def _export_results(self, user_output: UserOutput) -> None:
+        """保存结果并导出 PDF/LaTeX/候选清单（execute 与 resume 共享）。"""
         logger.info(user_output.get_res())
 
         user_output.save_result()
@@ -316,3 +365,202 @@ class MathModelWorkFlow(WorkFlow):
                 self.task_id,
                 SystemMessage(content=f"candidate_manifest.json 生成失败: {e}", type="error"),
             )
+
+    async def execute(self, problem: Problem):  # type: ignore[reportIncompatibleMethodOverride]
+        """执行数学建模工作流。
+
+        Args:
+            problem: 包含题目信息、模板配置等的 Problem 对象。
+        """
+        self.task_id = problem.task_id
+        self.work_dir = create_work_dir(self.task_id)
+
+        llm_factory = LLMFactory(self.task_id)
+        coordinator_llm, modeler_llm, coder_llm, writer_llm = llm_factory.get_all_llms()
+
+        # 实时消息干预：取出排队中的用户输入，注入下一次 LLM 调用
+        user_input_provider = lambda: user_input_queue.pop_all(self.task_id)  # noqa: E731
+
+        coordinator_agent = CoordinatorAgent(
+            self.task_id, coordinator_llm,
+            context_window=settings.COORDINATOR_CONTEXT_WINDOW,
+            cancel_event=self.cancel_event,
+            user_input_provider=user_input_provider,
+        )
+
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(content="识别用户意图和拆解问题ing..."),
+        )
+
+        await self._check_cancelled()
+
+        try:
+            coordinator_response = await coordinator_agent.run(problem.ques_all)
+            self.questions = coordinator_response.questions
+            self.ques_count = coordinator_response.ques_count
+        except Exception as e:
+            #  非数学建模问题
+            logger.error(f"CoordinatorAgent 执行失败: {e}")
+            raise e
+
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(content="识别用户意图和拆解问题完成,任务转交给建模手"),
+        )
+
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(content="建模手开始建模ing..."),
+        )
+
+        await self._check_cancelled()
+
+        modeler_agent = ModelerAgent(
+            self.task_id, modeler_llm,
+            context_window=settings.MODELER_CONTEXT_WINDOW,
+            cancel_event=self.cancel_event,
+            user_input_provider=user_input_provider,
+        )
+
+        modeler_response = await modeler_agent.run(coordinator_response)
+
+        # 断点续传：协调者和建模手完成后立刻落盘一次检查点，
+        # 后续每个 solution/write 阶段完成后再增量更新
+        checkpoint_manager = CheckpointManager(self.work_dir)
+        checkpoint_manager.save(
+            TaskCheckpoint(
+                task_id=self.task_id,
+                ques_all=problem.ques_all,
+                comp_template=problem.comp_template.value,
+                format_output=problem.format_output.value,
+                questions=self.questions,
+                ques_count=self.ques_count,
+                modeler_response=modeler_response.model_dump(),
+                updated_at=datetime.datetime.now().isoformat(),
+            )
+        )
+
+        user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
+
+        notebook_serializer, code_interpreter, coder_agent, writer_agent = (
+            await self._build_agents(
+                coder_llm,
+                writer_llm,
+                problem.comp_template,
+                problem.format_output,
+                user_input_provider,
+            )
+        )
+
+        flows = Flows(self.questions)
+        config_template = get_config_template(problem.comp_template)
+
+        ################################################ solution steps
+        await self._run_solution_flows(
+            flows,
+            modeler_response,
+            coder_agent,
+            writer_agent,
+            code_interpreter,
+            user_output,
+            checkpoint_manager,
+            config_template,
+        )
+
+        # 关闭沙盒
+        await code_interpreter.cleanup()
+
+        ################################################ write steps
+        await self._run_write_flows(
+            flows,
+            writer_agent,
+            user_output,
+            checkpoint_manager,
+            config_template,
+            problem.ques_all,
+        )
+
+        await self._export_results(user_output)
+
+    async def resume(self, task_id: str) -> None:
+        """从检查点恢复并继续执行数学建模工作流。
+
+        跳过协调者/建模手，跳过 checkpoint 中已完成的阶段，并通过重放
+        notebook.ipynb 中已成功执行的代码单元格重建 Jupyter 内核变量状态。
+
+        Args:
+            task_id: 待续传的任务 ID。
+
+        Raises:
+            FileNotFoundError: 任务目录或检查点不存在时抛出。
+        """
+        self.task_id = task_id
+        self.work_dir = get_work_dir(task_id)
+
+        checkpoint_manager = CheckpointManager(self.work_dir)
+        checkpoint = checkpoint_manager.load()
+        if checkpoint is None:
+            raise FileNotFoundError(f"未找到可续传的检查点: {task_id}")
+
+        self.questions = checkpoint.questions
+        self.ques_count = checkpoint.ques_count
+        comp_template = CompTemplate(checkpoint.comp_template)
+        format_output = FormatOutPut(checkpoint.format_output)
+        modeler_response = ModelerToCoder.model_validate(checkpoint.modeler_response)
+
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(content="正在从检查点续传任务，跳过已完成阶段..."),
+        )
+
+        llm_factory = LLMFactory(self.task_id)
+        # 续传时不重新调用协调者/建模手，只需要代码手和写作手的 LLM
+        _coordinator_llm, _modeler_llm, coder_llm, writer_llm = llm_factory.get_all_llms()
+
+        user_input_provider = lambda: user_input_queue.pop_all(self.task_id)  # noqa: E731
+
+        user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
+
+        notebook_serializer, code_interpreter, coder_agent, writer_agent = (
+            await self._build_agents(
+                coder_llm,
+                writer_llm,
+                comp_template,
+                format_output,
+                user_input_provider,
+            )
+        )
+
+        # 重建 Jupyter 内核变量状态
+        await self._replay_notebook(code_interpreter)
+
+        flows = Flows(self.questions)
+        config_template = get_config_template(comp_template)
+
+        ################################################ solution steps
+        await self._run_solution_flows(
+            flows,
+            modeler_response,
+            coder_agent,
+            writer_agent,
+            code_interpreter,
+            user_output,
+            checkpoint_manager,
+            config_template,
+        )
+
+        # 关闭沙盒
+        await code_interpreter.cleanup()
+
+        ################################################ write steps
+        await self._run_write_flows(
+            flows,
+            writer_agent,
+            user_output,
+            checkpoint_manager,
+            config_template,
+            checkpoint.ques_all,
+        )
+
+        await self._export_results(user_output)

@@ -1,16 +1,19 @@
 """建模任务路由模块，提供任务创建、API 验证和配置管理等接口。"""
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, UploadFile
+from app.core.checkpoint import CheckpointManager
 from app.core.workflow import MathModelWorkFlow
 from app.schemas.enums import CompTemplate, FormatOutPut
 from app.utils.log_util import logger
 from app.services.redis_manager import redis_manager
+from app.services import user_input_queue
 from app.schemas.request import Problem
 from app.schemas.response import SystemMessage
 from app.utils.common_utils import (
     create_task_id,
     create_work_dir,
     get_current_files,
+    get_work_dir,
     md_2_docx,
 )
 import os
@@ -354,6 +357,7 @@ async def run_modeling_task_async(
     finally:
         # 从注册表中清理
         _active_tasks.pop(task_id, None)
+        user_input_queue.clear(task_id)
         # 仅在正常完成时转换 md 为 docx
         if task_completed:
             md_2_docx(task_id)
@@ -381,3 +385,85 @@ async def cancel_task(task_id: str):
         success=True,
         message="停止指令已发送",
     )
+
+
+class ResumeTaskResponse(BaseModel):
+    task_id: str
+    status: str
+
+
+@router.post("/modeling/{task_id}/resume", response_model=ResumeTaskResponse)
+async def resume_task(task_id: str, background_tasks: BackgroundTasks):
+    """从检查点续传一个中断的建模任务。"""
+    try:
+        work_dir = get_work_dir(task_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    checkpoint = CheckpointManager(work_dir).load()
+    if checkpoint is None:
+        raise HTTPException(status_code=404, detail="未找到可续传的检查点")
+
+    if task_id in _active_tasks:
+        raise HTTPException(status_code=409, detail="任务仍在运行中")
+
+    # 存储任务ID，续期供 ws 鉴权使用
+    await redis_manager.set(f"task_id:{task_id}", task_id)
+
+    logger.info(f"Adding resume background task for task_id: {task_id}")
+    background_tasks.add_task(run_resume_task_async, task_id)
+    return ResumeTaskResponse(task_id=task_id, status="resuming")
+
+
+async def run_resume_task_async(task_id: str):
+    """异步执行任务续传。
+
+    Args:
+        task_id: 待续传的任务 ID。
+    """
+    logger.info(f"resume modeling task for task_id: {task_id}")
+
+    # 创建取消信号
+    cancel_event = asyncio.Event()
+
+    await redis_manager.publish_message(
+        task_id,
+        SystemMessage(content="任务续传中..."),
+    )
+
+    # 给一个短暂的延迟，确保 WebSocket 有机会连接
+    await asyncio.sleep(1)
+
+    workflow = MathModelWorkFlow()
+    workflow.cancel_event = cancel_event
+
+    task = asyncio.create_task(workflow.resume(task_id))
+    _active_tasks[task_id] = (task, cancel_event)
+
+    task_completed = False
+    try:
+        # 设置超时时间（5 小时）
+        await asyncio.wait_for(task, timeout=3600 * 5)
+        task_completed = True
+
+        await redis_manager.publish_message(
+            task_id,
+            SystemMessage(content="任务处理完成", type="success"),
+        )
+    except asyncio.CancelledError:
+        logger.info(f"任务 {task_id} 被取消")
+        await redis_manager.publish_message(
+            task_id,
+            SystemMessage(content="任务已停止", type="warning"),
+        )
+    except Exception as e:
+        logger.error(f"任务 {task_id} 续传失败: {e}")
+        await redis_manager.publish_message(
+            task_id,
+            SystemMessage(content=f"任务续传失败: {str(e)}", type="error"),
+        )
+    finally:
+        _active_tasks.pop(task_id, None)
+        user_input_queue.clear(task_id)
+        if task_completed:
+            md_2_docx(task_id)

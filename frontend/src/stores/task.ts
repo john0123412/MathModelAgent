@@ -226,6 +226,12 @@ export const useTaskStore = defineStore("task", () => {
 		} as UserMessage);
 	}
 
+	/** 发送用户消息，实时干预正在运行的任务：本地立即回显，并通过 WebSocket 发给后端 */
+	function sendUserMessage(content: string) {
+		addUserMessage(content);
+		ws?.send({ type: "user_input", content });
+	}
+
 	/** 下载消息为 JSON 文件 */
 	function downloadMessages() {
 		const dataStr = `data:text/json;charset=utf-8,${encodeURIComponent(JSON.stringify(messages.value, null, 2))}`;
@@ -357,5 +363,6 @@ export const useTaskStore = defineStore("task", () => {
 		stopTask,
 		downloadMessages,
 		addUserMessage,
+		sendUserMessage,
 	};
 });

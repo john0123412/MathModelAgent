@@ -1,4 +1,4 @@
-"""WebSocket 路由模块，提供实时任务消息推送。"""
+"""WebSocket 路由模块，提供实时任务消息推送与用户输入接收。"""
 
 import asyncio
 import json
@@ -7,6 +7,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
 from app.schemas.response import SystemMessage
+from app.services import user_input_queue
 from app.services.redis_manager import redis_manager
 from app.services.ws_manager import ws_manager
 from app.utils.common_utils import ensure_safe_task_id
@@ -57,7 +58,7 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
     pubsub = await redis_manager.subscribe_to_task(safe_task_id)
     logger.debug(f"Subscribed to Redis channel: task:{safe_task_id}:messages")
 
-    try:
+    async def _forward_loop():
         while True:
             if _is_websocket_closed(websocket):
                 logger.info(f"WebSocket 已关闭，停止转发 task_id: {safe_task_id}")
@@ -112,6 +113,42 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
                 logger.error(f"Error in websocket loop: {e}")
                 await asyncio.sleep(1)
                 continue
+
+    async def _receive_loop():
+        """接收前端发来的实时干预消息，推入按 task_id 隔离的用户输入队列。"""
+        while True:
+            if _is_websocket_closed(websocket):
+                break
+            try:
+                data = await websocket.receive_json()
+            except WebSocketDisconnect:
+                logger.info("WebSocket disconnected (receive loop)")
+                break
+            except Exception as e:
+                if _is_websocket_closed(websocket):
+                    break
+                logger.warning(f"WebSocket 接收消息解析失败 task_id: {safe_task_id}: {e}")
+                continue
+
+            if not isinstance(data, dict):
+                continue
+            content = data.get("content")
+            if data.get("type") == "user_input" and isinstance(content, str) and content.strip():
+                user_input_queue.push(safe_task_id, content)
+                logger.info(f"收到用户实时输入 task_id: {safe_task_id}")
+
+    try:
+        forward_task = asyncio.create_task(_forward_loop())
+        receive_task = asyncio.create_task(_receive_loop())
+        done, pending = await asyncio.wait(
+            {forward_task, receive_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+        for task in done:
+            exc = task.exception()
+            if exc:
+                logger.error(f"WebSocket 循环异常: {exc}")
 
     except Exception as e:
         logger.error(f"WebSocket error: {e}")

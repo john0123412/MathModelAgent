@@ -1,6 +1,7 @@
 """写作手 Agent 模块，负责基于建模结果撰写学术论文。"""
 
 import asyncio
+from typing import Callable
 from app.core.agents.agent import Agent
 from app.core.llm.llm import LLM
 from app.core.prompts import get_writer_prompt
@@ -31,8 +32,15 @@ class WriterAgent(Agent):
         scholar: OpenAlexScholar | None = None,
         context_window: int = 128000,
         cancel_event: asyncio.Event | None = None,
+        user_input_provider: Callable[[], list[str]] | None = None,
     ) -> None:
-        super().__init__(task_id, model, context_window, cancel_event=cancel_event)
+        super().__init__(
+            task_id,
+            model,
+            context_window,
+            cancel_event=cancel_event,
+            user_input_provider=user_input_provider,
+        )
         self.format_out_put = format_output
         self.comp_template = comp_template
         self.scholar = scholar

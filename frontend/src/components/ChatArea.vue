@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useTaskStore } from "@/stores/task";
 import type { Message } from "@/utils/response";
 import { Send } from "lucide-vue-next";
 import { ref } from "vue";
@@ -13,15 +14,18 @@ const props = defineProps<{ messages: Message[] }>();
 
 // ---- Reactive State ----
 
+const taskStore = useTaskStore();
 const inputValue = ref("");
 const inputRef = ref<HTMLInputElement | null>(null);
 const scrollRef = ref<HTMLDivElement | null>(null);
 
 // ---- Methods ----
 
-/** 发送消息（本地处理） */
+/** 发送消息：本地回显，并通过 WebSocket 实时干预正在运行的任务 */
 const sendMessage = () => {
-	if (!inputValue.value.trim()) return;
+	const content = inputValue.value.trim();
+	if (!content) return;
+	taskStore.sendUserMessage(content);
 	inputValue.value = "";
 	inputRef.value?.focus();
 };

@@ -3,9 +3,8 @@
 services:
   redis:
     image: redis:alpine
-    container_name: mathmodelagent_redis
-    ports:
-      - "6379:6379" # 将 Redis 容器的 6379 端口映射到主机的 6379 端口
+    # 不映射端口到宿主机——后端通过 compose 内部网络以服务名 redis 连接，
+    # 本地开发用宿主机的 redis-mma（端口 6379），两者互不冲突。
     volumes:
       - redis_data:/data # Redis 数据的持久化存储卷
 
@@ -20,7 +19,8 @@ services:
       - ./backend/.env.dev #从此文件加载环境变量
     environment:
       - ENV=DEV # 为后端显式设置 ENV
-      # .env.dev 文件中的 REDIS_URL 应为 redis://redis:6379/0
+      - REDIS_URL=redis://redis:6379/0 # 覆盖 .env.dev 中的 127.0.0.1，容器内用服务名连 Redis
+      - SERVER_HOST=http://localhost:8000 # 覆盖 .env.dev 中的 8003，docker-compose 场景下后端实际监听/映射在宿主机 8000
     volumes:
       - ./backend:/app # 挂载后端代码以实现热重载 (开发环境)
       - ./backend/project/work_dir:/app/project/work_dir # 持久化生成的文件
@@ -38,7 +38,7 @@ services:
     ports:
       - "5173:5173" # 将前端容器的 5173 端口 (Vite 默认) 映射到主机的 5173 端口
     env_file:
-      - ./frontend/.env.development # 加载前端的环境变量
+      - ./frontend/.env.docker # 加载前端的环境变量（docker-compose 场景下后端映射在宿主机 8000，与本地开发用的 .env.development(8003) 区分）
     volumes:
       - ./frontend:/app # 挂载前端代码以实现热重载 (开发环境)
       - /app/node_modules # 匿名卷，防止主机的 node_modules 覆盖容器内的

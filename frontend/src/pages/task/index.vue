@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { getWriterSeque } from "@/apis/commonApi";
+import { getWriterSeque, listTasks, resumeTask } from "@/apis/commonApi";
 import CoderEditor from "@/components/AgentEditor/CoderEditor.vue";
 import ModelerEditor from "@/components/AgentEditor/ModelerEditor.vue";
 import WriterEditor from "@/components/AgentEditor/WriterEditor.vue";
@@ -53,6 +53,12 @@ const runningDuration = ref<string>("0s");
 /** 是否正在请求停止 */
 const isStopping = ref(false);
 
+/** 任务是否处于可续传的中断状态 */
+const isInterrupted = ref(false);
+
+/** 是否正在请求续传 */
+const isResuming = ref(false);
+
 /** 更新运行时长 */
 const updateDuration = () => {
 	currentTime.value = Date.now();
@@ -66,6 +72,32 @@ async function handleStop() {
 	isStopping.value = false;
 }
 
+/** 检查当前任务是否处于中断状态，用于展示"继续任务"按钮 */
+async function checkInterruptedStatus() {
+	try {
+		const res = await listTasks();
+		const task = res.data.find((t) => t.task_id === props.task_id);
+		isInterrupted.value = task?.status === "interrupted";
+	} catch (error) {
+		console.error("获取任务状态失败:", error);
+	}
+}
+
+/** 处理继续任务：调用 resume 接口，成功后重新连接 WebSocket 并刷新状态 */
+async function handleResume() {
+	isResuming.value = true;
+	try {
+		await resumeTask(props.task_id);
+		isInterrupted.value = false;
+		await taskStore.loadTaskMessages(props.task_id);
+		taskStore.connectWebSocket(props.task_id);
+	} catch (error) {
+		console.error("续传任务失败:", error);
+	} finally {
+		isResuming.value = false;
+	}
+}
+
 // ---- Lifecycle Hooks ----
 
 onMounted(async () => {
@@ -73,6 +105,7 @@ onMounted(async () => {
 	taskStore.connectWebSocket(props.task_id);
 	const res = await getWriterSeque();
 	writerSequence.value = Array.isArray(res.data) ? res.data : [];
+	await checkInterruptedStatus();
 
 	// 开始计时
 	timer = setInterval(updateDuration, 1000);
@@ -138,6 +171,14 @@ onBeforeUnmount(() => {
               <!--  TODO: 其他选项 -->
 
               <div class="flex justify-end gap-2 items-center">
+                <Button
+                  v-if="isInterrupted"
+                  variant="default"
+                  :disabled="isResuming"
+                  @click="handleResume"
+                >
+                  {{ isResuming ? "续传中..." : "继续任务" }}
+                </Button>
                 <Button
                   v-if="taskStore.isRunning"
                   variant="destructive"

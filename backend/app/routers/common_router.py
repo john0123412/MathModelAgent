@@ -136,6 +136,7 @@ async def list_tasks():
             "candidate_manifest": os.path.exists(
                 os.path.join(task_path, "candidate_manifest.json")
             ),
+            "checkpoint": os.path.exists(os.path.join(task_path, "checkpoint.json")),
         }
 
         # 获取任务信息
@@ -147,6 +148,7 @@ async def list_tasks():
             "has_result": files_exist["res_md"] or files_exist["res_docx"],
             "has_pdf": files_exist["res_pdf"],
             "has_manifest": files_exist["candidate_manifest"],
+            "has_checkpoint": files_exist["checkpoint"],
             "files": files_exist,
         }
         if task_info["has_result"]:
@@ -180,15 +182,19 @@ async def list_tasks():
                         content = msg.get("content", "")
                         if msg.get("msg_type") != "system":
                             continue
-                        if "完成" in content:
+                        # 只检查最终完成消息，避免中间步骤的"完成"误判
+                        if content and "任务处理完成" in content:
                             task_info["status"] = "completed"
                         elif "失败" in content or "停止" in content:
                             if not task_info["has_result"]:
                                 task_info["status"] = "unknown"
 
-                    # 未完成且没有结果文件时，视为仍在运行
+                    # 未完成且没有结果文件时，视为仍在运行；若存在检查点，
+                    # 说明进程曾中断过，标记为可续传的 "interrupted"
                     if not task_info["has_result"] and task_info["status"] != "completed":
-                        task_info["status"] = "running"
+                        task_info["status"] = (
+                            "interrupted" if files_exist["checkpoint"] else "running"
+                        )
 
                     # 获取创建时间（第一条消息的时间）
                     task_info["created_at"] = messages[0].get("id", "")[:19]

@@ -68,21 +68,33 @@ export function cancelTask(task_id: string) {
 	);
 }
 
+/**
+ * 从检查点续传一个中断的任务
+ * @param task_id 任务ID
+ */
+export function resumeTask(task_id: string) {
+	return request.post<{ task_id: string; status: string }>(
+		`/modeling/${task_id}/resume`,
+	);
+}
+
 /** 任务信息 */
 export interface TaskInfo {
 	task_id: string;
 	title: string;
-	status: string;
+	status: "completed" | "running" | "interrupted" | "unknown";
 	created_at: string;
 	has_result: boolean;
 	has_pdf: boolean;
 	has_manifest: boolean;
+	has_checkpoint: boolean;
 	files: {
 		res_md: boolean;
 		res_json: boolean;
 		res_docx: boolean;
 		res_pdf: boolean;
 		candidate_manifest: boolean;
+		checkpoint: boolean;
 	};
 }
 

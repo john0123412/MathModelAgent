@@ -15,6 +15,7 @@ from app.tools.interpreter_factory import create_interpreter
 from app.services.redis_manager import redis_manager
 from app.tools.notebook_serializer import NotebookSerializer
 from app.tools.pdf_exporter import export_markdown_to_pdf
+from app.tools.tex_project_exporter import export_markdown_to_latex_project
 from app.tools.candidate_exporter import write_candidate_manifest
 from app.core.flows import Flows
 from app.core.llm.llm_factory import LLMFactory
@@ -272,6 +273,39 @@ class MathModelWorkFlow(WorkFlow):
                 json.dump({"pdf": pdf_result}, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"写入 export_status.json 失败: {e}")
+
+        ################################################ generate LaTeX sidecar project
+        try:
+            tex_result = export_markdown_to_latex_project(md_path, self.work_dir)
+            if tex_result["success"]:
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(content="LaTeX 项目（latex_project/）导出完成，可供进一步精修"),
+                )
+            elif tex_result["enabled"]:
+                logger.error(f"LaTeX sidecar 导出失败: {tex_result['reason']}")
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(
+                        content=f"LaTeX 项目导出失败: {tex_result['reason']}，其余结果不受影响",
+                        type="warning",
+                    ),
+                )
+            else:
+                logger.warning(f"LaTeX sidecar 导出跳过: {tex_result['reason']}")
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(
+                        content=f"已跳过 LaTeX 项目导出: {tex_result['reason']}，其余结果不受影响",
+                        type="warning",
+                    ),
+                )
+        except Exception as e:
+            logger.error(f"LaTeX sidecar 导出异常: {e}")
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content=f"LaTeX 项目导出异常: {e}，其余结果不受影响", type="warning"),
+            )
 
         ################################################ generate candidate manifest
         try:

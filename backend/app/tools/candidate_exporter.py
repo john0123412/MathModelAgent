@@ -86,11 +86,15 @@ def write_candidate_manifest(work_dir: str, task_id: str) -> str:
             "res_pdf": _existing_or_none(work_dir, "res.pdf"),
             "notebook": _existing_or_none(work_dir, "notebook.ipynb"),
             "export_status": _existing_or_none(work_dir, "export_status.json"),
+            "latex_main": _existing_or_none(work_dir, "latex_project/main.tex"),
+            "latex_project": _existing_or_none(work_dir, "latex_project"),
+            "tex_export_status": _existing_or_none(work_dir, "tex_export_status.json"),
             "figures": _scan_figures(work_dir),
         },
         "claims": [],
         "known_risks": [
             "External candidate output must be revalidated before final submission.",
+            "LaTeX project is a candidate sidecar export and must be verified before final submission.",
         ],
     }
 

@@ -53,6 +53,10 @@ pnpm run dev
 | Backend | 8003 |
 | Redis | 6379 |
 
+> 注意：`backend/Dockerfile` 内的容器端口仍为 8000（Docker 构建镜像时使用），
+> 与本地开发（win_start.bat / uvicorn 手动启动）使用的 8003 不是同一个口径。
+> 本地开发请以 8003 为准；如果通过 Dockerfile 构建镜像运行，请自行确认端口映射。
+
 ## 常见问题
 
 ### OPENALEX_EMAIL 未配置

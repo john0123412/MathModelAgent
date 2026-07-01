@@ -11,6 +11,15 @@ SOURCE_NAME = "MathModelAgent"
 # 图片扩展名（大小写不敏感）
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg")
 
+# 递归扫描图片时需要跳过的明显缓存/临时目录
+_EXCLUDED_DIR_NAMES = {
+    "__pycache__",
+    ".ipynb_checkpoints",
+    "node_modules",
+    ".git",
+    ".cache",
+}
+
 
 def _existing_or_none(work_dir: str, filename: str) -> str | None:
     """检查 work_dir 下文件是否存在，存在返回文件名，否则返回 None。
@@ -28,30 +37,35 @@ def _existing_or_none(work_dir: str, filename: str) -> str | None:
 
 
 def _scan_figures(work_dir: str) -> list[str]:
-    """扫描 work_dir 下的图片文件（png/jpg/jpeg）。
+    """递归扫描 work_dir 下的图片文件（png/jpg/jpeg），排除明显缓存目录。
 
     Args:
         work_dir: 工作目录路径。
 
     Returns:
-        图片文件名列表（按文件名排序，不含路径）。
+        图片文件相对路径列表（相对 work_dir，使用 "/" 分隔，按路径排序）。
     """
     if not os.path.isdir(work_dir):
         return []
-    figures = [
-        f
-        for f in os.listdir(work_dir)
-        if f.lower().endswith(_IMAGE_EXTS) and os.path.isfile(os.path.join(work_dir, f))
-    ]
+
+    figures = []
+    for root, dirs, files in os.walk(work_dir):
+        dirs[:] = [d for d in dirs if d not in _EXCLUDED_DIR_NAMES]
+        for f in files:
+            if f.lower().endswith(_IMAGE_EXTS):
+                rel_path = os.path.relpath(os.path.join(root, f), work_dir)
+                figures.append(rel_path.replace(os.sep, "/"))
     return sorted(figures)
 
 
 def write_candidate_manifest(work_dir: str, task_id: str) -> str:
     """生成候选方案导出协议文件 candidate_manifest.json。
 
-    扫描 work_dir 下已产出的文件（res.md/res.json/res.docx/res.pdf/notebook.ipynb/图片），
-    不存在的文件字段为 None，图片列表为空数组。claims 字段保持留空，
-    由下游验收仓库（math-modeling-skills）解析填充，本函数不伪造内容。
+    扫描 work_dir 下已产出的文件（res.md/res.json/res.docx/res.pdf/notebook.ipynb/
+    export_status.json/图片），不存在的文件字段为 None，图片列表为空数组。
+    claims 字段保持留空 —— 本文件只是外部候选草稿的清单，最终 claims（可验证结论）
+    由下游验收仓库（math-modeling-skills）解析 res.md/notebook 等产物后生成和校验，
+    本函数不伪造内容。
 
     Args:
         work_dir: 任务工作目录路径。
@@ -71,6 +85,7 @@ def write_candidate_manifest(work_dir: str, task_id: str) -> str:
             "res_docx": _existing_or_none(work_dir, "res.docx"),
             "res_pdf": _existing_or_none(work_dir, "res.pdf"),
             "notebook": _existing_or_none(work_dir, "notebook.ipynb"),
+            "export_status": _existing_or_none(work_dir, "export_status.json"),
             "figures": _scan_figures(work_dir),
         },
         "claims": [],

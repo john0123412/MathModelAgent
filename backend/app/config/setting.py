@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://redis:6379/0"
     REDIS_MAX_CONNECTIONS: int = 10
     CORS_ALLOW_ORIGINS: Annotated[list[str] | str, BeforeValidator(parse_cors)] = "*"
-    SERVER_HOST: str = "http://localhost:8000"
+    SERVER_HOST: str = "http://localhost:8003"
     DEEPSEEK_MODEL: Optional[str] = None
     DEEPSEEK_BASE_URL: Optional[str] = None
     OPENALEX_EMAIL: Optional[str] = None

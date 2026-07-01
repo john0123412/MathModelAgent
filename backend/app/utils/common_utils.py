@@ -203,7 +203,6 @@ def md_2_docx(task_id: str):
     extra_args = [
         "--resource-path",
         str(work_dir),
-        "--mathml",  # MathML 格式公式
         "--standalone",
     ]
 

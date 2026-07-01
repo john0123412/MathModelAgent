@@ -83,9 +83,9 @@ class UserOutput:
         Returns:
             替换引用为 UUID 后的文本。
         """
-        # 匹配引用内容，格式为 {[^数字]: 引用内容}
-        # 修改正则表达式，匹配大括号包裹的引用格式
-        references = re.findall(r"\{\[\^(\d+)\]:\s*(.*?)\}", text, re.DOTALL)
+        # 匹配引用内容，格式为 {[^数字]: 引用内容} 或 {[^数字] 引用内容}
+        # 修改正则表达式，匹配大括号包裹的引用格式（冒号可选）
+        references = re.findall(r"\{\[\^(\d+)\][:\s]+(.*?)\}", text, re.DOTALL)
 
         for ref_num, ref_content in references:
             # 清理引用内容，去除末尾的空格和点号
@@ -150,7 +150,7 @@ class UserOutput:
         return sort_res
 
     def append_footnotes_to_text(self, text: str) -> str:
-        """在文本末尾追加参考文献列表。
+        """在文本末尾追加参考文献列表（GB/T 7714-2015 格式）。
 
         Args:
             text: 论文正文。
@@ -158,11 +158,15 @@ class UserOutput:
         Returns:
             附带参考文献的完整文本。
         """
-        text += "\n\n ## 参考文献"
+        text += "\n\n## 参考文献\n"
         # 将脚注转换为列表并按 number 排序
         sorted_footnotes = sorted(self.footnotes.items(), key=lambda x: x[1]["number"])
         for _, footnote in sorted_footnotes:
-            text += f"\n\n[^{footnote['number']}]: {footnote['content']}"
+            content = footnote["content"]
+            # 确保引用格式以句号结尾
+            if content and not content.rstrip().endswith("."):
+                content = content.rstrip() + "."
+            text += f"\n[{footnote['number']}] {content}"
         return text
 
     def get_result_to_save(self) -> str:

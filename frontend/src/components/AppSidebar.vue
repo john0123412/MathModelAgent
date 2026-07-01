@@ -8,6 +8,9 @@ import {
 	XHS,
 } from "@/utils/const";
 import NavUser from "./NavUser.vue";
+import { listTasks, type TaskInfo } from "@/apis/commonApi";
+import { ref, onMounted } from "vue";
+import { useRouter } from "vue-router";
 
 import {
 	Sidebar,
@@ -27,11 +30,16 @@ import {
 // ---- Props ----
 
 const props = defineProps<SidebarProps>();
+const router = useRouter();
 
 // ---- Reactive State ----
 
+const historyTasks = ref<TaskInfo[]>([]);
+const historyLoading = ref(false);
+const historyError = ref(false);
+
 /** 导航菜单数据 */
-const data = {
+const data = ref({
 	navMain: [
 		{
 			title: "开始",
@@ -47,10 +55,48 @@ const data = {
 		{
 			title: "历史任务",
 			url: "#",
-			items: [],
+			items: [] as { title: string; url: string; isActive: boolean; taskId: string }[],
 		},
 	],
+});
+
+/** 加载历史任务 */
+const loadHistory = async () => {
+	historyLoading.value = true;
+	historyError.value = false;
+	try {
+		const response = await listTasks();
+		const tasks = response.data || [];
+		historyTasks.value = tasks;
+		data.value.navMain[1].items = tasks.map((t) => ({
+			title: t.title.substring(0, 40) + (t.title.length > 40 ? "..." : ""),
+			url: "#",
+			isActive: false,
+			taskId: t.task_id,
+		}));
+	} catch (e) {
+		console.error("加载历史任务失败:", e);
+		historyError.value = true;
+		historyTasks.value = [];
+		data.value.navMain[1].items = [];
+	} finally {
+		historyLoading.value = false;
+	}
 };
+
+/** 点击历史任务 */
+const clickHistoryItem = (taskId: string) => {
+	router.push(`/task/${taskId}`);
+};
+
+/** 点击新任务 */
+const clickNewTask = () => {
+	router.push("/");
+};
+
+onMounted(() => {
+	loadHistory();
+});
 
 const socialMedia = [
 	{
@@ -102,9 +148,21 @@ const socialMedia = [
         <SidebarGroupLabel>{{ item.title }}</SidebarGroupLabel>
         <SidebarGroupContent>
           <SidebarMenu>
-            <SidebarMenuItem v-for="childItem in item.items" :key="childItem.title">
+            <template v-if="item.title === '历史任务'">
+              <div v-if="historyLoading" class="px-2 py-1.5 text-xs text-muted-foreground">
+                加载中...
+              </div>
+              <div v-else-if="historyError" class="px-2 py-1.5 text-xs text-destructive">
+                历史任务加载失败，<a href="#" class="underline" @click.prevent="loadHistory">重试</a>
+              </div>
+              <div v-else-if="item.items.length === 0" class="px-2 py-1.5 text-xs text-muted-foreground">
+                暂无历史任务
+              </div>
+            </template>
+            <SidebarMenuItem v-for="(childItem, index) in item.items" :key="childItem.title + index">
               <SidebarMenuButton as-child :is-active="childItem.isActive">
-                <a :href="childItem.url">{{ childItem.title }}</a>
+                <a v-if="item.title === '开始'" href="#" @click.prevent="clickNewTask">{{ childItem.title }}</a>
+                <a v-else href="#" @click.prevent="clickHistoryItem((childItem as any).taskId)" :title="(childItem as any).taskId">{{ childItem.title }}</a>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>

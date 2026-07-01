@@ -67,3 +67,26 @@ export function cancelTask(task_id: string) {
 		`/modeling/${task_id}/cancel`,
 	);
 }
+
+/** 任务信息 */
+export interface TaskInfo {
+	task_id: string;
+	title: string;
+	status: string;
+	created_at: string;
+	has_result: boolean;
+	has_pdf: boolean;
+	has_manifest: boolean;
+	files: {
+		res_md: boolean;
+		res_json: boolean;
+		res_docx: boolean;
+		res_pdf: boolean;
+		candidate_manifest: boolean;
+	};
+}
+
+/** 获取所有历史任务列表 */
+export function listTasks() {
+	return request.get<TaskInfo[]>("/tasks");
+}

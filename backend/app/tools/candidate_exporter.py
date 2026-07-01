@@ -1,0 +1,91 @@
+"""候选方案导出协议模块，生成可被 math-modeling-skills 导入的 candidate_manifest.json。"""
+
+import os
+import json
+import datetime
+from app.utils.log_util import logger
+
+SCHEMA_VERSION = "1.0"
+SOURCE_NAME = "MathModelAgent"
+
+# 图片扩展名（大小写不敏感）
+_IMAGE_EXTS = (".png", ".jpg", ".jpeg")
+
+
+def _existing_or_none(work_dir: str, filename: str) -> str | None:
+    """检查 work_dir 下文件是否存在，存在返回文件名，否则返回 None。
+
+    Args:
+        work_dir: 工作目录路径。
+        filename: 待检查的文件名（相对 work_dir）。
+
+    Returns:
+        文件存在时返回 filename，否则返回 None。
+    """
+    if os.path.exists(os.path.join(work_dir, filename)):
+        return filename
+    return None
+
+
+def _scan_figures(work_dir: str) -> list[str]:
+    """扫描 work_dir 下的图片文件（png/jpg/jpeg）。
+
+    Args:
+        work_dir: 工作目录路径。
+
+    Returns:
+        图片文件名列表（按文件名排序，不含路径）。
+    """
+    if not os.path.isdir(work_dir):
+        return []
+    figures = [
+        f
+        for f in os.listdir(work_dir)
+        if f.lower().endswith(_IMAGE_EXTS) and os.path.isfile(os.path.join(work_dir, f))
+    ]
+    return sorted(figures)
+
+
+def write_candidate_manifest(work_dir: str, task_id: str) -> str:
+    """生成候选方案导出协议文件 candidate_manifest.json。
+
+    扫描 work_dir 下已产出的文件（res.md/res.json/res.docx/res.pdf/notebook.ipynb/图片），
+    不存在的文件字段为 None，图片列表为空数组。claims 字段保持留空，
+    由下游验收仓库（math-modeling-skills）解析填充，本函数不伪造内容。
+
+    Args:
+        work_dir: 任务工作目录路径。
+        task_id: 任务 ID。
+
+    Returns:
+        生成的 candidate_manifest.json 文件的绝对/相对路径（与传入 work_dir 一致的路径风格）。
+    """
+    manifest = {
+        "schema_version": SCHEMA_VERSION,
+        "source": SOURCE_NAME,
+        "task_id": task_id,
+        "generated_at": datetime.datetime.now().isoformat(),
+        "files": {
+            "res_md": _existing_or_none(work_dir, "res.md"),
+            "res_json": _existing_or_none(work_dir, "res.json"),
+            "res_docx": _existing_or_none(work_dir, "res.docx"),
+            "res_pdf": _existing_or_none(work_dir, "res.pdf"),
+            "notebook": _existing_or_none(work_dir, "notebook.ipynb"),
+            "figures": _scan_figures(work_dir),
+        },
+        "claims": [],
+        "known_risks": [
+            "External candidate output must be revalidated before final submission.",
+        ],
+    }
+
+    manifest_path = os.path.join(work_dir, "candidate_manifest.json")
+    try:
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+        logger.info(f"candidate_manifest.json 生成成功: {manifest_path}")
+    except Exception as e:
+        logger.error(f"candidate_manifest.json 生成失败: {e}")
+        raise
+
+    return manifest_path

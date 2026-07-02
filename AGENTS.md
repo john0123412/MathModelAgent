@@ -35,9 +35,9 @@
 后端验证优先使用以下方式：
 
 ```powershell
-cd D:\workspace\MathModelAgent
-backend\.venv\Scripts\python.exe -m unittest app.tests.test_security_utils app.tests.test_variable_snapshot_resume app.tests.test_message_history app.tests.test_user_output_and_tasks
-backend\.venv\Scripts\python.exe -m ruff check app
+cd D:\workspace\MathModelAgent\backend
+.venv\Scripts\python.exe -m unittest app.tests.test_scholar_search app.tests.test_security_utils app.tests.test_variable_snapshot_resume app.tests.test_message_history app.tests.test_user_output_and_tasks
+.venv\Scripts\python.exe -m ruff check app
 ```
 
 Docker 验证优先使用以下方式：
@@ -48,7 +48,7 @@ docker compose up --build -d
 docker compose ps
 curl.exe http://127.0.0.1:8000/docs
 curl.exe http://127.0.0.1:5173/
-docker compose exec backend uv run python -m unittest app.tests.test_security_utils app.tests.test_variable_snapshot_resume app.tests.test_message_history app.tests.test_user_output_and_tasks
+docker compose exec backend uv run python -m unittest app.tests.test_scholar_search app.tests.test_security_utils app.tests.test_variable_snapshot_resume app.tests.test_message_history app.tests.test_user_output_and_tasks
 docker compose exec backend uv run python -m ruff check app
 ```
 
@@ -79,6 +79,14 @@ B 需要 1 小时机器时间、2 小时人工时间，利润 30 元；
 - 续传相关任务存在 `checkpoint.json`、`variable_snapshot.pkl`、`variable_snapshot_meta.json`。
 - 后端日志出现变量快照恢复或增量重放相关信息，例如 `变量快照已恢复`、`快照后增量重放`。
 - Docker 镜像未安装 `pandoc` 时，PDF/LaTeX sidecar 可能被跳过；只要 Markdown/Word/JSON 成功且任务状态为 `completed`，不视为主流程失败。
+
+## 文献搜索与 Tavily
+
+- Writer 的 `search_papers` 工具现在是多源聚合：OpenAlex、Semantic Scholar、Crossref、arXiv，外加可选 Tavily。
+- `OPENALEX_EMAIL` 未配置时只跳过 OpenAlex，不禁用文献搜索。
+- Tavily 只在 `TAVILY_API_KEY` 存在且 `SEARCH_ENABLED=true` 时启用，用于网页、官方报告和数据来源补充，不替代学术数据库。
+- 需要用本机系统环境变量测试 Tavily 时，只检查变量是否存在，不打印 key 原文；测试输出只展示结果标题、来源和类型。
+- 若工具指定 `source_types=["web"]`，只请求 Tavily，避免额外触发学术源限流。
 
 ## 资源限制
 

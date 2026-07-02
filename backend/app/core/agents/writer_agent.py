@@ -107,51 +107,60 @@ class WriterAgent(Agent):
 
         if response.tool_calls:
             logger.info("检测到工具调用")
-            tool_call = response.tool_calls[0]
-            tool_id = tool_call.id
-            if tool_call.name == "search_papers":
+            # 更新对话历史 - 添加助手的工具调用响应。必须先记录完整工具调用，
+            # 再逐一追加 tool 结果，避免多工具调用时上下文不一致。
+            assistant_msg: dict = {"role": "assistant", "content": response.content}
+            if response.reasoning_content:
+                assistant_msg["reasoning_content"] = response.reasoning_content
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.name, "arguments": tc.arguments},
+                }
+                for tc in response.tool_calls
+            ]
+            await self.append_chat_history(assistant_msg)
+
+            for tool_call in response.tool_calls:
+                tool_id = tool_call.id
+                if tool_call.name != "search_papers":
+                    logger.warning(f"未知写作工具调用: {tool_call.name}")
+                    continue
+
                 logger.info("调用工具: search_papers")
                 await redis_manager.publish_message(
                     self.task_id,
                     SystemMessage(content=f"写作手调用{tool_call.name}工具"),
                 )
 
-                query = json.loads(tool_call.arguments)["query"]
+                arguments = json.loads(tool_call.arguments or "{}")
+                query = arguments.get("query", "")
 
                 await redis_manager.publish_message(
                     self.task_id,
-                    WriterMessage(
-                        content=query,
-                    ),
+                    WriterMessage(content=query),
                 )
-
-                # 更新对话历史 - 添加助手的响应
-                assistant_msg: dict = {"role": "assistant", "content": response.content}
-                if response.reasoning_content:
-                    assistant_msg["reasoning_content"] = response.reasoning_content
-                if response.tool_calls:
-                    assistant_msg["tool_calls"] = [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {"name": tc.name, "arguments": tc.arguments},
-                        }
-                        for tc in response.tool_calls
-                    ]
-                await self.append_chat_history(assistant_msg)
 
                 try:
                     assert self.scholar is not None, "scholar 未初始化"
-                    papers = await self.scholar.search_papers(query)
+                    papers = await self.scholar.search_papers(
+                        query=query,
+                        limit=arguments.get("limit", 8),
+                        year_from=arguments.get("year_from"),
+                        year_to=arguments.get("year_to"),
+                        min_citations=arguments.get("min_citations"),
+                        source_types=arguments.get("source_types"),
+                        include_web=arguments.get("include_web"),
+                    )
                 except Exception as e:
                     error_msg = f"搜索文献失败: {str(e)}"
                     logger.error(error_msg)
-                    return WriterResponse(
-                        response_content=error_msg, footnotes=footnotes
-                    )
+                    papers_str = error_msg
+                else:
+                    assert self.scholar is not None, "scholar 未初始化"
+                    papers_str = self.scholar.papers_to_str(papers)
                 # TODO: pass to frontend
-                assert self.scholar is not None, "scholar 未初始化"
-                papers_str = self.scholar.papers_to_str(papers)
                 logger.info(f"搜索文献结果\n{papers_str}")
                 await self.append_chat_history(
                     {
@@ -161,14 +170,14 @@ class WriterAgent(Agent):
                         "name": "search_papers",
                     }
                 )
-                next_response = await self._chat(
-                    history=self.chat_history,
-                    tools=tools,
-                    tool_choice="auto",
-                    agent_name=self.__class__.__name__,
-                    sub_title=sub_title,
-                )
-                response_content = next_response.content or ""
+            next_response = await self._chat(
+                history=self.chat_history,
+                tools=tools,
+                tool_choice="auto",
+                agent_name=self.__class__.__name__,
+                sub_title=sub_title,
+            )
+            response_content = next_response.content or ""
         else:
             response_content = response.content or ""
         self.chat_history.append({"role": "assistant", "content": response_content, "reasoning_content": response.reasoning_content} if response.reasoning_content else {"role": "assistant", "content": response_content})

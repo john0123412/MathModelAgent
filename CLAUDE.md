@@ -65,7 +65,7 @@ docker compose down               # 停止
 Docker 内后端验证：
 
 ```bash
-docker compose exec backend uv run python -m unittest app.tests.test_security_utils app.tests.test_variable_snapshot_resume app.tests.test_message_history app.tests.test_user_output_and_tasks
+docker compose exec backend uv run python -m unittest app.tests.test_scholar_search app.tests.test_security_utils app.tests.test_variable_snapshot_resume app.tests.test_message_history app.tests.test_user_output_and_tasks
 docker compose exec backend uv run python -m ruff check app
 ```
 
@@ -88,7 +88,7 @@ backend/
     routers/           # FastAPI 路由（REST + WebSocket）
     schemas/           # Pydantic 模型（请求/响应/枚举）
     services/          # Redis 管理、WebSocket 管理
-    tools/             # 代码解释器（本地 Jupyter / E2B 云端）
+    tools/             # 代码解释器（本地 Jupyter / E2B 云端）、文献搜索、导出工具
     utils/             # 工具函数
     config/            # 配置（Pydantic Settings）
 
@@ -194,3 +194,11 @@ hook 脚本位于 `.claude/hook_lint.sh`，配置位于 `.claude/settings.json`�
 - Node.js，包管理用 pnpm（版本见 packageManager 字段）
 - Redis 必须运行（任务队列和 WebSocket 广播）
 - 后端虚拟环境路径：`backend/.venv/`
+
+### 文献搜索
+
+- Writer 通过 `search_papers` 工具检索参考文献。
+- `backend/app/tools/openalex_scholar.py` 保留 `OpenAlexScholar` 类名，但内部是多源聚合搜索：OpenAlex、Semantic Scholar、Crossref、arXiv，以及可选 Tavily。
+- `OPENALEX_EMAIL` 未配置时只跳过 OpenAlex，不禁用其他学术源。
+- Tavily 仅在 `TAVILY_API_KEY` 存在且 `SEARCH_ENABLED=true` 时启用，用于网页、官方报告和数据来源补充。
+- 不要打印 `TAVILY_API_KEY` / `OPENALEX_API_KEY` 原文。

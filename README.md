@@ -151,8 +151,8 @@ Harness SKILL 的优化需要大量黑盒测试和调优.
 - [ ] 多语言: R 语言, matlab
 - [ ] 绘图 napki,draw.io,plantuml,svg, mermaid.js
 - [ ] 添加 benchmark
-- [ ] web search tool: Tavily API 搜索互联网获取真实数据
-  <!-- NOTE: 原计划 Tavily API 未实现，当前使用 OpenAlex 替代 -->
+- [x] web search tool: Tavily API 搜索网页资料，作为论文文献/背景资料补充源
+  <!-- NOTE: 学术文献检索已升级为 OpenAlex + Semantic Scholar + Crossref + arXiv 聚合；Tavily 用于网页、官方报告和数据来源补充。 -->
 - [ ] RAG 知识库: ChromaDB + Rerank 检索建模方法、代码模板、论文写作参考
   <!-- TODO: 仅配置项存在，核心检索逻辑未实现 -->
 - [ ] A2A hand off: Fallback 自动切换备用模型 + 有限重试 + Evaluator Shadow Mode
@@ -336,13 +336,21 @@ MathModelAgent 支持以下可选功能，默认已关闭，开启后未配置�
 
 | 功能 | 配置开关 | 说明 |
 |------|----------|------|
-| Web Search | `SEARCH_ENABLED` + `TAVILY_API_KEY` | Agent 自主联网搜索真实数据（Tavily API） |
+| 文献搜索 | `OPENALEX_EMAIL` / `OPENALEX_API_KEY` 可选 | Writer 检索学术论文引用；无 OpenAlex 邮箱时仍会使用 Semantic Scholar / Crossref / arXiv |
+| Web Search | `SEARCH_ENABLED` + `TAVILY_API_KEY` | Tavily 网页搜索，用于补充官方报告、数据来源和背景资料，不替代学术数据库 |
 | RAG 知识库 | `RAG_ENABLED` | 从本地知识库检索建模方法和代码模板（ChromaDB + Rerank） |
 | HIL 人机协作 | `HIL_ENABLED` | 关键节点暂停等待用户审批，支持 6 种决策动作 |
 | Fallback Hand Off | `FALLBACK_*` 系列 | 主模型故障自动切换备用模型 |
 | Evaluator + Feedback | `EVALUATOR_*` 系列 | 输出质量评估 + 反馈重跑 |
 
-快速启用 Web Search：注册 [Tavily](https://tavily.com) 获取 API Key，在 `backend/.env.dev` 中设置 `TAVILY_API_KEY=tvly-xxx`。
+文献搜索说明：
+
+- `search_papers` 会聚合 OpenAlex、Semantic Scholar、Crossref、arXiv，并按相关性、引用量、年份、摘要完整度和 DOI 完整度重排。
+- `OPENALEX_EMAIL` 未配置时会跳过 OpenAlex，但不会禁用文献搜索。
+- Tavily 只在 `SEARCH_ENABLED=true` 且配置 `TAVILY_API_KEY` 时启用，适合检索网页、官方报告、数据来源和背景资料。
+- 如果只需要网页资料，工具会使用 `source_types=["web"]`，此时不会请求学术源。
+
+快速启用 Tavily：注册 [Tavily](https://tavily.com) 获取 API Key，在 `backend/.env.dev` 中设置 `TAVILY_API_KEY=tvly-xxx` 和 `SEARCH_ENABLED=true`。
 
 ## 🤝 贡献和开发
 
@@ -412,4 +420,3 @@ https://linux.do/
 
 > [!CAUTION]
 > 免责声明: 注意，AI 生成仅供参考，目前水平直接参加国赛获奖是不可能的，但我相信 AI 和 该项目未来的成长。
-

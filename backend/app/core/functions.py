@@ -30,14 +30,56 @@ writer_tools = [
         "type": "function",
         "function": {
             "name": "search_papers",
-            "description": "Search for papers using a query string.",
+            "description": (
+                "Search academic papers from multiple scholarly sources. "
+                "Optionally include web/background sources when needed."
+            ),
             "strict": True,
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "The query string"}
+                    "query": {"type": "string", "description": "The query string"},
+                    "limit": {
+                        "type": ["integer", "null"],
+                        "description": "Maximum number of results to return, or null for default.",
+                    },
+                    "year_from": {
+                        "type": ["integer", "null"],
+                        "description": "Earliest publication year.",
+                    },
+                    "year_to": {
+                        "type": ["integer", "null"],
+                        "description": "Latest publication year.",
+                    },
+                    "min_citations": {
+                        "type": ["integer", "null"],
+                        "description": "Minimum citation count for scholarly sources.",
+                    },
+                    "source_types": {
+                        "type": ["array", "null"],
+                        "description": (
+                            "Allowed source types: journal, conference, preprint, "
+                            "book, web; null for all scholarly types."
+                        ),
+                        "items": {"type": "string"},
+                    },
+                    "include_web": {
+                        "type": ["boolean", "null"],
+                        "description": (
+                            "Whether to include Tavily web/background results when "
+                            "configured, or null to follow settings."
+                        ),
+                    },
                 },
-                "required": ["query"],
+                "required": [
+                    "query",
+                    "limit",
+                    "year_from",
+                    "year_to",
+                    "min_citations",
+                    "source_types",
+                    "include_web",
+                ],
                 "additionalProperties": False,
             },
         },
@@ -67,13 +109,55 @@ coder_tools_anthropic = [
 writer_tools_anthropic = [
     {
         "name": "search_papers",
-        "description": "Search for papers using a query string.",
+        "description": (
+            "Search academic papers from multiple scholarly sources. "
+            "Optionally include web/background sources when needed."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "The query string"}
+                "query": {"type": "string", "description": "The query string"},
+                "limit": {
+                    "type": ["integer", "null"],
+                    "description": "Maximum number of results to return, or null for default.",
+                },
+                "year_from": {
+                    "type": ["integer", "null"],
+                    "description": "Earliest publication year.",
+                },
+                "year_to": {
+                    "type": ["integer", "null"],
+                    "description": "Latest publication year.",
+                },
+                "min_citations": {
+                    "type": ["integer", "null"],
+                    "description": "Minimum citation count for scholarly sources.",
+                },
+                "source_types": {
+                    "type": ["array", "null"],
+                    "description": (
+                        "Allowed source types: journal, conference, preprint, book, web; "
+                        "null for all scholarly types."
+                    ),
+                    "items": {"type": "string"},
+                },
+                "include_web": {
+                    "type": ["boolean", "null"],
+                    "description": (
+                        "Whether to include Tavily web/background results when configured, "
+                        "or null to follow settings."
+                    ),
+                },
             },
-            "required": ["query"],
+            "required": [
+                "query",
+                "limit",
+                "year_from",
+                "year_to",
+                "min_citations",
+                "source_types",
+                "include_web",
+            ],
         },
     },
 ]

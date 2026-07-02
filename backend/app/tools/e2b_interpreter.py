@@ -20,6 +20,7 @@ from app.tools.base_interpreter import BaseCodeInterpreter
 
 class E2BCodeInterpreter(BaseCodeInterpreter):
     """基于 E2B 沙箱的云端代码解释器。"""
+
     def __init__(
         self,
         task_id: str,
@@ -62,7 +63,8 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
                 raise FileNotFoundError(f"工作目录不存在: {self.work_dir}")
 
             files = [
-                f for f in os.listdir(self.work_dir)
+                f
+                for f in os.listdir(self.work_dir)
                 if f.endswith((".csv", ".xlsx", ".ttf", ".otf", ".ttc"))
             ]
             logger.info(f"工作目录中的文件列表: {files}")
@@ -301,6 +303,44 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
             error_occurred,
             error_message,
         )
+
+    async def replay_code(self, code: str) -> tuple[str, bool, str]:
+        """重放历史代码，只恢复沙箱状态，不写入 notebook 或推送前端消息。"""
+        if not self.sbx:
+            raise RuntimeError("沙箱环境未初始化")
+
+        logger.info(f"重放代码: {code}")
+        execution = await self.sbx.run_code(code)
+        text_to_gpt: list[str] = []
+        error_occurred = False
+        error_message = ""
+
+        if execution.error:
+            error_occurred = True
+            error_message = self._truncate_text(
+                f"Error: {execution.error.name}: {execution.error.value}\n"
+                f"{execution.error.traceback}"
+            )
+            text_to_gpt.append(self.delete_color_control_char(error_message))
+
+        if execution.logs:
+            if execution.logs.stdout:
+                text_to_gpt.append(
+                    self._truncate_text("\n".join(execution.logs.stdout))
+                )
+            if execution.logs.stderr:
+                text_to_gpt.append(
+                    self._truncate_text("\n".join(execution.logs.stderr))
+                )
+
+        if execution.results:
+            for result in execution.results:
+                if str(result):
+                    text_to_gpt.append(self._truncate_text(str(result)))
+                elif result._repr_png_() or result._repr_jpeg_():
+                    text_to_gpt.append("[图片已生成，内容为 base64，未展示]")
+
+        return "\n".join(text_to_gpt), error_occurred, error_message
 
     async def get_created_images(self, section: str) -> list[str]:
         """获取当前 section 创建的图片列表"""

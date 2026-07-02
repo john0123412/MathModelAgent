@@ -194,11 +194,31 @@ B 需要 1 小时机器时间、2 小时人工时间，利润 30 元；
 ## 常见问题
 
 ### OPENALEX_EMAIL 未配置
-编辑 backend/.env.dev 添加:
+`OPENALEX_EMAIL` 未配置时，系统会跳过 OpenAlex，但文献搜索不会整体失效，仍会使用 Semantic Scholar / Crossref / arXiv。
+
+如需启用 OpenAlex，编辑 `backend/.env.dev` 添加:
 ```
 OPENALEX_EMAIL=你的邮箱
 ```
 重启后端生效。
+
+### Tavily 网页搜索如何启用
+Tavily 用于补充网页、官方报告和数据来源，不替代学术数据库。编辑 `backend/.env.dev`：
+```
+TAVILY_API_KEY=你的TavilyKey
+SEARCH_ENABLED=true
+```
+
+启用后，Writer 的 `search_papers` 工具可以在需要背景资料时包含 Tavily 网页结果。若工具指定 `source_types=["web"]`，系统只请求 Tavily，不请求学术文献源。
+
+### 文献搜索来源
+`search_papers` 当前会聚合：
+
+- OpenAlex：配置 `OPENALEX_EMAIL` 后启用
+- Semantic Scholar：默认启用，可能对匿名请求限流
+- Crossref：默认启用，用于 DOI 和出版信息补全
+- arXiv：默认启用，用于数学、统计、优化、计算机方向预印本
+- Tavily：配置 `TAVILY_API_KEY` 且 `SEARCH_ENABLED=true` 后启用，用于网页资料补充
 
 ### Redis 连接失败
 ```powershell

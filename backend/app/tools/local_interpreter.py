@@ -16,6 +16,7 @@ from app.schemas.response import (
 
 class LocalCodeInterpreter(BaseCodeInterpreter):
     """基于本地 Jupyter 内核的代码解释器。"""
+
     def __init__(
         self,
         task_id: str,
@@ -169,6 +170,33 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
             error_occurred,
             error_message,
         )
+
+    async def replay_code(self, code: str) -> tuple[str, bool, str]:
+        """重放历史代码，只恢复内核状态，不修改 notebook 或推送前端消息。"""
+        logger.info(f"重放代码: {code}")
+        execution = self.execute_code_(code)
+        text_to_gpt: list[str] = []
+        error_occurred = False
+        error_message = ""
+
+        for mark, out_str in execution:
+            if mark in ("stdout", "execute_result_text", "display_text"):
+                text_to_gpt.append(self._truncate_text(f"[{mark}]\n{out_str}"))
+            elif mark in (
+                "execute_result_png",
+                "execute_result_jpeg",
+                "display_png",
+                "display_jpeg",
+            ):
+                text_to_gpt.append(f"[{mark} 图片已生成，内容为 base64，未展示]")
+            elif mark == "error":
+                error_occurred = True
+                error_message = self._truncate_text(
+                    self.delete_color_control_char(out_str)
+                )
+                text_to_gpt.append(error_message)
+
+        return "\n".join(text_to_gpt), error_occurred, error_message
 
     def execute_code_(self, code) -> list[tuple[str, str]]:
         assert self.kc is not None

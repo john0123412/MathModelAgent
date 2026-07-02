@@ -36,6 +36,8 @@ class NotebookSerializer:
 
             # 在jupyter工作目录下创建notebook文件
             self.notebook_path = os.path.join(work_dir, notebook_name)
+            if os.path.exists(self.notebook_path):
+                self.nb = nbformat.read(self.notebook_path, as_version=4)
 
             # if os.path.exists(self.notebook_path):
             #     raise FileExistsError(

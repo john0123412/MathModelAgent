@@ -43,6 +43,7 @@ class WorkFlow:
 
 class MathModelWorkFlow(WorkFlow):
     """数学建模工作流，协调协调者、建模手、代码手和写作手完成完整建模任务。"""
+
     task_id: str  #
     work_dir: str  # worklow work dir
     ques_count: int = 0  # 问题数量
@@ -150,88 +151,140 @@ class MathModelWorkFlow(WorkFlow):
             code_interpreter: 新建的代码解释器实例。
             checkpoint_manager: 检查点管理器，用于增量重放。
         """
-        notebook_path = os.path.join(self.work_dir, "notebook.ipynb")
-        if not os.path.exists(notebook_path):
-            logger.info("未找到 notebook.ipynb，跳过内核状态重放")
-            return
-
         # 尝试从变量快照恢复（最快）
         from app.tools.variable_snapshot import VariableSnapshot
+
+        notebook_path = os.path.join(self.work_dir, "notebook.ipynb")
         snapshot = VariableSnapshot(self.work_dir)
-        
+        replay_start_cell_index = 0
+        replay_start_code_index = 0
+        replay_start_uses_cell_index = True
+        replay_mode = "全量重放"
+
         if snapshot.exists():
             await redis_manager.publish_message(
                 self.task_id,
                 SystemMessage(content="从变量快照恢复计算环境..."),
             )
-            
+
             # 获取内核客户端
-            kernel_client = getattr(code_interpreter, 'kc', None)
+            kernel_client = getattr(code_interpreter, "kc", None)
             if kernel_client and await snapshot.load(kernel_client):
                 logger.info("变量快照恢复成功，跳过单元格重放")
+                meta = snapshot.load_meta()
+                replay_start_cell_index = self._safe_non_negative_int(
+                    meta.get("notebook_cell_count"), default=0
+                )
+                replay_start_code_index = self._safe_non_negative_int(
+                    meta.get("notebook_code_cell_count"), default=0
+                )
+                replay_start_uses_cell_index = "notebook_cell_count" in meta
+                replay_mode = "快照后增量重放"
                 await redis_manager.publish_message(
                     self.task_id,
                     SystemMessage(content="计算环境恢复完成（从快照）"),
                 )
-                return
             else:
-                logger.warning("变量快照恢复失败，降级为增量重放")
+                logger.warning("变量快照恢复失败，降级为全量重放")
+                if checkpoint_manager is not None:
+                    checkpoint_manager.set_variable_snapshot_exists(False)
                 await redis_manager.publish_message(
                     self.task_id,
-                    SystemMessage(content="快照恢复失败，使用增量重放..."),
+                    SystemMessage(content="快照恢复失败，使用全量重放..."),
                 )
+
+        if not os.path.exists(notebook_path):
+            if replay_mode == "快照后增量重放":
+                logger.info("未找到 notebook.ipynb，已从变量快照恢复，跳过单元格重放")
+                return
+            logger.info("未找到 notebook.ipynb，跳过内核状态重放")
+            return
 
         # 读取 notebook
         nb = nbformat.read(notebook_path, as_version=4)
-        
+
         # 筛选所有有效的代码单元格（带索引）
         all_code_cells = [
-            (i, cell) for i, cell in enumerate(nb.get("cells", []))
+            (i, cell)
+            for i, cell in enumerate(nb.get("cells", []))
             if cell.get("cell_type") == "code"
-            and not any(o.get("output_type") == "error" for o in (cell.get("outputs") or []))
+            and not any(
+                o.get("output_type") == "error" for o in (cell.get("outputs") or [])
+            )
             and (cell.get("source") or "").strip()
         ]
-        
-        # 增量重放：只重放未执行的单元格
-        if checkpoint_manager is not None:
-            executed_indices = set(checkpoint_manager.get_executed_cells())
+
+        # 无快照时必须全量重放；快照成功时只补齐快照之后新增的成功单元格。
+        if replay_start_uses_cell_index:
             cells_to_replay = [
-                (i, cell) for i, cell in all_code_cells
-                if i not in executed_indices
+                (i, cell) for i, cell in all_code_cells if i >= replay_start_cell_index
             ]
-            mode = "增量重放"
         else:
-            cells_to_replay = all_code_cells
-            mode = "全量重放"
-        
+            cells_to_replay = [
+                (i, cell)
+                for code_index, (i, cell) in enumerate(all_code_cells)
+                if code_index >= replay_start_code_index
+            ]
+
         total = len(cells_to_replay)
         total_all = len(all_code_cells)
-        
+
         await redis_manager.publish_message(
             self.task_id,
-            SystemMessage(content=f"正在{mode}计算环境: {total}/{total_all} 个单元格..."),
+            SystemMessage(
+                content=f"正在{replay_mode}计算环境: {total}/{total_all} 个单元格..."
+            ),
         )
 
         replayed = 0
         for cell_index, cell in cells_to_replay:
-            await code_interpreter.execute_code(cell["source"])
+            _, error_occurred, error_message = await code_interpreter.replay_code(
+                cell["source"]
+            )
+            if error_occurred:
+                raise RuntimeError(f"重放单元格 {cell_index} 失败: {error_message}")
             replayed += 1
-            
-            # 记录已执行的单元格索引
-            if checkpoint_manager is not None:
-                checkpoint_manager.add_executed_cell(cell_index)
-            
+
             if replayed % 10 == 0 or replayed == total:
                 await redis_manager.publish_message(
                     self.task_id,
                     SystemMessage(content=f"重建计算环境: {replayed}/{total} 个单元格"),
                 )
 
-        logger.info(f"内核状态重放完成（{mode}），共重放 {replayed} 个代码单元格")
+        logger.info(
+            f"内核状态重放完成（{replay_mode}），共重放 {replayed} 个代码单元格"
+        )
         await redis_manager.publish_message(
             self.task_id,
-            SystemMessage(content=f"计算环境重建完成（{mode}），共重放 {replayed} 个单元格"),
+            SystemMessage(
+                content=f"计算环境重建完成（{replay_mode}），共重放 {replayed} 个单元格"
+            ),
         )
+
+    def _get_notebook_cell_counts(self) -> tuple[int, int]:
+        """获取当前 notebook 的总单元格和代码单元格数量。"""
+        notebook_path = os.path.join(self.work_dir, "notebook.ipynb")
+        if not os.path.exists(notebook_path):
+            return 0, 0
+        try:
+            nb = nbformat.read(notebook_path, as_version=4)
+            total_cell_count = len(nb.get("cells", []))
+            code_cell_count = sum(
+                1 for cell in nb.get("cells", []) if cell.get("cell_type") == "code"
+            )
+            return total_cell_count, code_cell_count
+        except Exception as e:
+            logger.warning(f"读取 notebook 单元格数量失败: {e}")
+            return 0, 0
+
+    @staticmethod
+    def _safe_non_negative_int(value, default: int = 0) -> int:
+        """将 metadata 字段转换为非负整数。"""
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        return max(parsed, 0)
 
     async def _run_solution_flows(
         self,
@@ -273,7 +326,10 @@ class MathModelWorkFlow(WorkFlow):
             )
 
             writer_prompt = flows.get_writer_prompt(
-                key, coder_response.code_response or "", code_interpreter, config_template
+                key,
+                coder_response.code_response or "",
+                code_interpreter,
+                config_template,
             )
 
             await redis_manager.publish_message(
@@ -297,17 +353,29 @@ class MathModelWorkFlow(WorkFlow):
             checkpoint_manager.mark_phase_completed(
                 key, coder_response.model_dump(), writer_response.model_dump()
             )
-            
+
             # 保存变量快照（用于下次快速恢复）
             from app.tools.variable_snapshot import VariableSnapshot
+
             snapshot = VariableSnapshot(self.work_dir)
-            kernel_client = getattr(code_interpreter, 'kc', None)
+            kernel_client = getattr(code_interpreter, "kc", None)
             if kernel_client:
                 try:
-                    await snapshot.save(kernel_client)
-                    checkpoint_manager.set_variable_snapshot_exists(True)
-                    logger.info(f"变量快照已保存: {key}")
+                    notebook_cell_count, notebook_code_cell_count = (
+                        self._get_notebook_cell_counts()
+                    )
+                    saved = await snapshot.save(
+                        kernel_client,
+                        notebook_cell_count=notebook_cell_count,
+                        notebook_code_cell_count=notebook_code_cell_count,
+                    )
+                    checkpoint_manager.set_variable_snapshot_exists(saved)
+                    if saved:
+                        logger.info(f"变量快照已保存: {key}")
+                    else:
+                        logger.warning(f"变量快照保存失败: {key}")
                 except Exception as e:
+                    checkpoint_manager.set_variable_snapshot_exists(False)
                     logger.warning(f"保存变量快照失败: {e}")
 
     async def _run_write_flows(
@@ -366,7 +434,9 @@ class MathModelWorkFlow(WorkFlow):
             )
         elif pdf_result["enabled"]:
             # pandoc/xelatex 都存在，但转换本身失败
-            logger.error(f"PDF 生成失败: {pdf_result['reason']}, stderr={pdf_result['stderr']}")
+            logger.error(
+                f"PDF 生成失败: {pdf_result['reason']}, stderr={pdf_result['stderr']}"
+            )
             await redis_manager.publish_message(
                 self.task_id,
                 SystemMessage(
@@ -398,7 +468,9 @@ class MathModelWorkFlow(WorkFlow):
             if tex_result["success"]:
                 await redis_manager.publish_message(
                     self.task_id,
-                    SystemMessage(content="LaTeX 项目（latex_project/）导出完成，可供进一步精修"),
+                    SystemMessage(
+                        content="LaTeX 项目（latex_project/）导出完成，可供进一步精修"
+                    ),
                 )
             elif tex_result["enabled"]:
                 logger.error(f"LaTeX sidecar 导出失败: {tex_result['reason']}")
@@ -422,7 +494,9 @@ class MathModelWorkFlow(WorkFlow):
             logger.error(f"LaTeX sidecar 导出异常: {e}")
             await redis_manager.publish_message(
                 self.task_id,
-                SystemMessage(content=f"LaTeX 项目导出异常: {e}，其余结果不受影响", type="warning"),
+                SystemMessage(
+                    content=f"LaTeX 项目导出异常: {e}，其余结果不受影响", type="warning"
+                ),
             )
 
         ################################################ generate candidate manifest
@@ -432,7 +506,9 @@ class MathModelWorkFlow(WorkFlow):
             logger.error(f"candidate_manifest.json 生成失败: {e}")
             await redis_manager.publish_message(
                 self.task_id,
-                SystemMessage(content=f"candidate_manifest.json 生成失败: {e}", type="error"),
+                SystemMessage(
+                    content=f"candidate_manifest.json 生成失败: {e}", type="error"
+                ),
             )
 
     async def execute(self, problem: Problem):  # type: ignore[reportIncompatibleMethodOverride]
@@ -451,7 +527,8 @@ class MathModelWorkFlow(WorkFlow):
         user_input_provider = lambda: user_input_queue.pop_all(self.task_id)  # noqa: E731
 
         coordinator_agent = CoordinatorAgent(
-            self.task_id, coordinator_llm,
+            self.task_id,
+            coordinator_llm,
             context_window=settings.COORDINATOR_CONTEXT_WINDOW,
             cancel_event=self.cancel_event,
             user_input_provider=user_input_provider,
@@ -486,7 +563,8 @@ class MathModelWorkFlow(WorkFlow):
         await self._check_cancelled()
 
         modeler_agent = ModelerAgent(
-            self.task_id, modeler_llm,
+            self.task_id,
+            modeler_llm,
             context_window=settings.MODELER_CONTEXT_WINDOW,
             cancel_event=self.cancel_event,
             user_input_provider=user_input_provider,
@@ -512,14 +590,17 @@ class MathModelWorkFlow(WorkFlow):
 
         user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
 
-        notebook_serializer, code_interpreter, coder_agent, writer_agent = (
-            await self._build_agents(
-                coder_llm,
-                writer_llm,
-                problem.comp_template,
-                problem.format_output,
-                user_input_provider,
-            )
+        (
+            notebook_serializer,
+            code_interpreter,
+            coder_agent,
+            writer_agent,
+        ) = await self._build_agents(
+            coder_llm,
+            writer_llm,
+            problem.comp_template,
+            problem.format_output,
+            user_input_provider,
         )
 
         flows = Flows(self.questions)
@@ -585,20 +666,25 @@ class MathModelWorkFlow(WorkFlow):
 
         llm_factory = LLMFactory(self.task_id)
         # 续传时不重新调用协调者/建模手，只需要代码手和写作手的 LLM
-        _coordinator_llm, _modeler_llm, coder_llm, writer_llm = llm_factory.get_all_llms()
+        _coordinator_llm, _modeler_llm, coder_llm, writer_llm = (
+            llm_factory.get_all_llms()
+        )
 
         user_input_provider = lambda: user_input_queue.pop_all(self.task_id)  # noqa: E731
 
         user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
 
-        notebook_serializer, code_interpreter, coder_agent, writer_agent = (
-            await self._build_agents(
-                coder_llm,
-                writer_llm,
-                comp_template,
-                format_output,
-                user_input_provider,
-            )
+        (
+            notebook_serializer,
+            code_interpreter,
+            coder_agent,
+            writer_agent,
+        ) = await self._build_agents(
+            coder_llm,
+            writer_llm,
+            comp_template,
+            format_output,
+            user_input_provider,
         )
 
         # 重建 Jupyter 内核变量状态

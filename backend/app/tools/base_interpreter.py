@@ -13,6 +13,7 @@ from app.schemas.response import (
 
 class BaseCodeInterpreter(abc.ABC):
     """代码解释器抽象基类，定义代码执行、输出管理和资源清理的接口。"""
+
     def __init__(
         self,
         task_id: str,
@@ -38,6 +39,11 @@ class BaseCodeInterpreter(abc.ABC):
     @abc.abstractmethod
     async def execute_code(self, code: str) -> tuple[str, bool, str]:
         """执行一段代码，返回 (输出文本, 是否出错, 错误信息)"""
+        ...
+
+    @abc.abstractmethod
+    async def replay_code(self, code: str) -> tuple[str, bool, str]:
+        """重放一段历史代码，不写入 notebook、不推送前端消息。"""
         ...
 
     @abc.abstractmethod

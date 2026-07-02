@@ -8,6 +8,14 @@ MathModelAgent 是数学建模竞赛自动化系统，通过多 Agent 协作完�
 
 ## Commands
 
+### 重要限制：Windows 本机前端 Node 命令
+
+不要在本机 Windows 环境中主动运行前端依赖安装、构建、类型检查或 lint 命令，例如 `pnpm i`、`pnpm run build`、`vue-tsc`、`vite build`、`biome`、`npx biome`、`node_modules\.bin\*`。
+
+原因：该环境曾出现这些命令异常派生大量 `node.exe`，导致系统卡死。
+
+前端验证优先使用 Docker Compose 已启动的 `http://127.0.0.1:5173` 做浏览器/API 级验证，或请用户手动运行前端命令后回传结果。只有用户明确授权时，才可在说明风险、限定一次命令并设置短超时后运行本机前端 Node 命令。
+
 ### 后端
 
 ```bash
@@ -29,28 +37,36 @@ npx pyright app/
 
 ### 前端
 
+前端本机命令只供用户手动执行参考，agent 默认不得主动运行：
+
+- `pnpm i`
+- `pnpm run dev`
+- `pnpm run build`
+- `vue-tsc`
+- `vite build`
+- `biome` / `npx biome`
+
+agent 如需验证前端，优先使用 Docker Compose 服务：
+
 ```bash
-cd frontend
-
-# 安装依赖
-pnpm i
-
-# 启动开发服务器
-pnpm run dev
-
-# 构建
-pnpm run build
-
-# Lint
-npx biome check src/
-npx biome check --write src/  # 自动修复
+docker compose up --build -d
+curl http://127.0.0.1:5173/
 ```
 
 ### Docker
 
 ```bash
-docker-compose up -d      # 后台启动
-docker-compose down        # 停止
+docker compose up --build -d      # 重建并后台启动
+docker compose ps                 # 查看服务状态
+docker compose logs backend --tail=200
+docker compose down               # 停止
+```
+
+Docker 内后端验证：
+
+```bash
+docker compose exec backend uv run python -m unittest app.tests.test_security_utils app.tests.test_variable_snapshot_resume app.tests.test_message_history app.tests.test_user_output_and_tasks
+docker compose exec backend uv run python -m ruff check app
 ```
 
 ## 项目结构
@@ -158,11 +174,13 @@ const rendered = computed(() => marked.parse(props.content));
 
 ### 自动化 Lint Hook
 
-每次 Edit/Write 文件后，PostToolUse hook 自动触发：
+每次 Edit/Write 文件后，PostToolUse hook 可能自动触发：
 - `backend/**/*.py` → `ruff check app/`
 - `frontend/src/**/*.{vue,ts}` → `biome check <file>`
 
 hook 脚本位于 `.claude/hook_lint.sh`，配置位于 `.claude/settings.json`。
+
+注意：在当前 Windows 本机环境中，不要依赖或主动触发前端 `biome` hook；前端 Node 工具链存在异常派生大量 `node.exe` 的历史风险。前端改动可以先做代码审查，必要时让用户手动验证或使用 Docker 服务做端到端检查。
 
 ### 不要修改的内容
 

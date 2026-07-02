@@ -90,6 +90,7 @@ class UserOutput:
         for ref_num, ref_content in references:
             # 清理引用内容，去除末尾的空格和点号
             ref_content = ref_content.strip().rstrip(".")
+            ref_pattern = rf"\{{\[\^{ref_num}\][:\s]+.*?\}}"
 
             # 检查当前引用内容是否已经存在于footnotes中
             existing_uuid = None
@@ -101,7 +102,7 @@ class UserOutput:
             if existing_uuid:
                 # 如果已存在，使用现有的UUID
                 text = re.sub(
-                    rf"\{{\[\^{ref_num}\]:.*?\}}",
+                    ref_pattern,
                     f"[{existing_uuid}]",
                     text,
                     flags=re.DOTALL,
@@ -113,7 +114,7 @@ class UserOutput:
                     "content": ref_content,
                 }
                 text = re.sub(
-                    rf"\{{\[\^{ref_num}\]:.*?\}}",
+                    ref_pattern,
                     f"[{new_uuid}]",
                     text,
                     flags=re.DOTALL,
@@ -160,7 +161,14 @@ class UserOutput:
         """
         text += "\n\n## 参考文献\n"
         # 将脚注转换为列表并按 number 排序
-        sorted_footnotes = sorted(self.footnotes.items(), key=lambda x: x[1]["number"])
+        sorted_footnotes = sorted(
+            (
+                (uid, footnote)
+                for uid, footnote in self.footnotes.items()
+                if "number" in footnote
+            ),
+            key=lambda x: x[1]["number"],
+        )
         for _, footnote in sorted_footnotes:
             content = footnote["content"]
             # 确保引用格式以句号结尾

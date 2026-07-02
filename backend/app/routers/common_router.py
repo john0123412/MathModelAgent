@@ -79,6 +79,11 @@ def _load_task_messages_from_jsonl(message_file: Path) -> list[dict]:
     return messages
 
 
+def _file_has_content(path: str) -> bool:
+    """判断文件存在且非空。"""
+    return os.path.isfile(path) and os.path.getsize(path) > 0
+
+
 @router.get("/")
 async def root():
     return {"message": "Hello World"}
@@ -150,11 +155,11 @@ async def list_tasks():
 
         # 检查各结果文件是否存在
         files_exist = {
-            "res_md": os.path.exists(os.path.join(task_path, "res.md")),
-            "res_json": os.path.exists(os.path.join(task_path, "res.json")),
-            "res_docx": os.path.exists(os.path.join(task_path, "res.docx")),
-            "res_pdf": os.path.exists(os.path.join(task_path, "res.pdf")),
-            "candidate_manifest": os.path.exists(
+            "res_md": _file_has_content(os.path.join(task_path, "res.md")),
+            "res_json": _file_has_content(os.path.join(task_path, "res.json")),
+            "res_docx": _file_has_content(os.path.join(task_path, "res.docx")),
+            "res_pdf": _file_has_content(os.path.join(task_path, "res.pdf")),
+            "candidate_manifest": _file_has_content(
                 os.path.join(task_path, "candidate_manifest.json")
             ),
             "checkpoint": os.path.exists(os.path.join(task_path, "checkpoint.json")),
@@ -176,7 +181,10 @@ async def list_tasks():
         persisted_status = read_task_status(task_path)
         if persisted_status and isinstance(persisted_status.get("status"), str):
             task_info["status"] = persisted_status["status"]
-        if task_info["has_result"]:
+        if task_info["has_result"] and task_info["status"] not in {
+            "failed",
+            "cancelled",
+        }:
             task_info["status"] = "completed"
 
         # 从消息文件获取标题和状态
@@ -220,7 +228,11 @@ async def list_tasks():
 
                     # 未完成且没有结果文件时，视为仍在运行；若存在检查点，
                     # 说明进程曾中断过，标记为可续传的 "interrupted"
-                    if not task_info["has_result"] and task_info["status"] != "completed":
+                    if (
+                        not task_info["has_result"]
+                        and task_info["status"]
+                        not in {"completed", "failed", "cancelled", "running", "resuming"}
+                    ):
                         task_info["status"] = (
                             "interrupted" if files_exist["checkpoint"] else "running"
                         )

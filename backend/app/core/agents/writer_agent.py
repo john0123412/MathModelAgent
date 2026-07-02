@@ -66,6 +66,8 @@ class WriterAgent(Agent):
         # 根据 api_type 选择 tools 格式
         api_type = self.model.api_type
         tools = writer_tools_anthropic if api_type == ApiType.ANTHROPIC else writer_tools
+        if self.scholar is None:
+            tools = []
 
         if self.is_first_run:
             self.is_first_run = False

@@ -11,6 +11,8 @@ import json
 import re
 from icecream import ic  # type: ignore[import-unresolved]
 
+MAX_JSON_REPAIR_ATTEMPTS = 3
+
 
 def repair_json(json_str: str) -> dict | None:
     """尝试修复 LLM 输出的格式错误的 JSON。
@@ -111,6 +113,10 @@ class ModelerAgent(Agent):
             logger.warning(
                 f"JSON 解析失败 (第{attempt}次)，请求模型重新生成"
             )
+            if attempt >= MAX_JSON_REPAIR_ATTEMPTS:
+                raise ValueError(
+                    f"ModelerAgent 连续 {attempt} 次返回无效 JSON"
+                )
             retry_msg: dict = {"role": "assistant", "content": json_str}
             if response.reasoning_content:
                 retry_msg["reasoning_content"] = response.reasoning_content

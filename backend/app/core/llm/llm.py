@@ -3,7 +3,7 @@
 from typing import Any
 from app.utils.common_utils import transform_link, split_footnotes
 from app.utils.log_util import logger
-import time
+import asyncio
 from app.schemas.response import (
     CoderMessage,
     WriterMessage,
@@ -19,6 +19,8 @@ from app.core.llm.providers.base import BaseProvider
 from app.core.llm.providers.openai_chat import OpenAIChatProvider
 from app.core.llm.providers.openai_responses import OpenAIResponsesProvider
 from app.core.llm.providers.anthropic import AnthropicProvider
+
+DEFAULT_LLM_MAX_RETRIES = 3
 
 
 class LLM:
@@ -72,6 +74,7 @@ class LLM:
         sub_title: str | None = None,
     ) -> StandardResponse:
         self._validate_config(agent_name)
+        max_attempts = max_retries if max_retries is not None else DEFAULT_LLM_MAX_RETRIES
 
         # 验证和修复工具调用完整性（仅对 OpenAI 格式的历史有效）
         if history:
@@ -99,9 +102,9 @@ class LLM:
             except Exception as e:
                 attempt += 1
                 logger.error(f"第{attempt}次重试: {str(e)}")
-                if max_retries is not None and attempt >= max_retries:
+                if attempt >= max_attempts:
                     raise
-                time.sleep(retry_delay * min(attempt, 10))
+                await asyncio.sleep(retry_delay * min(attempt, 10))
 
     def _validate_and_fix_tool_calls(self, history: list) -> list:
         """验证并修复工具调用完整性。"""

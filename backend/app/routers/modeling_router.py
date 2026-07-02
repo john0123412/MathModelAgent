@@ -7,17 +7,22 @@ from app.schemas.enums import CompTemplate, FormatOutPut
 from app.utils.log_util import logger
 from app.services.redis_manager import redis_manager
 from app.services import user_input_queue
+from app.services.task_status import write_task_status
 from app.schemas.request import Problem
 from app.schemas.response import SystemMessage
 from app.utils.common_utils import (
     create_task_id,
     create_work_dir,
+    ensure_safe_filename,
+    ensure_safe_task_id,
     get_current_files,
     get_work_dir,
     md_2_docx,
+    safe_join_work_dir,
 )
 import os
 import asyncio
+import shutil
 from typing import Dict, Tuple
 from fastapi import HTTPException
 from icecream import ic  # type: ignore[import-unresolved]
@@ -31,6 +36,7 @@ from app.core.llm.providers.base import BaseProvider
 import requests
 
 router = APIRouter()
+EXAMPLE_ROOT = os.path.abspath(os.path.join("app", "example", "example"))
 
 # 任务注册表: task_id -> (asyncio.Task, asyncio.Event)
 _active_tasks: Dict[str, Tuple[asyncio.Task, asyncio.Event]] = {}
@@ -63,6 +69,29 @@ class SaveApiConfigRequest(BaseModel):
     coder: dict
     writer: dict
     openalex_email: str
+
+
+def _require_safe_task_id(task_id: str) -> str:
+    """验证 URL 中的任务 ID，非法时返回 400。"""
+    try:
+        return ensure_safe_task_id(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="非法任务ID") from exc
+
+
+def _resolve_example_dir(source: str) -> str:
+    """根据示例目录名解析示例路径，拒绝路径遍历。"""
+    try:
+        safe_source = ensure_safe_filename(source)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="非法示例名称") from exc
+
+    example_dir = os.path.abspath(os.path.join(EXAMPLE_ROOT, safe_source))
+    if os.path.commonpath([EXAMPLE_ROOT, example_dir]) != EXAMPLE_ROOT:
+        raise HTTPException(status_code=400, detail="非法示例名称")
+    if not os.path.isdir(example_dir):
+        raise HTTPException(status_code=404, detail="示例不存在")
+    return example_dir
 
 
 @router.post("/save-api-config")
@@ -190,7 +219,9 @@ async def validate_openalex_email(request: ValidateOpenalexEmailRequest):
         if settings.OPENALEX_API_KEY:
             params["api_key"] = settings.OPENALEX_API_KEY
 
-        response = requests.get("https://api.openalex.org/works", params=params)
+        response = requests.get(
+            "https://api.openalex.org/works", params=params, timeout=10
+        )
         logger.debug(f"OpenAlex Email 验证响应: {response}")
         response.raise_for_status()
         return ValidateOpenalexEmailResponse(
@@ -209,17 +240,17 @@ async def exampleModeling(
 ):
     task_id = create_task_id()
     work_dir = create_work_dir(task_id)
-    example_dir = os.path.join("app", "example", "example", example_request.source)
+    example_dir = _resolve_example_dir(example_request.source)
     ic(example_dir)
     with open(os.path.join(example_dir, "questions.txt"), "r", encoding="utf-8") as f:
         ques_all = f.read()
 
     current_files = get_current_files(example_dir, "data")
     for file in current_files:
+        safe_filename = ensure_safe_filename(file)
         src_file = os.path.join(example_dir, file)
-        dst_file = os.path.join(work_dir, file)
-        with open(src_file, "rb") as src, open(dst_file, "wb") as dst:
-            dst.write(src.read())
+        dst_file = os.path.join(work_dir, safe_filename)
+        shutil.copy2(src_file, dst_file)
     # 存储任务ID
     await redis_manager.set(f"task_id:{task_id}", task_id)
 
@@ -251,18 +282,16 @@ async def modeling(
         logger.info(f"开始处理上传的文件，工作目录: {work_dir}")
         for file in files:
             try:
-                assert file.filename is not None
-                data_file_path = os.path.join(work_dir, file.filename)
-                logger.info(f"保存文件: {file.filename} -> {data_file_path}")
-
-                # 确保文件名不为空
                 if not file.filename:
                     logger.warning("跳过空文件名")
                     continue
+                safe_filename = ensure_safe_filename(file.filename)
+                data_file_path = safe_join_work_dir(task_id, safe_filename)
+                logger.info(f"保存文件: {safe_filename} -> {data_file_path}")
 
                 content = await file.read()
                 if not content:
-                    logger.warning(f"文件 {file.filename} 内容为空")
+                    logger.warning(f"文件 {safe_filename} 内容为空")
                     continue
 
                 with open(data_file_path, "wb") as f:
@@ -272,7 +301,7 @@ async def modeling(
             except Exception as e:
                 logger.error(f"保存文件 {file.filename} 失败: {str(e)}")
                 raise HTTPException(
-                    status_code=500, detail=f"保存文件 {file.filename} 失败: {str(e)}"
+                    status_code=400, detail=f"保存文件 {file.filename} 失败: {str(e)}"
                 )
     else:
         logger.warning("没有上传文件")
@@ -303,6 +332,7 @@ async def run_modeling_task_async(
         format_output: 输出格式。
     """
     logger.info(f"run modeling task for task_id: {task_id}")
+    write_task_status(task_id, "running", "任务开始处理")
 
     problem = Problem(
         task_id=task_id,
@@ -342,25 +372,38 @@ async def run_modeling_task_async(
             task_id,
             SystemMessage(content="任务处理完成", type="success"),
         )
+        write_task_status(task_id, "completed", "任务处理完成")
     except asyncio.CancelledError:
         logger.info(f"任务 {task_id} 被取消")
         await redis_manager.publish_message(
             task_id,
             SystemMessage(content="任务已停止", type="warning"),
         )
+        write_task_status(task_id, "cancelled", "任务已停止")
     except Exception as e:
         logger.error(f"任务 {task_id} 执行失败: {e}")
         await redis_manager.publish_message(
             task_id,
             SystemMessage(content=f"任务执行失败: {str(e)}", type="error"),
         )
+        write_task_status(task_id, "failed", str(e))
     finally:
         # 从注册表中清理
         _active_tasks.pop(task_id, None)
         user_input_queue.clear(task_id)
         # 仅在正常完成时转换 md 为 docx
         if task_completed:
-            md_2_docx(task_id)
+            try:
+                md_2_docx(task_id)
+            except Exception as e:
+                logger.error(f"任务 {task_id} DOCX 转换失败: {e}")
+                await redis_manager.publish_message(
+                    task_id,
+                    SystemMessage(
+                        content=f"DOCX 转换失败: {str(e)}，Markdown/PDF 结果不受影响",
+                        type="warning",
+                    ),
+                )
 
 
 class CancelTaskResponse(BaseModel):
@@ -371,15 +414,16 @@ class CancelTaskResponse(BaseModel):
 @router.post("/modeling/{task_id}/cancel", response_model=CancelTaskResponse)
 async def cancel_task(task_id: str):
     """取消正在运行的任务。"""
-    if task_id not in _active_tasks:
+    safe_task_id = _require_safe_task_id(task_id)
+    if safe_task_id not in _active_tasks:
         return CancelTaskResponse(
             success=False,
             message="任务不存在或已完成",
         )
 
-    _, cancel_event = _active_tasks[task_id]
+    _, cancel_event = _active_tasks[safe_task_id]
     cancel_event.set()
-    logger.info(f"已发送取消信号给任务 {task_id}")
+    logger.info(f"已发送取消信号给任务 {safe_task_id}")
 
     return CancelTaskResponse(
         success=True,
@@ -395,8 +439,9 @@ class ResumeTaskResponse(BaseModel):
 @router.post("/modeling/{task_id}/resume", response_model=ResumeTaskResponse)
 async def resume_task(task_id: str, background_tasks: BackgroundTasks):
     """从检查点续传一个中断的建模任务。"""
+    safe_task_id = _require_safe_task_id(task_id)
     try:
-        work_dir = get_work_dir(task_id)
+        work_dir = get_work_dir(safe_task_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="任务不存在")
 
@@ -404,15 +449,15 @@ async def resume_task(task_id: str, background_tasks: BackgroundTasks):
     if checkpoint is None:
         raise HTTPException(status_code=404, detail="未找到可续传的检查点")
 
-    if task_id in _active_tasks:
+    if safe_task_id in _active_tasks:
         raise HTTPException(status_code=409, detail="任务仍在运行中")
 
     # 存储任务ID，续期供 ws 鉴权使用
-    await redis_manager.set(f"task_id:{task_id}", task_id)
+    await redis_manager.set(f"task_id:{safe_task_id}", safe_task_id)
 
-    logger.info(f"Adding resume background task for task_id: {task_id}")
-    background_tasks.add_task(run_resume_task_async, task_id)
-    return ResumeTaskResponse(task_id=task_id, status="resuming")
+    logger.info(f"Adding resume background task for task_id: {safe_task_id}")
+    background_tasks.add_task(run_resume_task_async, safe_task_id)
+    return ResumeTaskResponse(task_id=safe_task_id, status="resuming")
 
 
 async def run_resume_task_async(task_id: str):
@@ -422,6 +467,7 @@ async def run_resume_task_async(task_id: str):
         task_id: 待续传的任务 ID。
     """
     logger.info(f"resume modeling task for task_id: {task_id}")
+    write_task_status(task_id, "resuming", "任务续传中")
 
     # 创建取消信号
     cancel_event = asyncio.Event()
@@ -450,20 +496,33 @@ async def run_resume_task_async(task_id: str):
             task_id,
             SystemMessage(content="任务处理完成", type="success"),
         )
+        write_task_status(task_id, "completed", "任务处理完成")
     except asyncio.CancelledError:
         logger.info(f"任务 {task_id} 被取消")
         await redis_manager.publish_message(
             task_id,
             SystemMessage(content="任务已停止", type="warning"),
         )
+        write_task_status(task_id, "cancelled", "任务已停止")
     except Exception as e:
         logger.error(f"任务 {task_id} 续传失败: {e}")
         await redis_manager.publish_message(
             task_id,
             SystemMessage(content=f"任务续传失败: {str(e)}", type="error"),
         )
+        write_task_status(task_id, "failed", str(e))
     finally:
         _active_tasks.pop(task_id, None)
         user_input_queue.clear(task_id)
         if task_completed:
-            md_2_docx(task_id)
+            try:
+                md_2_docx(task_id)
+            except Exception as e:
+                logger.error(f"任务 {task_id} DOCX 转换失败: {e}")
+                await redis_manager.publish_message(
+                    task_id,
+                    SystemMessage(
+                        content=f"DOCX 转换失败: {str(e)}，Markdown/PDF 结果不受影响",
+                        type="warning",
+                    ),
+                )

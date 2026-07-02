@@ -8,6 +8,13 @@ from app.routers import modeling_router, ws_router, common_router, files_router
 from app.utils.log_util import logger
 from fastapi.staticfiles import StaticFiles
 from app.utils.cli import get_ascii_banner, center_cli_str
+from app.config.setting import settings
+
+cors_allow_origins = (
+    settings.CORS_ALLOW_ORIGINS
+    if isinstance(settings.CORS_ALLOW_ORIGINS, list)
+    else [settings.CORS_ALLOW_ORIGINS]
+)
 
 
 @asynccontextmanager
@@ -39,7 +46,7 @@ app.include_router(files_router.router)
 # 跨域 CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -11,6 +11,7 @@ from app.config.setting import settings
 from app.utils.common_utils import WORK_DIR_ROOT, ensure_safe_task_id, get_config_template
 from app.schemas.enums import CompTemplate
 from app.services.redis_manager import redis_manager
+from app.services.task_status import read_task_status
 from app.utils.log_util import logger
 
 router = APIRouter()
@@ -45,8 +46,9 @@ async def _load_task_messages_from_file(task_id: str) -> list[dict]:
     """
     safe_task_id = _require_safe_task_id(task_id)
     message_file = Path("logs/messages") / f"{safe_task_id}.json"
+    jsonl_file = Path("logs/messages") / f"{safe_task_id}.jsonl"
     if not message_file.exists():
-        return []
+        return _load_task_messages_from_jsonl(jsonl_file)
 
     try:
         async with async_open(message_file, "r", encoding="utf-8") as f:
@@ -55,7 +57,26 @@ async def _load_task_messages_from_file(task_id: str) -> list[dict]:
         return data if isinstance(data, list) else []
     except Exception as e:
         logger.error(f"读取任务消息文件失败: {str(e)}")
+        return _load_task_messages_from_jsonl(jsonl_file)
+
+
+def _load_task_messages_from_jsonl(message_file: Path) -> list[dict]:
+    """从 JSONL fallback 文件读取历史消息。"""
+    if not message_file.exists():
         return []
+    messages: list[dict] = []
+    try:
+        with open(message_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                data = json.loads(line)
+                if isinstance(data, dict):
+                    messages.append(data)
+    except Exception as e:
+        logger.error(f"读取任务 JSONL 消息失败: {str(e)}")
+    return messages
 
 
 @router.get("/")
@@ -137,6 +158,7 @@ async def list_tasks():
                 os.path.join(task_path, "candidate_manifest.json")
             ),
             "checkpoint": os.path.exists(os.path.join(task_path, "checkpoint.json")),
+            "task_status": os.path.exists(os.path.join(task_path, "task_status.json")),
         }
 
         # 获取任务信息
@@ -151,6 +173,9 @@ async def list_tasks():
             "has_checkpoint": files_exist["checkpoint"],
             "files": files_exist,
         }
+        persisted_status = read_task_status(task_path)
+        if persisted_status and isinstance(persisted_status.get("status"), str):
+            task_info["status"] = persisted_status["status"]
         if task_info["has_result"]:
             task_info["status"] = "completed"
 
@@ -187,7 +212,11 @@ async def list_tasks():
                             task_info["status"] = "completed"
                         elif "失败" in content or "停止" in content:
                             if not task_info["has_result"]:
-                                task_info["status"] = "unknown"
+                                task_info["status"] = (
+                                    "interrupted"
+                                    if files_exist["checkpoint"]
+                                    else "failed"
+                                )
 
                     # 未完成且没有结果文件时，视为仍在运行；若存在检查点，
                     # 说明进程曾中断过，标记为可续传的 "interrupted"

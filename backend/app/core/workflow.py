@@ -93,12 +93,22 @@ class MathModelWorkFlow(WorkFlow):
             timeout=3000,
         )
 
-        assert settings.OPENALEX_EMAIL is not None, "OPENALEX_EMAIL 未配置"
-        scholar = OpenAlexScholar(
-            task_id=self.task_id,
-            email=settings.OPENALEX_EMAIL,
-            api_key=settings.OPENALEX_API_KEY,
-        )
+        scholar = None
+        if settings.OPENALEX_EMAIL:
+            scholar = OpenAlexScholar(
+                task_id=self.task_id,
+                email=settings.OPENALEX_EMAIL,
+                api_key=settings.OPENALEX_API_KEY,
+            )
+        else:
+            logger.warning("OPENALEX_EMAIL 未配置，文献检索工具将不可用")
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(
+                    content="OpenAlex Email 未配置，已跳过文献检索功能",
+                    type="warning",
+                ),
+            )
 
         await redis_manager.publish_message(
             self.task_id,

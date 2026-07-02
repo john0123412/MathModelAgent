@@ -4,8 +4,10 @@ import redis.asyncio as aioredis
 from typing import Optional
 import json
 from pathlib import Path
+import asyncio
 from app.config.setting import settings
 from app.schemas.response import Message
+from app.utils.common_utils import ensure_safe_task_id
 from app.utils.log_util import logger
 
 
@@ -17,6 +19,12 @@ class RedisManager:
         # 创建消息存储目录
         self.messages_dir = Path("logs/messages")
         self.messages_dir.mkdir(parents=True, exist_ok=True)
+        self._message_locks: dict[str, asyncio.Lock] = {}
+
+    def _get_message_lock(self, task_id: str) -> asyncio.Lock:
+        if task_id not in self._message_locks:
+            self._message_locks[task_id] = asyncio.Lock()
+        return self._message_locks[task_id]
 
     async def get_client(self) -> aioredis.Redis:
         if self._client is None:
@@ -42,25 +50,34 @@ class RedisManager:
     async def _save_message_to_file(self, task_id: str, message: Message):
         """将消息保存到文件中，同一任务的消息保存在同一个文件中"""
         try:
+            safe_task_id = ensure_safe_task_id(task_id)
             # 确保目录存在
             self.messages_dir.mkdir(exist_ok=True)
 
             # 使用任务ID作为文件名
-            file_path = self.messages_dir / f"{task_id}.json"
-
-            # 读取现有消息（如果文件存在）
-            messages = []
-            if file_path.exists():
-                with open(file_path, "r", encoding="utf-8") as f:
-                    messages = json.load(f)
-
-            # 添加新消息
+            file_path = self.messages_dir / f"{safe_task_id}.json"
+            jsonl_path = self.messages_dir / f"{safe_task_id}.jsonl"
+            tmp_path = file_path.with_suffix(".json.tmp")
             message_data = message.model_dump()
-            messages.append(message_data)
 
-            # 保存所有消息到文件
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(messages, f, ensure_ascii=False, indent=2)
+            async with self._get_message_lock(safe_task_id):
+                # JSONL 追加便于在 JSON 损坏时恢复历史消息。
+                with open(jsonl_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(message_data, ensure_ascii=False) + "\n")
+
+                # 保持原 JSON 文件兼容前端历史接口。
+                messages = []
+                if file_path.exists():
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                    if isinstance(loaded, list):
+                        messages = loaded
+
+                messages.append(message_data)
+
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(messages, f, ensure_ascii=False, indent=2)
+                tmp_path.replace(file_path)
 
             logger.debug(f"消息已追加到文件: {file_path}")
         except Exception as e:

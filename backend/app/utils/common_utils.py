@@ -5,6 +5,7 @@ import shutil
 import datetime
 import hashlib
 import tomllib
+from pathlib import Path
 from app.schemas.enums import CompTemplate
 from app.utils.log_util import logger
 import re
@@ -12,6 +13,7 @@ import pypandoc  # type: ignore[import-unresolved]
 from app.config.setting import settings
 
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_INVALID_FILENAME_CHARS = {"/", "\\", ":", "\x00"}
 
 # 所有任务工作目录的根路径约定，供 create_work_dir/get_work_dir 及路由层复用，
 # 避免各处硬编码 "project/work_dir" 字符串。
@@ -44,6 +46,43 @@ def ensure_safe_task_id(task_id: str) -> str:
     return normalized
 
 
+def get_work_dir_root() -> str:
+    """获取工作目录根路径的绝对路径。"""
+    return os.path.abspath(WORK_DIR_ROOT)
+
+
+def ensure_safe_filename(filename: str) -> str:
+    """验证文件名安全性，防止路径遍历和跨目录写入。"""
+    normalized = (filename or "").strip()
+    if not normalized or normalized in {".", ".."}:
+        raise ValueError("非法文件名")
+    if any(char in normalized for char in _INVALID_FILENAME_CHARS):
+        raise ValueError("非法文件名")
+    if Path(normalized).name != normalized:
+        raise ValueError("非法文件名")
+    return normalized
+
+
+def resolve_work_dir(task_id: str) -> str:
+    """解析任务目录绝对路径，并确保位于工作目录根路径内。"""
+    safe_task_id = ensure_safe_task_id(task_id)
+    root = get_work_dir_root()
+    work_dir = os.path.abspath(os.path.join(root, safe_task_id))
+    if os.path.commonpath([root, work_dir]) != root:
+        raise ValueError("非法 task_id")
+    return work_dir
+
+
+def safe_join_work_dir(task_id: str, filename: str) -> str:
+    """安全拼接任务目录内文件路径。"""
+    work_dir = resolve_work_dir(task_id)
+    safe_filename = ensure_safe_filename(filename)
+    file_path = os.path.abspath(os.path.join(work_dir, safe_filename))
+    if os.path.commonpath([work_dir, file_path]) != work_dir:
+        raise ValueError("非法文件路径")
+    return file_path
+
+
 def create_work_dir(task_id: str) -> str:
     """为指定任务创建工作目录，并复制字体文件到工作目录。
 
@@ -53,8 +92,7 @@ def create_work_dir(task_id: str) -> str:
     Returns:
         工作目录路径。
     """
-    # 设置主工作目录和子目录
-    work_dir = os.path.join(WORK_DIR_ROOT, task_id)
+    work_dir = resolve_work_dir(task_id)
 
     try:
         # 创建目录，如果目录已存在也不会报错
@@ -107,7 +145,7 @@ def get_work_dir(task_id: str) -> str:
     Raises:
         FileNotFoundError: 工作目录不存在时抛出。
     """
-    work_dir = os.path.join(WORK_DIR_ROOT, task_id)
+    work_dir = resolve_work_dir(task_id)
     if os.path.exists(work_dir):
         return work_dir
     else:

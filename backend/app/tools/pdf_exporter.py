@@ -6,6 +6,15 @@ import subprocess
 from app.utils.log_util import logger
 
 
+PDF_HEADING_STYLE = (
+    r"header-includes=\ctexset{"
+    r"section={format={\centering\zihao{3}\heiti}},"
+    r"subsection={format={\zihao{4}\heiti}},"
+    r"subsubsection={format={\normalsize\heiti}}"
+    r"}"
+)
+
+
 def export_markdown_to_pdf(md_path: str, pdf_path: str, work_dir: str) -> dict:
     """将 Markdown 文件转换为 PDF（通过 pandoc + xelatex）。
 
@@ -50,12 +59,27 @@ def export_markdown_to_pdf(md_path: str, pdf_path: str, work_dir: str) -> dict:
         "-o",
         pdf_path,
         "--pdf-engine=xelatex",
+        "--from",
+        "markdown+tex_math_dollars+pipe_tables+raw_tex",
+        "--standalone",
         "-V",
-        "CJKmainfont=SimHei",
+        "documentclass=ctexart",
+        "-V",
+        "classoption=scheme=chinese",
+        "-V",
+        "papersize=a4",
+        "-V",
+        "CJKmainfont=SimSun",
+        "-V",
+        "CJKsansfont=SimHei",
         "-V",
         "mainfont=Times New Roman",
         "-V",
-        "geometry:margin=2.5cm",
+        "pagestyle=plain",
+        "-V",
+        PDF_HEADING_STYLE,
+        "-V",
+        "geometry:left=3.17cm,right=3.17cm,top=2.6cm,bottom=2.6cm",
         "-V",
         "fontsize=12pt",
         "--resource-path",

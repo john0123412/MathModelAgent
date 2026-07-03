@@ -422,6 +422,27 @@ class MathModelWorkFlow(WorkFlow):
                 key, None, writer_response.model_dump()
             )
 
+    def _write_modeler_plan(self, modeler_response: ModelerToCoder) -> None:
+        """将建模手方案保存为可见产物，便于用户检查和续传审计。"""
+        plan_json_path = os.path.join(self.work_dir, "modeler_plan.json")
+        plan_md_path = os.path.join(self.work_dir, "modeler_plan.md")
+        questions_solution = modeler_response.questions_solution
+
+        with open(plan_json_path, "w", encoding="utf-8") as f:
+            json.dump(
+                modeler_response.model_dump(),
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+
+        lines = ["# 建模手方案", ""]
+        for key, solution in questions_solution.items():
+            lines.extend([f"## {key}", "", str(solution).strip(), ""])
+
+        with open(plan_md_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines).rstrip() + "\n")
+
     async def _export_results(self, user_output: UserOutput) -> None:
         """保存结果并导出 PDF/LaTeX/候选清单（execute 与 resume 共享）。"""
         logger.info(user_output.get_res())
@@ -581,6 +602,11 @@ class MathModelWorkFlow(WorkFlow):
         )
 
         modeler_response = await modeler_agent.run(coordinator_response)
+        self._write_modeler_plan(modeler_response)
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(content="建模手建模完成，已生成 modeler_plan.md"),
+        )
 
         # 断点续传：协调者和建模手完成后立刻落盘一次检查点，
         # 后续每个 solution/write 阶段完成后再增量更新
@@ -668,6 +694,7 @@ class MathModelWorkFlow(WorkFlow):
         comp_template = CompTemplate(checkpoint.comp_template)
         format_output = FormatOutPut(checkpoint.format_output)
         modeler_response = ModelerToCoder.model_validate(checkpoint.modeler_response)
+        self._write_modeler_plan(modeler_response)
 
         await redis_manager.publish_message(
             self.task_id,

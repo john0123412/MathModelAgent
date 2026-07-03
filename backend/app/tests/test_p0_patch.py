@@ -24,6 +24,10 @@ class TestCandidateExporter(unittest.TestCase):
                 f.write("# demo")
             with open(os.path.join(work_dir, "res.pdf"), "w", encoding="utf-8") as f:
                 f.write("%PDF-1.4 fake")
+            with open(os.path.join(work_dir, "modeler_plan.md"), "w", encoding="utf-8") as f:
+                f.write("# 建模手方案")
+            with open(os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8") as f:
+                json.dump({"questions_solution": {"ques1": "demo"}}, f)
             with open(os.path.join(work_dir, "export_status.json"), "w", encoding="utf-8") as f:
                 json.dump({"pdf": {"success": True}}, f)
 
@@ -47,6 +51,10 @@ class TestCandidateExporter(unittest.TestCase):
 
             self.assertEqual(manifest["files"]["res_md"], "res.md")
             self.assertEqual(manifest["files"]["res_pdf"], "res.pdf")
+            self.assertEqual(manifest["files"]["modeler_plan_md"], "modeler_plan.md")
+            self.assertEqual(
+                manifest["files"]["modeler_plan_json"], "modeler_plan.json"
+            )
             self.assertEqual(manifest["files"]["export_status"], "export_status.json")
             self.assertIsNone(manifest["files"]["res_docx"])
 

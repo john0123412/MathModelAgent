@@ -322,6 +322,9 @@ pnpm run dev
 运行的结果和产生在`backend/project/work_dir/xxx/*`目录下
 - notebook.ipynb: 保存运行过程中产生的代码
 - res.md: 保存最后运行产生的结果为 markdown 格式
+- modeler_plan.md / modeler_plan.json: 建模手生成的结构化建模方案，便于在代码手执行前检查建模思路
+
+上传带有多个附件的赛题时，建议在 WebUI 第一页一次多选所有题面、数据、图片、压缩包等附件；如果附件来自一个目录且文件很多，可以先压缩为 zip 后上传。第二页仍建议粘贴主题面正文，避免模型先在附件中定位题目而降低稳定性。
 
 需要自定义自定义提示词模板 template ？
 Prompt Inject : [prompt](./backend/app/config/md_template.toml)

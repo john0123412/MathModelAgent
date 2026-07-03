@@ -8,6 +8,56 @@ import { computed } from "vue";
 
 const taskStore = useTaskStore();
 
+function extractJsonObject(content: string) {
+	const withoutFence = content
+		.replace(/```json\n?/g, "")
+		.replace(/```/g, "")
+		.trim();
+
+	try {
+		return JSON.parse(withoutFence);
+	} catch {
+		// Some models prepend short prose before the JSON object. Extract the
+		// first balanced object so the UI can still render historical plans.
+	}
+
+	const start = withoutFence.indexOf("{");
+	if (start < 0) return null;
+
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	for (let i = start; i < withoutFence.length; i++) {
+		const char = withoutFence[i];
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (char === "\\") {
+			escaped = true;
+			continue;
+		}
+		if (char === "\"") {
+			inString = !inString;
+			continue;
+		}
+		if (inString) continue;
+		if (char === "{") depth++;
+		if (char === "}") {
+			depth--;
+			if (depth === 0) {
+				try {
+					return JSON.parse(withoutFence.slice(start, i + 1));
+				} catch {
+					return null;
+				}
+			}
+		}
+	}
+
+	return null;
+}
+
 // ---- Computed ----
 
 /** 获取最新的协调者消息 */
@@ -22,12 +72,7 @@ const coordinatorData = computed(() => {
 
 	try {
 		const content = latestCoordinatorMessage.value.content;
-		// 移除可能的```json标记
-		const cleanContent = content
-			.replace(/```json\n?/, "")
-			.replace(/```$/, "")
-			.trim();
-		return JSON.parse(cleanContent);
+		return extractJsonObject(content);
 	} catch (error) {
 		console.error("解析CoordinatorMessage失败:", error);
 		return null;
@@ -46,12 +91,7 @@ const modelerData = computed(() => {
 
 	try {
 		const content = latestModelerMessage.value.content;
-		// 移除可能的```json标记
-		const cleanContent = content
-			.replace(/```json\n?/, "")
-			.replace(/```$/, "")
-			.trim();
-		return JSON.parse(cleanContent);
+		return extractJsonObject(content);
 	} catch (error) {
 		console.error("解析ModelerMessage失败:", error);
 		return null;

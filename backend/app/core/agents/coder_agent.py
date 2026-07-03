@@ -1,6 +1,9 @@
 """代码手 Agent 模块，负责生成和执行 Python 代码完成建模任务。"""
 
 import asyncio
+import ast
+import json
+import re
 from typing import Callable
 from app.core.agents.agent import Agent
 from app.config.setting import settings, ApiType
@@ -12,13 +15,56 @@ from app.core.llm.llm import LLM
 from app.schemas.A2A import CoderToWriter
 from app.core.prompts import CODER_PROMPT
 from app.utils.common_utils import get_current_files
-import json
 from app.core.prompts import get_reflection_prompt
 from app.core.functions import coder_tools, coder_tools_anthropic
 
 # TODO: 时间等待过久，stop 进程
 # TODO: 支持 cuda
 # TODO: 引入创新方案：
+
+_FINAL_OUTPUT_MARKERS = (
+    "项目完成",
+    "任务完成",
+    "交付完成",
+    "所有文件已生成",
+    "所有文件均已生成",
+    "最终完成",
+    "核心输出",
+)
+
+_PARENT_PATH_PATTERN = re.compile(r"(^|[\\/])\.\.([\\/]|$)")
+_WORK_DIR_PATH_PATTERN = re.compile(
+    r"(^|[\\/])(?:backend[\\/])?project[\\/]work_dir([\\/]|$)"
+)
+
+
+def _looks_like_final_tool_output(output: str) -> bool:
+    """判断工具输出是否明显是收尾总结，避免模型反复生成完成证书/总结。"""
+    if not output:
+        return False
+    return any(marker in output for marker in _FINAL_OUTPUT_MARKERS)
+
+
+def _iter_string_literals(code: str):
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        yield code
+        return
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            yield node.value
+
+
+def _find_cross_task_path(code: str) -> str | None:
+    """检测模型生成代码是否试图读取当前任务目录之外的历史任务文件。"""
+    for value in _iter_string_literals(code):
+        normalized = value.replace("\\", "/")
+        if _PARENT_PATH_PATTERN.search(normalized):
+            return value
+        if _WORK_DIR_PATH_PATTERN.search(normalized):
+            return value
+    return None
 
 
 class CoderAgent(Agent):
@@ -89,6 +135,7 @@ class CoderAgent(Agent):
 
         retry_count = 0
         last_error_message = ""
+        consecutive_final_outputs = 0
 
         while True:
             if self.max_retries is not None and retry_count >= self.max_retries:
@@ -130,7 +177,12 @@ class CoderAgent(Agent):
                     tool_call = response.tool_calls[0]
                     tool_id = tool_call.id
 
-                    if tool_call.name == "execute_code":
+                    is_execute_code_tool = (
+                        tool_call.name == "execute_code"
+                        or tool_call.name.startswith("CompatExecuteCode")
+                    )
+
+                    if is_execute_code_tool:
                         logger.info(f"调用工具: {tool_call.name}")
                         await redis_manager.publish_message(
                             self.task_id,
@@ -140,6 +192,48 @@ class CoderAgent(Agent):
                         )
 
                         code = json.loads(tool_call.arguments)["code"]
+                        unsafe_path = _find_cross_task_path(code)
+                        if unsafe_path is not None:
+                            logger.warning(f"拒绝跨任务目录文件访问: {unsafe_path}")
+                            assistant_msg: dict = {
+                                "role": "assistant",
+                                "content": response.content,
+                            }
+                            if response.reasoning_content:
+                                assistant_msg["reasoning_content"] = response.reasoning_content
+                            assistant_msg["tool_calls"] = [
+                                {
+                                    "id": tc.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tc.name,
+                                        "arguments": tc.arguments,
+                                    },
+                                }
+                                for tc in response.tool_calls
+                            ]
+                            await self.append_chat_history(assistant_msg)
+                            await self.append_chat_history(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tool_id,
+                                    "name": tool_call.name,
+                                    "content": (
+                                        "安全限制：代码不得读取当前任务目录之外的文件，"
+                                        f"已拒绝路径 {unsafe_path!r}。"
+                                        "请只使用当前任务目录中的文件；如果缺少模板或数据，"
+                                        "请在当前目录直接创建所需输出文件。"
+                                    ),
+                                }
+                            )
+                            await redis_manager.publish_message(
+                                self.task_id,
+                                SystemMessage(
+                                    content="代码手拒绝跨任务目录文件访问",
+                                    type="error",
+                                ),
+                            )
+                            continue
 
                         await redis_manager.publish_message(
                             self.task_id,
@@ -178,7 +272,7 @@ class CoderAgent(Agent):
                                 {
                                     "role": "tool",
                                     "tool_call_id": tool_id,
-                                    "name": "execute_code",
+                                    "name": tool_call.name,
                                     "content": error_message,
                                 }
                             )
@@ -204,12 +298,56 @@ class CoderAgent(Agent):
                                 {
                                     "role": "tool",
                                     "tool_call_id": tool_id,
-                                    "name": "execute_code",
+                                    "name": tool_call.name,
                                     "content": text_to_gpt,
                                 }
                             )
+                            if _looks_like_final_tool_output(text_to_gpt):
+                                consecutive_final_outputs += 1
+                            else:
+                                consecutive_final_outputs = 0
+
+                            if consecutive_final_outputs >= 2:
+                                logger.info("连续检测到完成性工具输出，自动收束代码手任务")
+                                await redis_manager.publish_message(
+                                    self.task_id,
+                                    SystemMessage(content="代码手检测到任务已完成，自动收束"),
+                                )
+                                return CoderToWriter(
+                                    code_response=text_to_gpt,
+                                    created_images=await self.code_interpreter.get_created_images(
+                                        subtask_title
+                                    ),
+                                )
                             # 成功执行后继续循环，等待下一步指令
                             continue
+                    else:
+                        logger.warning(f"不支持的工具调用: {tool_call.name}")
+                        assistant_msg: dict = {"role": "assistant", "content": response.content}
+                        if response.reasoning_content:
+                            assistant_msg["reasoning_content"] = response.reasoning_content
+                        assistant_msg["tool_calls"] = [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {"name": tc.name, "arguments": tc.arguments},
+                            }
+                            for tc in response.tool_calls
+                        ]
+                        await self.append_chat_history(assistant_msg)
+                        await self.append_chat_history(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_id,
+                                "name": tool_call.name,
+                                "content": (
+                                    f"不支持工具 {tool_call.name}。"
+                                    "请只使用 execute_code 工具完成代码执行；"
+                                    "如无需执行代码，请直接给出最终结果，不要再调用其他工具。"
+                                ),
+                            }
+                        )
+                        continue
                 else:
                     # 没有工具调用，表示任务完成
                     logger.info("没有工具调用，任务完成")

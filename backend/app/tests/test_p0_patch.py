@@ -106,13 +106,23 @@ class TestFilesRouterUsesSettingsServerHost(unittest.TestCase):
         import asyncio
 
         import app.routers.files_router as files_router
+        from app.utils import common_utils
 
-        with mock.patch.object(
-            files_router.settings, "SERVER_HOST", "http://localhost:9999"
-        ):
-            result = asyncio.run(
-                files_router.get_download_url(task_id="t1", filename="res.md")
-            )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            task_dir = os.path.join(temp_dir, "t1")
+            os.makedirs(task_dir, exist_ok=True)
+            with open(os.path.join(task_dir, "res.md"), "w", encoding="utf-8") as f:
+                f.write("# demo")
+
+            with (
+                mock.patch.object(common_utils, "WORK_DIR_ROOT", temp_dir),
+                mock.patch.object(
+                    files_router.settings, "SERVER_HOST", "http://localhost:9999"
+                ),
+            ):
+                result = asyncio.run(
+                    files_router.get_download_url(task_id="t1", filename="res.md")
+                )
 
         self.assertEqual(
             result["download_url"], "http://localhost:9999/static/t1/res.md"

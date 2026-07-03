@@ -197,15 +197,14 @@ const handleSubmit = async () => {
         <div
           class="border-2 border-dashed rounded-lg p-8 text-center hover:border-primary/50 transition-colors cursor-pointer"
           @click="() => fileInput?.click()">
-          <input type="file" ref="fileInput" class="hidden" @change="handleFileUpload" accept=".txt,.csv,.xlsx"
-            multiple>
+          <input type="file" ref="fileInput" class="hidden" @change="handleFileUpload" multiple>
           <div class="mx-auto w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
             <FileUp class="w-6 h-6 text-primary" />
           </div>
           <div>
             <p class="text-lg font-medium">拖拽数据集到此处或点击上传</p>
             <p class="text-sm text-muted-foreground mt-1">
-              支持 .txt, .csv, .xlsx 等格式文件（可多选）
+              支持题面、数据、图片和压缩包等附件（可多选）
             </p>
             <div v-if="uploadedFiles.length > 0" class="text-sm text-green-600 mt-1">
               已上传文件:

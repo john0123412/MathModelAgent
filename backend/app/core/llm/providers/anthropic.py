@@ -107,6 +107,9 @@ class AnthropicProvider(BaseProvider):
         """将 OpenAI tools 格式转为 Anthropic 格式。"""
         converted = []
         for tool in tools:
+            if "name" in tool and "input_schema" in tool:
+                converted.append(tool)
+                continue
             if tool.get("type") == "function":
                 func = tool["function"]
                 converted.append({

@@ -20,6 +20,7 @@ from app.utils.common_utils import (
     md_2_docx,
     safe_join_work_dir,
 )
+from app.tools.candidate_exporter import write_candidate_manifest
 import os
 import asyncio
 import shutil
@@ -40,6 +41,12 @@ EXAMPLE_ROOT = os.path.abspath(os.path.join("app", "example", "example"))
 
 # 任务注册表: task_id -> (asyncio.Task, asyncio.Event)
 _active_tasks: Dict[str, Tuple[asyncio.Task, asyncio.Event]] = {}
+
+
+def _finalize_docx_and_manifest(task_id: str) -> None:
+    """生成 DOCX 后刷新候选清单，确保 manifest 反映最终产物。"""
+    md_2_docx(task_id)
+    write_candidate_manifest(get_work_dir(task_id), task_id)
 
 
 class ValidateApiKeyRequest(BaseModel):
@@ -394,7 +401,7 @@ async def run_modeling_task_async(
         # 仅在正常完成时转换 md 为 docx
         if task_completed:
             try:
-                md_2_docx(task_id)
+                _finalize_docx_and_manifest(task_id)
             except Exception as e:
                 logger.error(f"任务 {task_id} DOCX 转换失败: {e}")
                 await redis_manager.publish_message(
@@ -516,7 +523,7 @@ async def run_resume_task_async(task_id: str):
         user_input_queue.clear(task_id)
         if task_completed:
             try:
-                md_2_docx(task_id)
+                _finalize_docx_and_manifest(task_id)
             except Exception as e:
                 logger.error(f"任务 {task_id} DOCX 转换失败: {e}")
                 await redis_manager.publish_message(

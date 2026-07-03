@@ -81,5 +81,36 @@ class TestTaskListStatus(unittest.TestCase):
         return asyncio.run(coro)
 
 
+class TestTaskFinalization(unittest.TestCase):
+    """验证任务最终收尾会在 DOCX 生成后刷新候选清单。"""
+
+    def test_docx_conversion_refreshes_candidate_manifest(self):
+        import app.routers.modeling_router as modeling_router
+        from app.tools.candidate_exporter import write_candidate_manifest
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            task_id = "task-1"
+            task_dir = os.path.join(temp_dir, task_id)
+            os.makedirs(task_dir, exist_ok=True)
+            with open(os.path.join(task_dir, "res.md"), "w", encoding="utf-8") as f:
+                f.write("# demo")
+            write_candidate_manifest(task_dir, task_id)
+
+            def fake_md_2_docx(_task_id):
+                with open(os.path.join(task_dir, "res.docx"), "wb") as f:
+                    f.write(b"docx")
+
+            with (
+                mock.patch.object(modeling_router, "get_work_dir", return_value=task_dir),
+                mock.patch.object(modeling_router, "md_2_docx", side_effect=fake_md_2_docx),
+            ):
+                modeling_router._finalize_docx_and_manifest(task_id)
+
+            with open(os.path.join(task_dir, "candidate_manifest.json"), encoding="utf-8") as f:
+                manifest = json.load(f)
+
+        self.assertEqual(manifest["files"]["res_docx"], "res.docx")
+
+
 if __name__ == "__main__":
     unittest.main()

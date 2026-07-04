@@ -1,7 +1,14 @@
 """Smoke test for PDF export in Docker or a prepared local backend env.
 
+Purpose:
+    Verify that default/cumcm2025 direct PDF export and LaTeX sidecar export
+    can generate non-empty PDF files.
+
 Run from backend/:
     uv run python scripts/smoke_pdf_export.py
+
+Requires:
+    pandoc and xelatex on PATH.
 """
 
 from __future__ import annotations

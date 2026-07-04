@@ -2,6 +2,27 @@
 
 ## Reference-Style PDF Export
 
+> **Update**: the Docker backend image now ships `pandoc`/`xelatex`/TeX Live
+> by default, so containers no longer skip PDF/LaTeX sidecar generation for
+> lack of tooling. Container-side output uses open-source fallback fonts
+> (Liberation Serif/Mono/Sans, Noto Serif/Sans CJK SC, AR PL KaitiM GB) when
+> the official Windows fonts (Times New Roman/SimSun/etc.) aren't installed
+> in the image — good enough for automated preview, but before a real
+> submission you should regenerate the PDF on a Windows machine that has the
+> real fonts. Two local tools are available now:
+>
+> - **`backend/app/tools/export_cli.py`** (recommended): supports both
+>   `default`/`cumcm2025` layouts, detects installed fonts with clear
+>   warnings on fallback, lets you override fonts (`--mainfont` etc.), and
+>   can export the LaTeX sidecar project for manual compilation. See
+>   `STARTUP.md`'s "Windows 本地 PDF 导出 / 手动编译" section.
+> - **`backend/scripts/export_pdf_local.py`** (described below): the earlier
+>   task_id-driven script. Only produces the default reference layout (no
+>   `cumcm2025` awareness), font names are plain CLI arguments with no
+>   detection/fallback, but it's convenient when you just want to point at a
+>   Docker task directory (`backend/project/work_dir/<task_id>/`) and get a
+>   default-layout PDF with minimal fuss.
+
 Use the host machine's Pandoc and TeX Live to generate a PDF for a completed
 task without installing heavy TeX dependencies inside Docker:
 
@@ -24,8 +45,11 @@ The default export follows the reference paper layout:
 - Western font: `Times New Roman`.
 - Margins: left/right `3.17cm`, top/bottom `2.6cm`.
 
-This is the preferred path when Docker skips PDF generation because
-container-side `pandoc` or `xelatex` is unavailable.
+This remains a handy path for a quick default-layout PDF from a Docker task
+directory, or as a fallback if the container-side PDF is missing for any
+reason. For `cumcm2025`-profile output, font detection/fallback reporting, or
+a manual-compile LaTeX sidecar workflow, use `app.tools.export_cli` instead
+(see the update note above).
 
 Useful options:
 

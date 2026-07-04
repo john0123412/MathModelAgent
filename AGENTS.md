@@ -78,7 +78,7 @@ B 需要 1 小时机器时间、2 小时人工时间，利润 30 元；
 - 工作目录存在 `res.md`、`res.json`、`res.docx`、`candidate_manifest.json`。
 - 续传相关任务存在 `checkpoint.json`、`variable_snapshot.pkl`、`variable_snapshot_meta.json`。
 - 后端日志出现变量快照恢复或增量重放相关信息，例如 `变量快照已恢复`、`快照后增量重放`。
-- Docker 镜像未安装 `pandoc` 时，PDF/LaTeX sidecar 可能被跳过；只要 Markdown/Word/JSON 成功且任务状态为 `completed`，不视为主流程失败。
+- Docker 镜像已装 `pandoc`/`xelatex`/TeX Live，PDF/LaTeX sidecar 默认应能生成；官方字体（Times New Roman/SimSun 等）缺失时会自动 fallback 到开源等效字体（Liberation/Noto CJK/AR PL KaitiM GB），不影响任务成功。如果容器环境异常导致 PDF/LaTeX sidecar 仍被跳过，只要 Markdown/Word/JSON 成功且任务状态为 `completed`，不视为主流程失败；正式提交前建议改用 Windows 本地导出（`backend/app/tools/export_cli.py`，见 STARTUP.md）用真实系统字体重新生成一次。
 
 ## 文献搜索与 Tavily
 

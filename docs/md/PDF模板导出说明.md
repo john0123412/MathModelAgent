@@ -2,6 +2,26 @@
 
 项目 PDF 导出以参考论文版式为目标，使用 Pandoc 调用 XeLaTeX 生成。
 
+> **更新**：Docker 镜像现在已经装好 `pandoc`/`xelatex`/TeX Live（含中文字体包），
+> 容器内可以直接生成 PDF/LaTeX sidecar，不再像早期版本那样默认跳过。容器内没有
+> Times New Roman/SimSun 等官方 Windows 字体，会在编译期自动检测并 fallback 到
+> 开源等效字体（Liberation Serif/Mono/Sans、Noto Serif/Sans CJK SC、AR PL
+> KaitiM GB），用于**自动化预览**，足以保证任务不因为字体缺失而失败，但排版观感
+> 和官方规范会有细微差异。
+>
+> 正式提交前，建议在已装有官方字体的 Windows 本机重新导出一次 PDF，本机默认会
+> 优先使用真实系统字体。现在有两个本机导出工具：
+>
+> - **`backend/app/tools/export_cli.py`**（推荐）：支持 `default`/`cumcm2025`
+>   两种排版配置、字体检测+清晰的缺失提示、`--mainfont` 等参数手动覆盖字体、
+>   以及导出 LaTeX sidecar 项目供手动编译。用法见 `STARTUP.md` 的
+>   "Windows 本地 PDF 导出 / 手动编译"一节。
+> - **`backend/scripts/export_pdf_local.py`**（本文档下方描述的脚本）：更早期的
+>   task_id 驱动脚本，只支持默认参考排版（不感知 `cumcm2025` 等 profile），字体
+>   名通过参数直接指定、没有自动检测/fallback，胜在读取 Docker 任务目录
+>   （`backend/project/work_dir/<task_id>/`）更方便，适合"直接补一份默认排版
+>   PDF"这种最简场景。
+
 ## 当前推荐流程
 
 Docker 后端默认负责完成建模主流程，并生成：
@@ -11,15 +31,14 @@ Docker 后端默认负责完成建模主流程，并生成：
 - `res.docx`
 - `candidate_manifest.json`
 - 题目要求的中间结果文件，例如 `result1.xlsx`、`result2.xlsx`、`result3.xlsx`
+- `res.pdf`（容器内 pandoc/xelatex 已装好，正常情况下会一并生成；字体是开源
+  fallback 字体，仅用于自动化预览）
 
-PDF 推荐在 Windows 本机用脚本补生成。原因是 Docker 镜像默认不安装
-Pandoc / TeX Live，容器内缺少工具时会跳过 PDF，但不会影响 Markdown、JSON
-和 Word 主产物。
-
-推荐路径是：
+正式提交前，PDF 推荐在 Windows 本机用官方字体重新生成一份。推荐路径是：
 
 ```text
-Docker 生成 res.md/res.docx -> Windows 本机脚本读取 res.md -> Pandoc + XeLaTeX 生成 res.pdf
+Docker 生成 res.md/res.docx（+ 自动化预览用的 res.pdf） ->
+Windows 本机工具读取 res.md -> Pandoc + XeLaTeX 用真实系统字体重新生成 res.pdf
 ```
 
 注意：当前模板 PDF 不是从 `res.docx` 转换而来，而是从 `res.md` 直接生成。
@@ -43,8 +62,9 @@ D:\Scoop\shims\pandoc.exe
 D:\texlive\2026\bin\windows\xelatex.exe
 ```
 
-Docker 后端镜像默认可能没有安装 Pandoc 或 TeX Live。容器中缺少工具时，
-主流程会跳过 PDF，但仍会生成 `res.md`、`res.json`、`res.docx` 和
+Docker 后端镜像现在默认已安装 Pandoc / TeX Live（含 `fonts-liberation`/
+`fonts-noto-cjk` 等开源字体作为 fallback）。极端情况下容器环境异常导致工具
+缺失时，主流程会跳过 PDF，但仍会生成 `res.md`、`res.json`、`res.docx` 和
 `candidate_manifest.json`。
 
 ## 版式要求
@@ -159,10 +179,19 @@ Docker Compose 服务和 `win_start.bat` 是两条不同启动路径：
 
 ### Docker 已完成任务但没有 PDF
 
-这是正常情况，通常是容器内没有 Pandoc 或 TeX Live。直接运行：
+Docker 镜像现在默认装有 Pandoc/TeX Live，正常情况下应该会生成 `res.pdf`。
+如果确实没有，先看后端日志里 `tex_export_status.json`/PDF 相关的 `reason`
+字段定位原因；如果只是想尽快补一份 PDF，可以直接在 Windows 本机运行：
 
 ```powershell
 python backend\scripts\export_pdf_local.py <task_id>
+```
+
+或者用支持更多 profile/字体检测的新工具（见文首"更新"提示）：
+
+```powershell
+cd backend
+uv run python -m app.tools.export_cli pdf --input project\work_dir\<task_id>\res.md --output project\work_dir\<task_id>\res.pdf --profile cumcm2025 --local
 ```
 
 ### 已经有 DOCX，为什么还用 Markdown 生成 PDF

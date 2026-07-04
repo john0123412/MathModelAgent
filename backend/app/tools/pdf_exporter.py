@@ -4,7 +4,7 @@ import os
 import shutil
 import subprocess
 from app.utils.log_util import logger
-from app.utils.font_utils import resolve_font, resolve_font_for_local, check_font_installed
+from app.utils import font_utils
 from app.schemas.enums import ExportProfile
 from app.tools.export_profiles import get_export_profile_config
 
@@ -25,7 +25,7 @@ def _resolve_pdf_variables(
     pdf_variables: list[str],
     font_overrides: dict[str, str] | None = None,
     local: bool = False,
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], list[dict]]:
     """构建最终传给 pandoc -V 的变量列表，并可选做字体检测/覆盖。
 
     行为分两条路径：
@@ -46,11 +46,12 @@ def _resolve_pdf_variables(
         不影响实际使用哪个字体（用户显式指定的值任何情况下都会原样使用）。
 
     Returns:
-        (resolved_variables, warnings)：warnings 仅在 local=True 时可能非空。
+        (resolved_variables, warnings, font_resolution)：warnings 仅在 local=True 时可能非空。
     """
     overrides = dict(font_overrides or {})
     resolved: list[str] = []
     warnings: list[str] = []
+    font_resolution: list[dict] = []
 
     for variable in pdf_variables:
         key, sep, value = variable.partition("=")
@@ -61,20 +62,45 @@ def _resolve_pdf_variables(
         if key in overrides:
             override_value = overrides.pop(key)
             if local:
-                installed = check_font_installed(override_value)
+                installed = font_utils.check_font_installed(override_value)
                 if installed is False:
                     warnings.append(
                         f"你指定的字体 '{override_value}'（{key}）在本机未检测到已安装，"
                         f"仍会按你的设置使用；如编译报字体找不到，请检查拼写或先安装该字体。"
                     )
             resolved.append(f"{key}={override_value}")
+            if key in _FONT_VARIABLE_KEYS:
+                font_resolution.append(
+                    {
+                        "variable": key,
+                        "preferred": value,
+                        "actual": override_value,
+                        "fallback": None,
+                        "source": "override",
+                    }
+                )
         elif key in _FONT_VARIABLE_KEYS:
             if local:
-                new_value, font_warnings = resolve_font_for_local(value)
+                new_value, font_warnings = font_utils.resolve_font_for_local(value)
                 warnings.extend(font_warnings)
             else:
-                new_value = resolve_font(value)
+                new_value = font_utils.resolve_font(value)
             resolved.append(f"{key}={new_value}")
+            fallback = font_utils.FONT_FALLBACKS.get(value)
+            source = "profile"
+            if fallback and new_value == fallback and new_value != value:
+                source = "fallback"
+            elif fallback and font_utils.check_font_installed(value) is None:
+                source = "unknown"
+            font_resolution.append(
+                {
+                    "variable": key,
+                    "preferred": value,
+                    "actual": new_value,
+                    "fallback": fallback,
+                    "source": source,
+                }
+            )
         else:
             resolved.append(variable)
 
@@ -82,15 +108,25 @@ def _resolve_pdf_variables(
     # （例如 CJKmonofont），追加为新变量。
     for key, value in overrides.items():
         if local:
-            installed = check_font_installed(value)
+            installed = font_utils.check_font_installed(value)
             if installed is False:
                 warnings.append(
                     f"你指定的字体 '{value}'（{key}）在本机未检测到已安装，"
                     f"仍会按你的设置使用；如编译报字体找不到，请检查拼写或先安装该字体。"
                 )
         resolved.append(f"{key}={value}")
+        if key in _FONT_VARIABLE_KEYS:
+            font_resolution.append(
+                {
+                    "variable": key,
+                    "preferred": None,
+                    "actual": value,
+                    "fallback": None,
+                    "source": "override",
+                }
+            )
 
-    return resolved, warnings
+    return resolved, warnings, font_resolution
 
 
 def export_markdown_to_pdf(
@@ -132,6 +168,7 @@ def export_markdown_to_pdf(
         "stderr": "",
         "export_profile": get_export_profile_config(export_profile).key.value,
         "font_warnings": [],
+        "font_resolution": [],
     }
 
     if not os.path.exists(md_path):
@@ -163,10 +200,11 @@ def export_markdown_to_pdf(
         "--resource-path",
         work_dir,
     ]
-    resolved_variables, font_warnings = _resolve_pdf_variables(
+    resolved_variables, font_warnings, font_resolution = _resolve_pdf_variables(
         profile_config.pdf_variables, font_overrides, local_fonts
     )
     result["font_warnings"] = font_warnings
+    result["font_resolution"] = font_resolution
     for variable in resolved_variables:
         command.extend(["-V", variable])
     command.extend(profile_config.pdf_extra_args)

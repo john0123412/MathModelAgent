@@ -209,6 +209,15 @@ uv run python -m app.tools.export_cli pdf --input path\to\res.md --output path\t
 - `--local` 是关键参数：不加它会走跟 Docker 一样的策略（也能跑，但检测到 Times New Roman 缺失时不会给你打印本机安装状态提示，只写日志）；加了以后会明确报告每个字体是否命中本机已安装的版本，并且——只要你没有用下面的 `--mainfont` 等参数手动指定——官方字体检测到确实已经装了才会使用，检测不到就按开源字体回退并打印原因，不会不声不响换成别的字体。
 - `--profile` 可选 `default` / `cumcm2025`，与 Docker 端行为一致。
 
+仓库内提供了一个最小样例，可直接用来检查 Windows 本地导出链路：
+
+```powershell
+cd backend
+uv run python -m app.tools.export_cli check
+uv run python -m app.tools.export_cli pdf --input examples\pdf_export_sample\res.md --output examples\pdf_export_sample\res.pdf --profile cumcm2025 --local --font-config examples\pdf_export_sample\fonts.json
+uv run python -m app.tools.export_cli latex --input examples\pdf_export_sample\res.md --work-dir examples\pdf_export_sample --profile cumcm2025
+```
+
 **方式二：导出 LaTeX sidecar 项目后手动编译**（更稳，能看到完整编译日志，也能自己再精修排版）：
 
 ```powershell

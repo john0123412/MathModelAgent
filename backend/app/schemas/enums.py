@@ -15,6 +15,12 @@ class FormatOutPut(str, Enum):
     LaTeX = "LaTeX"
 
 
+class ExportProfile(str, Enum):
+    """导出排版配置。"""
+    DEFAULT = "default"
+    CUMCM2025 = "cumcm2025"
+
+
 class AgentType(str, Enum):
     """Agent 类型标识。"""
     COORDINATOR = "CoordinatorAgent"

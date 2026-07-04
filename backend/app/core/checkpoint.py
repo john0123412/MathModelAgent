@@ -22,6 +22,7 @@ class TaskCheckpoint(BaseModel):
     ques_all: str
     comp_template: str
     format_output: str
+    export_profile: str = "default"
     questions: dict[str, str | int]
     ques_count: int
     modeler_response: dict  # ModelerToCoder.model_dump()

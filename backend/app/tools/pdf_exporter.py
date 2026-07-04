@@ -4,18 +4,16 @@ import os
 import shutil
 import subprocess
 from app.utils.log_util import logger
+from app.schemas.enums import ExportProfile
+from app.tools.export_profiles import get_export_profile_config
 
 
-PDF_HEADING_STYLE = (
-    r"header-includes=\ctexset{"
-    r"section={format={\centering\zihao{3}\heiti}},"
-    r"subsection={format={\zihao{4}\heiti}},"
-    r"subsubsection={format={\normalsize\heiti}}"
-    r"}"
-)
-
-
-def export_markdown_to_pdf(md_path: str, pdf_path: str, work_dir: str) -> dict:
+def export_markdown_to_pdf(
+    md_path: str,
+    pdf_path: str,
+    work_dir: str,
+    export_profile: ExportProfile | str | None = ExportProfile.DEFAULT,
+) -> dict:
     """将 Markdown 文件转换为 PDF（通过 pandoc + xelatex）。
 
     检查 md_path、pandoc、xelatex 是否可用，任一缺失则跳过转换并说明原因，
@@ -36,6 +34,7 @@ def export_markdown_to_pdf(md_path: str, pdf_path: str, work_dir: str) -> dict:
         "reason": "",
         "command": [],
         "stderr": "",
+        "export_profile": get_export_profile_config(export_profile).key.value,
     }
 
     if not os.path.exists(md_path):
@@ -53,6 +52,8 @@ def export_markdown_to_pdf(md_path: str, pdf_path: str, work_dir: str) -> dict:
         logger.warning(f"PDF 导出跳过: {result['reason']}")
         return result
 
+    profile_config = get_export_profile_config(export_profile)
+
     command = [
         "pandoc",
         md_path,
@@ -62,29 +63,12 @@ def export_markdown_to_pdf(md_path: str, pdf_path: str, work_dir: str) -> dict:
         "--from",
         "markdown+tex_math_dollars+pipe_tables+raw_tex",
         "--standalone",
-        "-V",
-        "documentclass=ctexart",
-        "-V",
-        "classoption=scheme=chinese",
-        "-V",
-        "papersize=a4",
-        "-V",
-        "CJKmainfont=SimSun",
-        "-V",
-        "CJKsansfont=SimHei",
-        "-V",
-        "mainfont=Times New Roman",
-        "-V",
-        "pagestyle=plain",
-        "-V",
-        PDF_HEADING_STYLE,
-        "-V",
-        "geometry:left=3.17cm,right=3.17cm,top=2.6cm,bottom=2.6cm",
-        "-V",
-        "fontsize=12pt",
         "--resource-path",
         work_dir,
     ]
+    for variable in profile_config.pdf_variables:
+        command.extend(["-V", variable])
+    command.extend(profile_config.pdf_extra_args)
     result["enabled"] = True
     result["command"] = command
 

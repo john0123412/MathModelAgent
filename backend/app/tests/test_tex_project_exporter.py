@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from app.schemas.enums import ExportProfile
 from app.tools.candidate_exporter import write_candidate_manifest
 from app.tools.tex_project_exporter import export_markdown_to_latex_project
 
@@ -98,6 +99,97 @@ class TestTexProjectExporterHappyPath(unittest.TestCase):
             with open(status_path, "r", encoding="utf-8") as f:
                 status = json.load(f)
             self.assertTrue(status["success"])
+
+
+@unittest.skipUnless(shutil.which("pandoc"), "本机未安装 pandoc，跳过真实转换用例")
+class TestTexProjectExporterCumcm2025Profile(unittest.TestCase):
+    """验证 export_profile=cumcm2025 会套用 gmcmthesis 模板并复制模板资源，
+    且不影响默认 profile 的既有行为（新增能力，不替换旧路径）。"""
+
+    def test_cumcm2025_profile_uses_gmcmthesis_and_copies_template_assets(self):
+        real_which = shutil.which
+
+        def which_side_effect(cmd, *args, **kwargs):
+            # 保留真实 pandoc 检测，禁用编译步骤，测试只关心文件生成结果。
+            if cmd == "pandoc":
+                return real_which(cmd)
+            return None
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            md_path = os.path.join(work_dir, "res.md")
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write("# 标题\n\n这是正文，包含公式 $E=mc^2$。")
+
+            with mock.patch(
+                "app.tools.tex_project_exporter.shutil.which",
+                side_effect=which_side_effect,
+            ):
+                result = export_markdown_to_latex_project(
+                    md_path, work_dir, export_profile=ExportProfile.CUMCM2025
+                )
+
+            self.assertTrue(result["enabled"])
+            self.assertTrue(result["success"], msg=result)
+            self.assertEqual(result["export_profile"], "cumcm2025")
+            self.assertEqual(result["template_key"], "zh/cumcm2025-gmcmthesis")
+
+            # 模板资源（gmcmthesis.cls、封面图片/PDF）应被复制进 latex_project。
+            self.assertIn("gmcmthesis.cls", result["template_assets"])
+            self.assertIn("figures/logo2025.png", result["template_assets"])
+            self.assertIn("figures/title2025.pdf", result["template_assets"])
+
+            latex_project_dir = os.path.join(work_dir, "latex_project")
+            self.assertTrue(
+                os.path.exists(os.path.join(latex_project_dir, "gmcmthesis.cls"))
+            )
+            self.assertTrue(
+                os.path.exists(
+                    os.path.join(latex_project_dir, "figures", "logo2025.png")
+                )
+            )
+
+            main_tex_path = os.path.join(latex_project_dir, "main.tex")
+            with open(main_tex_path, "r", encoding="utf-8") as f:
+                main_tex_content = f.read()
+            self.assertIn(r"\documentclass[bwprint]{gmcmthesis}", main_tex_content)
+            self.assertIn(r"\input{sections/imported_body}", main_tex_content)
+            # 兜底定义 \newcounter{none}，避免 pandoc 无标题 longtable 与
+            # caption 宏包冲突导致的 "No counter 'none' defined" 编译错误。
+            self.assertIn(r"\newcounter{none}", main_tex_content)
+
+    def test_default_profile_still_uses_ctexart_and_no_template_assets(self):
+        """确认新增 cumcm2025 分支没有改变默认 profile 的既有行为。"""
+        real_which = shutil.which
+
+        def which_side_effect(cmd, *args, **kwargs):
+            if cmd == "pandoc":
+                return real_which(cmd)
+            return None
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            md_path = os.path.join(work_dir, "res.md")
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write("# 标题\n\n正文内容。")
+
+            with mock.patch(
+                "app.tools.tex_project_exporter.shutil.which",
+                side_effect=which_side_effect,
+            ):
+                result = export_markdown_to_latex_project(
+                    md_path, work_dir, export_profile=ExportProfile.DEFAULT
+                )
+
+            self.assertTrue(result["success"], msg=result)
+            self.assertEqual(result["export_profile"], "default")
+            self.assertEqual(result["template_assets"], [])
+
+            main_tex_path = os.path.join(work_dir, "latex_project", "main.tex")
+            with open(main_tex_path, "r", encoding="utf-8") as f:
+                main_tex_content = f.read()
+            self.assertIn("ctexart", main_tex_content)
+            self.assertNotIn("gmcmthesis", main_tex_content)
+            # 默认 profile 同样受益于兜底 counter 修复。
+            self.assertIn(r"\newcounter{none}", main_tex_content)
 
 
 class TestCandidateManifestIncludesTexFields(unittest.TestCase):

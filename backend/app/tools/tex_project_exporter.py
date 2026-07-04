@@ -13,6 +13,8 @@ import shutil
 import subprocess
 import json
 from app.utils.log_util import logger
+from app.schemas.enums import ExportProfile
+from app.tools.export_profiles import get_export_profile_config
 
 _MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 % =============================================================================
@@ -33,6 +35,12 @@ _MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 \usepackage{hyperref}
 \usepackage{longtable}
 
+% pandoc 对无标题的 longtable 会输出 \def\LTcaptype{none}，若当前文档类/宏包
+% （如 caption）未定义名为 "none" 的计数器会导致编译报错，这里兜底定义一次。
+\makeatletter
+\@ifundefined{c@none}{\newcounter{none}}{}
+\makeatother
+
 % 图片可能位于 latex_project 本身、其上级 work_dir，或 sections 子目录
 \graphicspath{{./}{../}{sections/}}
 
@@ -42,6 +50,72 @@ _MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 
 \end{document}
 """
+
+_CUMCM2025_MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
+% =============================================================================
+%  CUMCM 2025 LaTeX sidecar（由 MathModelAgent 自动生成）
+%  模板资源来自 2025 年 LaTeX 模板：gmcmthesis.cls、figures/logo2025.png、
+%  figures/title2025.pdf。正文由 pandoc 从 res.md 转为 sections/imported_body.tex。
+%  本文件只负责套用竞赛模板外壳，不重写论文内容；最终提交前请人工校对封面信息、
+%  摘要/关键词位置、目录、附录和参考文献。
+% =============================================================================
+\documentclass[bwprint]{gmcmthesis}
+
+\usepackage{amsmath}
+\usepackage{pdfpages}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{longtable}
+
+% pandoc 对无标题的 longtable 会输出 \def\LTcaptype{none}，gmcmthesis.cls 依赖的
+% caption 宏包会据此查找名为 "none" 的计数器，这里兜底定义一次避免编译报错。
+\makeatletter
+\@ifundefined{c@none}{\newcounter{none}}{}
+\makeatother
+
+\numberwithin{figure}{section}
+\renewcommand{\thefigure}{\arabic{section}-\arabic{figure}}
+
+\title{数学建模论文}
+\baominghao{}
+\schoolname{}
+\membera{}
+\memberb{}
+\memberc{}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+\input{sections/imported_body}
+
+\end{document}
+"""
+
+
+def _copy_template_assets(template_dir: str | None, latex_project_dir: str) -> list[str]:
+    """Copy bundled template files into latex_project and return relative paths."""
+    if not template_dir or not os.path.isdir(template_dir):
+        return []
+
+    copied: list[str] = []
+    for root, dirs, files in os.walk(template_dir):
+        dirs[:] = [d for d in dirs if d not in {"__MACOSX", ".git", "__pycache__"}]
+        rel_root = os.path.relpath(root, template_dir)
+        target_root = (
+            latex_project_dir
+            if rel_root == "."
+            else os.path.join(latex_project_dir, rel_root)
+        )
+        os.makedirs(target_root, exist_ok=True)
+        for filename in files:
+            if filename.startswith("._") or filename == ".DS_Store":
+                continue
+            src = os.path.join(root, filename)
+            dst = os.path.join(target_root, filename)
+            shutil.copy2(src, dst)
+            copied.append(os.path.relpath(dst, latex_project_dir).replace(os.sep, "/"))
+    return sorted(copied)
 
 
 def _write_status(status_path: str, result: dict) -> None:
@@ -54,7 +128,10 @@ def _write_status(status_path: str, result: dict) -> None:
 
 
 def export_markdown_to_latex_project(
-    md_path: str, work_dir: str, template_key: str = "zh/cumcm-latex"
+    md_path: str,
+    work_dir: str,
+    template_key: str | None = None,
+    export_profile: ExportProfile | str | None = ExportProfile.DEFAULT,
 ) -> dict:
     """将 res.md 导出为一个可被外部继续精修的 LaTeX sidecar 项目。
 
@@ -77,13 +154,18 @@ def export_markdown_to_latex_project(
         main_tex/imported_body/reason/command/stderr/compile_attempted/
         compile_success/compile_reason。
     """
+    profile_config = get_export_profile_config(export_profile)
+    effective_template_key = template_key or profile_config.latex_template_key
+
     result = {
         "enabled": False,
         "success": False,
-        "template_key": template_key,
+        "export_profile": profile_config.key.value,
+        "template_key": effective_template_key,
         "latex_project_dir": None,
         "main_tex": None,
         "imported_body": None,
+        "template_assets": [],
         "reason": "",
         "command": [],
         "stderr": "",
@@ -156,10 +238,23 @@ def export_markdown_to_latex_project(
 
     result["imported_body"] = "latex_project/sections/imported_body.tex"
 
+    try:
+        result["template_assets"] = _copy_template_assets(
+            profile_config.latex_template_dir, latex_project_dir
+        )
+    except Exception as e:
+        result["reason"] = f"复制 LaTeX 模板资源失败: {e}"
+        logger.error(f"LaTeX sidecar 导出失败: {result['reason']}")
+        _write_status(status_path, result)
+        return result
+
     main_tex_path = os.path.join(latex_project_dir, "main.tex")
     try:
         with open(main_tex_path, "w", encoding="utf-8") as f:
-            f.write(_MAIN_TEX_TEMPLATE)
+            if profile_config.key == ExportProfile.CUMCM2025:
+                f.write(_CUMCM2025_MAIN_TEX_TEMPLATE)
+            else:
+                f.write(_MAIN_TEX_TEMPLATE)
     except Exception as e:
         result["reason"] = f"写入 main.tex 失败: {e}"
         logger.error(f"LaTeX sidecar 导出失败: {result['reason']}")

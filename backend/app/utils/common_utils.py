@@ -6,7 +6,8 @@ import datetime
 import hashlib
 import tomllib
 from pathlib import Path
-from app.schemas.enums import CompTemplate
+from app.schemas.enums import CompTemplate, ExportProfile
+from app.tools.export_profiles import get_export_profile_config
 from app.utils.log_util import logger
 import re
 import pypandoc  # type: ignore[import-unresolved]
@@ -228,7 +229,10 @@ def transform_link(task_id: str, content: str):
     return content
 
 
-def md_2_docx(task_id: str):
+def md_2_docx(
+    task_id: str,
+    export_profile: ExportProfile | str | None = ExportProfile.DEFAULT,
+):
     """将 Markdown 论文转换为 DOCX 格式。
 
     Args:
@@ -243,6 +247,11 @@ def md_2_docx(task_id: str):
         str(work_dir),
         "--standalone",
     ]
+    profile_config = get_export_profile_config(export_profile)
+    if profile_config.docx_reference_doc and os.path.exists(
+        profile_config.docx_reference_doc
+    ):
+        extra_args.extend(["--reference-doc", profile_config.docx_reference_doc])
 
     pypandoc.convert_file(
         source_file=md_path,

@@ -8,7 +8,7 @@ import nbformat
 from app.core.agents import WriterAgent, CoderAgent, CoordinatorAgent, ModelerAgent
 from app.core.checkpoint import CheckpointManager, TaskCheckpoint
 from app.schemas.A2A import ModelerToCoder, WriterResponse
-from app.schemas.enums import CompTemplate, FormatOutPut
+from app.schemas.enums import CompTemplate, ExportProfile, FormatOutPut
 from app.schemas.request import Problem
 from app.schemas.response import SystemMessage
 from app.services import user_input_queue
@@ -24,6 +24,7 @@ from app.tools.notebook_serializer import NotebookSerializer
 from app.tools.pdf_exporter import export_markdown_to_pdf
 from app.tools.tex_project_exporter import export_markdown_to_latex_project
 from app.tools.candidate_exporter import write_candidate_manifest
+from app.tools.export_profiles import normalize_export_profile
 from app.core.flows import Flows
 from app.core.llm.llm_factory import LLMFactory
 
@@ -443,7 +444,11 @@ class MathModelWorkFlow(WorkFlow):
         with open(plan_md_path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines).rstrip() + "\n")
 
-    async def _export_results(self, user_output: UserOutput) -> None:
+    async def _export_results(
+        self,
+        user_output: UserOutput,
+        export_profile: ExportProfile | str | None = ExportProfile.DEFAULT,
+    ) -> None:
         """保存结果并导出 PDF/LaTeX/候选清单（execute 与 resume 共享）。"""
         logger.info(user_output.get_res())
 
@@ -456,7 +461,9 @@ class MathModelWorkFlow(WorkFlow):
         )
         md_path = os.path.join(self.work_dir, "res.md")
         pdf_path = os.path.join(self.work_dir, "res.pdf")
-        pdf_result = export_markdown_to_pdf(md_path, pdf_path, self.work_dir)
+        pdf_result = export_markdown_to_pdf(
+            md_path, pdf_path, self.work_dir, export_profile=export_profile
+        )
 
         if pdf_result["success"]:
             await redis_manager.publish_message(
@@ -489,13 +496,25 @@ class MathModelWorkFlow(WorkFlow):
         export_status_path = os.path.join(self.work_dir, "export_status.json")
         try:
             with open(export_status_path, "w", encoding="utf-8") as f:
-                json.dump({"pdf": pdf_result}, f, ensure_ascii=False, indent=2)
+                json.dump(
+                    {
+                        "export_profile": normalize_export_profile(
+                            export_profile
+                        ).value,
+                        "pdf": pdf_result,
+                    },
+                    f,
+                    ensure_ascii=False,
+                    indent=2,
+                )
         except Exception as e:
             logger.error(f"写入 export_status.json 失败: {e}")
 
         ################################################ generate LaTeX sidecar project
         try:
-            tex_result = export_markdown_to_latex_project(md_path, self.work_dir)
+            tex_result = export_markdown_to_latex_project(
+                md_path, self.work_dir, export_profile=export_profile
+            )
             if tex_result["success"]:
                 await redis_manager.publish_message(
                     self.task_id,
@@ -617,6 +636,7 @@ class MathModelWorkFlow(WorkFlow):
                 ques_all=problem.ques_all,
                 comp_template=problem.comp_template.value,
                 format_output=problem.format_output.value,
+                export_profile=problem.export_profile.value,
                 questions=self.questions,
                 ques_count=self.ques_count,
                 modeler_response=modeler_response.model_dump(),
@@ -667,7 +687,7 @@ class MathModelWorkFlow(WorkFlow):
             problem.ques_all,
         )
 
-        await self._export_results(user_output)
+        await self._export_results(user_output, problem.export_profile)
 
     async def resume(self, task_id: str) -> None:
         """从检查点恢复并继续执行数学建模工作流。
@@ -693,6 +713,7 @@ class MathModelWorkFlow(WorkFlow):
         self.ques_count = checkpoint.ques_count
         comp_template = CompTemplate(checkpoint.comp_template)
         format_output = FormatOutPut(checkpoint.format_output)
+        export_profile = ExportProfile(checkpoint.export_profile)
         modeler_response = ModelerToCoder.model_validate(checkpoint.modeler_response)
         self._write_modeler_plan(modeler_response)
 
@@ -755,4 +776,4 @@ class MathModelWorkFlow(WorkFlow):
             checkpoint.ques_all,
         )
 
-        await self._export_results(user_output)
+        await self._export_results(user_output, export_profile)

@@ -3,7 +3,7 @@
 from fastapi import APIRouter, BackgroundTasks, File, Form, UploadFile
 from app.core.checkpoint import CheckpointManager
 from app.core.workflow import MathModelWorkFlow
-from app.schemas.enums import CompTemplate, FormatOutPut
+from app.schemas.enums import CompTemplate, ExportProfile, FormatOutPut
 from app.utils.log_util import logger
 from app.services.redis_manager import redis_manager
 from app.services import user_input_queue
@@ -43,9 +43,12 @@ EXAMPLE_ROOT = os.path.abspath(os.path.join("app", "example", "example"))
 _active_tasks: Dict[str, Tuple[asyncio.Task, asyncio.Event]] = {}
 
 
-def _finalize_docx_and_manifest(task_id: str) -> None:
+def _finalize_docx_and_manifest(
+    task_id: str,
+    export_profile: ExportProfile | str | None = ExportProfile.DEFAULT,
+) -> None:
     """生成 DOCX 后刷新候选清单，确保 manifest 反映最终产物。"""
-    md_2_docx(task_id)
+    md_2_docx(task_id, export_profile=export_profile)
     write_candidate_manifest(get_work_dir(task_id), task_id)
 
 
@@ -269,6 +272,7 @@ async def exampleModeling(
         ques_all,
         CompTemplate.CHINA,
         FormatOutPut.Markdown,
+        ExportProfile.DEFAULT,
     )
     return {"task_id": task_id, "status": "processing"}
 
@@ -279,6 +283,7 @@ async def modeling(
     ques_all: str = Form(...),  # 从表单获取
     comp_template: CompTemplate = Form(...),  # 从表单获取
     format_output: FormatOutPut = Form(...),  # 从表单获取
+    export_profile: ExportProfile = Form(ExportProfile.DEFAULT),  # 从表单获取
     files: list[UploadFile] = File(default=None),
 ):
     task_id = create_task_id()
@@ -319,7 +324,12 @@ async def modeling(
     logger.info(f"Adding background task for task_id: {task_id}")
     # 将任务添加到后台执行
     background_tasks.add_task(
-        run_modeling_task_async, task_id, ques_all, comp_template, format_output
+        run_modeling_task_async,
+        task_id,
+        ques_all,
+        comp_template,
+        format_output,
+        export_profile,
     )
     return {"task_id": task_id, "status": "processing"}
 
@@ -329,6 +339,7 @@ async def run_modeling_task_async(
     ques_all: str,
     comp_template: CompTemplate,
     format_output: FormatOutPut,
+    export_profile: ExportProfile = ExportProfile.DEFAULT,
 ):
     """异步执行建模任务。
 
@@ -346,6 +357,7 @@ async def run_modeling_task_async(
         ques_all=ques_all,
         comp_template=comp_template,
         format_output=format_output,
+        export_profile=export_profile,
     )
 
     # 创建取消信号
@@ -401,7 +413,7 @@ async def run_modeling_task_async(
         # 仅在正常完成时转换 md 为 docx
         if task_completed:
             try:
-                _finalize_docx_and_manifest(task_id)
+                _finalize_docx_and_manifest(task_id, export_profile)
             except Exception as e:
                 logger.error(f"任务 {task_id} DOCX 转换失败: {e}")
                 await redis_manager.publish_message(
@@ -523,7 +535,11 @@ async def run_resume_task_async(task_id: str):
         user_input_queue.clear(task_id)
         if task_completed:
             try:
-                _finalize_docx_and_manifest(task_id)
+                checkpoint = CheckpointManager(get_work_dir(task_id)).load()
+                export_profile = (
+                    checkpoint.export_profile if checkpoint is not None else "default"
+                )
+                _finalize_docx_and_manifest(task_id, export_profile)
             except Exception as e:
                 logger.error(f"任务 {task_id} DOCX 转换失败: {e}")
                 await redis_manager.publish_message(

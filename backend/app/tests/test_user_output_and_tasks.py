@@ -96,7 +96,7 @@ class TestTaskFinalization(unittest.TestCase):
                 f.write("# demo")
             write_candidate_manifest(task_dir, task_id)
 
-            def fake_md_2_docx(_task_id):
+            def fake_md_2_docx(_task_id, export_profile=None):
                 with open(os.path.join(task_dir, "res.docx"), "wb") as f:
                     f.write(b"docx")
 

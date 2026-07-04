@@ -19,7 +19,7 @@ Roman/SimSun/SimHei/KaiTi 等正式字体，直接在本机运行这个 CLI 可�
     uv run python -m app.tools.export_cli latex --input res.md --work-dir . --profile cumcm2025
 
     # 手动指定字体（用户显式指定优先，检测到缺失只警告，不会静默换成别的字体）
-    uv run python -m app.tools.export_cli pdf --input res.md --output res.pdf --local ^
+    uv run python -m app.tools.export_cli pdf --input res.md --output res.pdf --local `
         --mainfont "Times New Roman" --cjk-mainfont "SimSun" --cjk-sansfont "SimHei" --cjk-monofont "KaiTi"
 
     # 或用 JSON 配置文件批量指定
@@ -121,19 +121,37 @@ def cmd_check(args: argparse.Namespace) -> int:
     print(f"  [OK]   python -> {sys.executable}")
 
     print("\n=== 字体检查（Windows 本机官方字体） ===")
+    missing_fonts: list[str] = []
+    unknown_fonts: list[str] = []
     for font in _WINDOWS_PREFERRED_FONTS:
         installed = check_font_installed(font)
         if installed is True:
             print(f"  [OK]   {font}")
         elif installed is False:
+            missing_fonts.append(font)
             print(f"  [缺失] {font}（导出时会自动回退到开源等效字体，或用 --mainfont 等参数手动指定其它已安装字体）")
         else:
+            unknown_fonts.append(font)
             print(f"  [未知] {font}（当前环境无法自动检测字体是否安装，将乐观地按已安装处理）")
 
+    print("\n=== 环境结论 ===")
     if not (pandoc_ok and xelatex_ok):
+        print("缺 pandoc/xelatex，不能导出。")
         print("\n[错误] 关键依赖缺失，无法导出 PDF，请先安装上面标记为“缺失”的工具。", file=sys.stderr)
         return 1
-    print("\n依赖检查通过，可以执行 pdf / latex 子命令。")
+    if missing_fonts:
+        print(
+            "可以导出但会 fallback：以下官方字体未检测到，将在未手动指定字体时回退到开源等效字体："
+            f"{', '.join(missing_fonts)}。"
+        )
+    elif unknown_fonts:
+        print(
+            "可以导出，但部分字体无法自动检测；如编译报字体缺失，请安装对应字体或用 --font-config 指定："
+            f"{', '.join(unknown_fonts)}。"
+        )
+    else:
+        print("可以正式导出：关键工具可用，Windows 官方字体均已检测到。")
+    print("依赖检查通过，可以执行 pdf / latex 子命令。")
     return 0
 
 

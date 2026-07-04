@@ -70,6 +70,61 @@ class TestPdfTemplateCommand(unittest.TestCase):
         self.assertIn("documentclass=ctexart", command)
         self.assertIn("geometry:left=3.17cm,right=3.17cm,top=3cm,bottom=2.5cm", command)
 
+    def test_pdf_result_records_font_resolution_fallbacks(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            md_path = os.path.join(work_dir, "res.md")
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write("# 测试标题\n\n摘要 测试正文。")
+
+            proc = mock.Mock(returncode=1, stderr="expected test failure")
+            with (
+                mock.patch("shutil.which", return_value="tool"),
+                mock.patch("subprocess.run", return_value=proc),
+                mock.patch("app.utils.font_utils.check_font_installed", return_value=False),
+            ):
+                result = export_markdown_to_pdf(md_path, pdf_path, work_dir)
+
+        resolution = {
+            item["variable"]: item for item in result["font_resolution"]
+        }
+        self.assertEqual(resolution["mainfont"]["preferred"], "Times New Roman")
+        self.assertEqual(resolution["mainfont"]["actual"], "Liberation Serif")
+        self.assertEqual(resolution["mainfont"]["fallback"], "Liberation Serif")
+        self.assertEqual(resolution["mainfont"]["source"], "fallback")
+        self.assertEqual(resolution["CJKmainfont"]["actual"], "Noto Serif CJK SC")
+
+    def test_pdf_result_records_font_resolution_overrides(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            md_path = os.path.join(work_dir, "res.md")
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write("# 测试标题\n\n摘要 测试正文。")
+
+            proc = mock.Mock(returncode=1, stderr="expected test failure")
+            with (
+                mock.patch("shutil.which", return_value="tool"),
+                mock.patch("subprocess.run", return_value=proc),
+                mock.patch("app.utils.font_utils.check_font_installed", return_value=True),
+            ):
+                result = export_markdown_to_pdf(
+                    md_path,
+                    pdf_path,
+                    work_dir,
+                    font_overrides={"mainfont": "Georgia", "CJKmonofont": "KaiTi"},
+                    local_fonts=True,
+                )
+
+        resolution = {
+            item["variable"]: item for item in result["font_resolution"]
+        }
+        self.assertEqual(resolution["mainfont"]["preferred"], "Times New Roman")
+        self.assertEqual(resolution["mainfont"]["actual"], "Georgia")
+        self.assertIsNone(resolution["mainfont"]["fallback"])
+        self.assertEqual(resolution["mainfont"]["source"], "override")
+        self.assertEqual(resolution["CJKmonofont"]["actual"], "KaiTi")
+        self.assertEqual(resolution["CJKmonofont"]["source"], "override")
+
 
 if __name__ == "__main__":
     unittest.main()

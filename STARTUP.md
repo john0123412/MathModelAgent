@@ -135,6 +135,35 @@ pnpm run dev
 3. 用户消息作为额外上下文注入到 `chat_history`
 4. 前端实时回显用户输入
 
+### 导出模板选项（Export Profile）
+
+**这是新增的可选功能，不影响默认导出行为**——不传 `export_profile` 或传 `default` 时，导出结果与之前完全一致。
+
+**可选值**：
+- `default`（默认）：保持原有 Markdown/DOCX/PDF/LaTeX sidecar 导出行为
+- `cumcm2025`：套用 2025 年国赛（CUMCM）格式规范
+
+**如何选择**：`POST /modeling` 表单新增 `export_profile` 字段（`Form(ExportProfile.DEFAULT)`），例如：
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/modeling `
+  -F "ques_all=..." `
+  -F "comp_template=CHINA" `
+  -F "format_output=Markdown" `
+  -F "export_profile=cumcm2025"
+```
+
+> 前端目前没有暴露 `export_profile` 的选择控件（`UserStepper.vue` 提交时未传该字段，走默认值）；`frontend/src/apis/submitModelingApi.ts` 的 `submitModelingTask()` 已经支持传入 `export_profile`，如需从 UI 选择，需要自行在提交表单里加一个选项并透传。当前可用方式是直接调用 `/modeling` 接口传参，或修改前端代码后再选择。
+
+**`cumcm2025` 相对 `default` 的差异**：
+1. **PDF**：在默认排版变量基础上追加 `--toc`（生成目录）、`--number-sections`（章节自动编号），页边距调整为 `top=3cm,bottom=2.5cm`（默认为 `top=2.6cm,bottom=2.6cm`）
+2. **LaTeX sidecar**：使用 `gmcmthesis` 模板（`zh/cumcm2025-gmcmthesis`）而非默认的 `ctexart`，并复制模板资源（`gmcmthesis.cls`、封面图 `figures/logo2025.png`、`figures/title2025.pdf`）到生成的 `latex_project/` 目录
+3. **DOCX**：套用 `format2025_reference.docx` 作为 pandoc `--reference-doc`，页面样式（页边距 2.5cm、正文字体 Times New Roman / 宋体 10.5pt）来自 2025 年 CUMCM 官方论文格式规范（`format2025.doc`，用 LibreOffice 转换为 `.docx` 后仅取其 Word 样式，不含原文内容）
+
+**已知限制**：
+- 前端暂无 UI 选择入口（见上）
+- LaTeX sidecar 编译产物（`latex_project/`）属于候选导出，提交前仍需人工核对（`candidate_manifest.json` 中会标注 `known_risks`）
+
 ---
 
 ## 功能测试
@@ -188,6 +217,24 @@ B 需要 1 小时机器时间、2 小时人工时间，利润 30 元；
    - 前端回显消息
    - 后端日志显示收到用户输入
    - Agent 行为是否有变化
+
+### 测试 C：cumcm2025 导出模板
+
+前端暂无选择入口，用 curl 直接提交（参考"导出模板选项"一节）：
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/modeling `
+  -F "ques_all=某工厂生产 A、B 两种产品……（同测试 0 案例）" `
+  -F "comp_template=CHINA" `
+  -F "format_output=Markdown" `
+  -F "export_profile=cumcm2025"
+```
+
+验收标准：
+- 任务正常完成，`res.md`/`res.docx`/`res.pdf`（如已装 pandoc）正常生成
+- `res.docx` 页边距/字体应与 `default` profile 生成的版本不同（可解压 `.docx` 查看 `word/document.xml` 中的 `<w:pgMar>`，或直接用 Word/WPS 打开对比页边距）
+- 如果本机装了 pandoc + latexmk/xelatex，`latex_project/main.tex` 应包含 `\documentclass[bwprint]{gmcmthesis}`（而不是 `ctexart`），且 `latex_project/gmcmthesis.cls`、`latex_project/figures/logo2025.png` 等模板资源已被复制
+- 换回 `export_profile=default`（或不传该字段）重新提交一次，确认输出与之前完全一致（回归验证）
 
 ---
 

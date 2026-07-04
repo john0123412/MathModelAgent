@@ -56,12 +56,24 @@ DEFAULT_PROFILE = ExportProfileConfig(
 
 CUMCM2025_TEMPLATE_DIR = os.path.join(TEMPLATES_ROOT, "cumcm2025")
 
+# DOCX reference-doc 单独存放在 cumcm2025_docx/ 目录，避免被
+# _copy_template_assets() 误当作 LaTeX sidecar 的模板资源一并复制进
+# latex_project/（该函数会遍历 latex_template_dir 下的全部文件）。
+#
+# 来源：format2025.doc（2025 年 CUMCM 官方论文格式规范，legacy 二进制 .doc）
+# 通过本机 LibreOffice（soffice --headless --convert-to docx）转换为
+# format2025_reference.docx。pandoc --reference-doc 只读取其中的页面
+# 设置/默认字体等样式，不会带入原文内容。
+CUMCM2025_DOCX_REFERENCE = os.path.join(
+    TEMPLATES_ROOT, "cumcm2025_docx", "format2025_reference.docx"
+)
+
 CUMCM2025_PROFILE = ExportProfileConfig(
     key=ExportProfile.CUMCM2025,
     label="CUMCM 2025 模板",
     description=(
         "参考 2025 年 LaTeX 模板和 format2025 要求，额外生成 "
-        "gmcmthesis LaTeX sidecar；DOCX reference-doc 仅在配置为 .docx 时启用。"
+        "gmcmthesis LaTeX sidecar，DOCX 导出套用 format2025 页面/字体样式。"
     ),
     pdf_variables=[
         "documentclass=ctexart",
@@ -78,6 +90,7 @@ CUMCM2025_PROFILE = ExportProfileConfig(
     pdf_extra_args=["--toc", "--number-sections"],
     latex_template_dir=CUMCM2025_TEMPLATE_DIR,
     latex_template_key="zh/cumcm2025-gmcmthesis",
+    docx_reference_doc=CUMCM2025_DOCX_REFERENCE,
 )
 
 

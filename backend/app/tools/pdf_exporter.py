@@ -4,7 +4,7 @@ import os
 import shutil
 import subprocess
 from app.utils.log_util import logger
-from app.utils.font_utils import resolve_font
+from app.utils.font_utils import resolve_font, resolve_font_for_local, check_font_installed
 from app.schemas.enums import ExportProfile
 from app.tools.export_profiles import get_export_profile_config
 
@@ -21,15 +21,76 @@ _FONT_VARIABLE_KEYS = {
 }
 
 
-def _resolve_pdf_variables(pdf_variables: list[str]) -> list[str]:
-    """对 pdf_variables 中的字体相关变量应用 resolve_font 检测/fallback。"""
-    resolved = []
+def _resolve_pdf_variables(
+    pdf_variables: list[str],
+    font_overrides: dict[str, str] | None = None,
+    local: bool = False,
+) -> tuple[list[str], list[str]]:
+    """构建最终传给 pandoc -V 的变量列表，并可选做字体检测/覆盖。
+
+    行为分两条路径：
+      - 默认（local=False，Docker/Linux 自动化流程走这条，未传 font_overrides
+        时与改动前完全一致）：对 _FONT_VARIABLE_KEYS 里的变量调用
+        resolve_font()——检测缺失才 fallback，不产生面向用户的提示文案。
+      - 本地手动导出（local=True，供 app.tools.export_cli 使用）：改用
+        resolve_font_for_local()，未安装时的提示会收集进返回的 warnings，
+        交给 CLI 打印给交互式用户。
+
+    font_overrides（形如 {"mainfont": "Times New Roman", "CJKmainfont": "SimSun"}）
+    中的值优先于 profile 自带的 pdf_variables：
+      - 命中已有变量：直接替换该变量的值，不再走 resolve_font/resolve_font_for_local
+        的自动 fallback（用户已经明确指定，不应被静默换成别的字体）。
+      - profile 里没有对应变量（如 CJKmonofont，当前两个 profile 都未声明）：
+        追加一条新的 -V 变量。
+      - local=True 时会额外检测 override 的字体是否已安装，仅用于提示，
+        不影响实际使用哪个字体（用户显式指定的值任何情况下都会原样使用）。
+
+    Returns:
+        (resolved_variables, warnings)：warnings 仅在 local=True 时可能非空。
+    """
+    overrides = dict(font_overrides or {})
+    resolved: list[str] = []
+    warnings: list[str] = []
+
     for variable in pdf_variables:
         key, sep, value = variable.partition("=")
-        if sep and key in _FONT_VARIABLE_KEYS:
-            variable = f"{key}={resolve_font(value)}"
-        resolved.append(variable)
-    return resolved
+        if not sep:
+            resolved.append(variable)
+            continue
+
+        if key in overrides:
+            override_value = overrides.pop(key)
+            if local:
+                installed = check_font_installed(override_value)
+                if installed is False:
+                    warnings.append(
+                        f"你指定的字体 '{override_value}'（{key}）在本机未检测到已安装，"
+                        f"仍会按你的设置使用；如编译报字体找不到，请检查拼写或先安装该字体。"
+                    )
+            resolved.append(f"{key}={override_value}")
+        elif key in _FONT_VARIABLE_KEYS:
+            if local:
+                new_value, font_warnings = resolve_font_for_local(value)
+                warnings.extend(font_warnings)
+            else:
+                new_value = resolve_font(value)
+            resolved.append(f"{key}={new_value}")
+        else:
+            resolved.append(variable)
+
+    # font_overrides 里还剩下的 key，说明 profile 原本没有这个变量
+    # （例如 CJKmonofont），追加为新变量。
+    for key, value in overrides.items():
+        if local:
+            installed = check_font_installed(value)
+            if installed is False:
+                warnings.append(
+                    f"你指定的字体 '{value}'（{key}）在本机未检测到已安装，"
+                    f"仍会按你的设置使用；如编译报字体找不到，请检查拼写或先安装该字体。"
+                )
+        resolved.append(f"{key}={value}")
+
+    return resolved, warnings
 
 
 def export_markdown_to_pdf(
@@ -37,6 +98,8 @@ def export_markdown_to_pdf(
     pdf_path: str,
     work_dir: str,
     export_profile: ExportProfile | str | None = ExportProfile.DEFAULT,
+    font_overrides: dict[str, str] | None = None,
+    local_fonts: bool = False,
 ) -> dict:
     """将 Markdown 文件转换为 PDF（通过 pandoc + xelatex）。
 
@@ -47,9 +110,18 @@ def export_markdown_to_pdf(
         md_path: 待转换的 Markdown 文件路径。
         pdf_path: 输出 PDF 文件路径。
         work_dir: 工作目录，用作 pandoc 的资源查找路径（图片等）。
+        font_overrides: 用户显式指定的字体覆盖（pandoc 变量名 -> 字体名，
+            如 {"mainfont": "Times New Roman", "CJKmainfont": "SimSun"}），
+            优先于 profile 默认值，且不会被自动 fallback 替换。默认调用方
+            （Docker/Linux 自动化流程）不传，行为不变。
+        local_fonts: True 时使用本地手动导出场景的字体检测/提示策略
+            （resolve_font_for_local，检测缺失时把提示收集进返回结果的
+            font_warnings，供交互式 CLI 打印）；默认 False 保持 Docker/Linux
+            自动化流程原有行为（resolve_font，仅记录日志，不产生提示列表）。
 
     Returns:
-        结构化结果字典，包含 enabled/success/pdf_path/reason/command/stderr。
+        结构化结果字典，包含 enabled/success/pdf_path/reason/command/stderr/
+        font_warnings（local_fonts=True 时可能非空的字体提示列表）。
     """
     result = {
         "enabled": False,
@@ -59,6 +131,7 @@ def export_markdown_to_pdf(
         "command": [],
         "stderr": "",
         "export_profile": get_export_profile_config(export_profile).key.value,
+        "font_warnings": [],
     }
 
     if not os.path.exists(md_path):
@@ -90,7 +163,11 @@ def export_markdown_to_pdf(
         "--resource-path",
         work_dir,
     ]
-    for variable in _resolve_pdf_variables(profile_config.pdf_variables):
+    resolved_variables, font_warnings = _resolve_pdf_variables(
+        profile_config.pdf_variables, font_overrides, local_fonts
+    )
+    result["font_warnings"] = font_warnings
+    for variable in resolved_variables:
         command.extend(["-V", variable])
     command.extend(profile_config.pdf_extra_args)
     result["enabled"] = True

@@ -23,6 +23,10 @@ class TestPdfTemplateCommand(unittest.TestCase):
             with (
                 mock.patch("shutil.which", return_value="tool"),
                 mock.patch("subprocess.run", return_value=proc) as run_mock,
+                # 字体是否已安装依赖运行测试的宿主机状态（Windows 本机可能装了
+                # Times New Roman/SimSun，Docker 容器则没有），这里固定为
+                # "已安装"，让断言的命令内容与宿主机字体状态无关。
+                mock.patch("app.utils.font_utils.check_font_installed", return_value=True),
             ):
                 export_markdown_to_pdf(md_path, pdf_path, work_dir)
 
@@ -54,6 +58,7 @@ class TestPdfTemplateCommand(unittest.TestCase):
             with (
                 mock.patch("shutil.which", return_value="tool"),
                 mock.patch("subprocess.run", return_value=proc) as run_mock,
+                mock.patch("app.utils.font_utils.check_font_installed", return_value=True),
             ):
                 export_markdown_to_pdf(
                     md_path, pdf_path, work_dir, export_profile=ExportProfile.CUMCM2025

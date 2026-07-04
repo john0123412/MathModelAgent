@@ -144,22 +144,45 @@ Just choose `xelatex', no `pdflatex' or `latex' and so on.}
 % 每行缩进两个汉字
 \setlength\parindent{2em}
 % 设置字体
-\setmainfont{Times New Roman}
-\setmonofont{Courier New}
-\setsansfont{Arial}
-\setCJKmainfont[AutoFakeBold = {2.15},ItalicFont={KaiTi}]{SimSun}
+% 原模板硬编码 Times New Roman/Courier New/Arial/SimSun/KaiTi/STXinwei/LiSu
+% 等 Windows/Office 专有字体。精简版 Linux 容器（Debian + xelatex）默认不
+% 含这些字体，且不能通过 apt 获取同名字体。策略：优先使用正式字体（本地
+% Windows/Mac 开发环境、装有完整 Office 字体的容器均可正常使用官方指定
+% 字体排版），通过 fontspec 提供的 \IfFontExistsTF 在编译期检测字体是否
+% 存在，缺失时才回退到免费开源的 metrically 兼容/视觉近似字体，
+% 不做无条件替换。
+\IfFontExistsTF{Times New Roman}
+  {\setmainfont{Times New Roman}}
+  {\setmainfont{Liberation Serif}}
+\IfFontExistsTF{Courier New}
+  {\setmonofont{Courier New}}
+  {\setmonofont{Liberation Mono}}
+\IfFontExistsTF{Arial}
+  {\setsansfont{Arial}}
+  {\setsansfont{Liberation Sans}}
+\IfFontExistsTF{SimSun}
+  {\IfFontExistsTF{KaiTi}
+    {\setCJKmainfont[AutoFakeBold = {2.15},ItalicFont={KaiTi}]{SimSun}}
+    {\setCJKmainfont[AutoFakeBold = {2.15},ItalicFont={AR PL KaitiM GB}]{SimSun}}}
+  {\IfFontExistsTF{KaiTi}
+    {\setCJKmainfont[AutoFakeBold = {2.15},ItalicFont={KaiTi}]{Noto Serif CJK SC}}
+    {\setCJKmainfont[AutoFakeBold = {2.15},ItalicFont={AR PL KaitiM GB}]{Noto Serif CJK SC}}}
 
-\setCJKfamilyfont{xw}{STXinwei}
+\IfFontExistsTF{STXinwei}
+  {\setCJKfamilyfont{xw}{STXinwei}}
+  {\setCJKfamilyfont{xw}{Noto Sans CJK SC}}
 
 %
 %\setCJKfamilyfont{zhyou}{YouYuan}
 \ifx\lishu\undefined%
- \setCJKfamilyfont{zhli}{LiSu}
+ \IfFontExistsTF{LiSu}
+   {\setCJKfamilyfont{zhli}{LiSu}}
+   {\setCJKfamilyfont{zhli}{AR PL KaitiM GB}}
  \newcommand*{\lishu}{\CJKfamily{zhli}} %% Do this if it is undefined
 \else
   %% Do this if it is defined
 \fi
-\newcommand*{\xinwei}{\CJKfamily{xw}} 
+\newcommand*{\xinwei}{\CJKfamily{xw}}
 %\newcommand*{\lishu}{\CJKfamily{zhli}}
 
  

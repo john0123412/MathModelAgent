@@ -4,8 +4,32 @@ import os
 import shutil
 import subprocess
 from app.utils.log_util import logger
+from app.utils.font_utils import resolve_font
 from app.schemas.enums import ExportProfile
 from app.tools.export_profiles import get_export_profile_config
+
+# pdf_variables 中需要做字体可用性检测/fallback 的 pandoc 变量名
+# （对应 fontspec 的 mainfont/CJKmainfont 等，值缺失时无法通过 apt 补装
+# 同名字体，只能替换成等效字体，见 app.utils.font_utils）。
+_FONT_VARIABLE_KEYS = {
+    "mainfont",
+    "monofont",
+    "sansfont",
+    "CJKmainfont",
+    "CJKsansfont",
+    "CJKmonofont",
+}
+
+
+def _resolve_pdf_variables(pdf_variables: list[str]) -> list[str]:
+    """对 pdf_variables 中的字体相关变量应用 resolve_font 检测/fallback。"""
+    resolved = []
+    for variable in pdf_variables:
+        key, sep, value = variable.partition("=")
+        if sep and key in _FONT_VARIABLE_KEYS:
+            variable = f"{key}={resolve_font(value)}"
+        resolved.append(variable)
+    return resolved
 
 
 def export_markdown_to_pdf(
@@ -66,7 +90,7 @@ def export_markdown_to_pdf(
         "--resource-path",
         work_dir,
     ]
-    for variable in profile_config.pdf_variables:
+    for variable in _resolve_pdf_variables(profile_config.pdf_variables):
         command.extend(["-V", variable])
     command.extend(profile_config.pdf_extra_args)
     result["enabled"] = True

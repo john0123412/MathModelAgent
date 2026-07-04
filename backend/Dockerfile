@@ -1,8 +1,56 @@
 # 使用官方推荐的 Python 基础镜像
 FROM python:3.12-slim AS builder
 
+# 是否安装 Microsoft Core Fonts（ttf-mscorefonts-installer，仅含 Times New
+# Roman/Courier New/Arial 等英文字体，不含任何中文字体）。默认关闭：该包
+# 安装时需要接受 Microsoft 的字体许可协议（EULA），且会在构建时从外部镜像
+# 下载字体二进制文件，不适合作为默认公开镜像的行为。仅在私有构建、且已
+# 知晓并接受该许可与网络依赖的前提下，显式传入 --build-arg
+# INSTALL_MS_FONTS=true 开启。注意：SimSun/SimHei/KaiTi 等中文 Windows
+# 字体不受此选项影响，容器内始终 fallback 到 fonts-noto-cjk/
+# texlive-lang-chinese 提供的开源等效字体（无法"补装"官方中文字体）。
+ARG INSTALL_MS_FONTS=false
+
 # 安装中文字体（确保 matplotlib 图表中文正常显示）
-RUN apt-get update && apt-get install -y --no-install-recommends fonts-noto-cjk && rm -rf /var/lib/apt/lists/*
+# 以及 pandoc + LaTeX 工具链（md -> docx/pdf 转换、xelatex 编译 LaTeX sidecar/gmcmthesis 模板）
+# fontconfig：提供 fc-match，供 app.utils.font_utils 在运行时检测正式字体是否
+# 存在，缺失时回退到等效字体，而不是在配置里无条件替换正式字体名：
+#   - 英文/Latin（Times New Roman/Courier New/Arial）缺失时回退到本层装的
+#     fonts-liberation；上面的 INSTALL_MS_FONTS 选项可以补装真正的英文原版
+#     字体，从而不必 fallback。
+#   - 中文（SimSun/SimHei/KaiTi 等）缺失时回退到本层装的 fonts-noto-cjk /
+#     texlive-lang-chinese（AR PL KaitiM GB）。这些中文 Windows 字体没有
+#     可合法分发的安装包，INSTALL_MS_FONTS 对中文字体没有作用。
+# lmodern：pandoc 默认 LaTeX 模板依赖 lmodern.sty，texlive-latex-recommended
+# 未包含该包，缺失会导致直接 PDF 导出（pdf_exporter.py）编译失败
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    fonts-noto-cjk \
+    fontconfig \
+    fonts-liberation \
+    pandoc \
+    latexmk \
+    texlive-xetex \
+    texlive-latex-recommended \
+    texlive-latex-extra \
+    texlive-fonts-recommended \
+    texlive-lang-chinese \
+    texlive-plain-generic \
+    lmodern \
+    && rm -rf /var/lib/apt/lists/*
+
+# 可选：安装 Microsoft Core Fonts（仅 Times New Roman/Courier New/Arial 等
+# 英文字体，不含中文字体）。默认不执行（INSTALL_MS_FONTS=false 时整段被
+# shell 短路跳过）。开启后会通过 debconf-set-selections 预先接受 EULA 以
+# 实现非交互安装，并从 ttf-mscorefonts-installer 包内置的下载源（非本仓库
+# 维护）获取字体文件。
+RUN if [ "$INSTALL_MS_FONTS" = "true" ]; then \
+        apt-get update && \
+        echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections && \
+        apt-get install -y --no-install-recommends ttf-mscorefonts-installer && \
+        rm -rf /var/lib/apt/lists/*; \
+    else \
+        echo "跳过 Microsoft Core Fonts 安装（INSTALL_MS_FONTS=$INSTALL_MS_FONTS）：英文字体 fallback 到 fonts-liberation，中文字体不受此选项影响，始终 fallback 到 fonts-noto-cjk/texlive-lang-chinese"; \
+    fi
 
 # 安装 uv（推荐直接用官方 distroless 镜像复制二进制文件，速度快且干净）
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/

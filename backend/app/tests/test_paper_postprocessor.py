@@ -91,6 +91,27 @@ class TestNormalizeChineseReferences(unittest.TestCase):
         self.assertIn("## 摘要\n这是摘要正文。", normalized)
         self.assertIn("关键词：线性规划；敏感性分析；生产优化；资源分配", normalized)
 
+    def test_bare_abstract_heading_is_normalized(self):
+        markdown = (
+            "标题：基于线性规划的生产优化研究\n\n"
+            "摘要\n\n"
+            "本文围绕生产优化问题建立线性规划模型，结合资源约束、利润目标和敏感性分析给出可复核方案。"
+            "模型通过目标函数和约束条件刻画生产过程，并比较资源变化前后的最优利润。"
+            "结果表明，机器时间变化会带来可解释的边际收益，人工资源仍可能构成关键瓶颈。\n\n"
+            "关键词：线性规划；敏感性分析；生产优化；资源约束\n\n"
+            "# 一、问题重述"
+        )
+
+        normalized = normalize_markdown_headings(markdown)
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(),
+            markdown=normalized,
+            code_sources=[],
+        )
+
+        self.assertIn("## 摘要", normalized)
+        self.assertTrue(report["checks"]["abstract"]["passed"])
+
     def test_bold_inline_keywords_are_detected(self):
         markdown = (
             "## 摘要\n\n这是摘要正文。\n\n"

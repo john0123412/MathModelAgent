@@ -54,6 +54,38 @@ class TestUserOutputReferences(unittest.TestCase):
         self.assertIn("[1] Example reference.", result)
         self.assertNotIn("{[^1]", result)
 
+    def test_embedded_reference_section_does_not_swallow_later_sections(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            output = UserOutput(work_dir=work_dir, ques_count=1)
+            sections = {
+                "firstPage": "## 摘要\n\n摘要正文。\n\n关键词：线性规划；生产优化；敏感性分析",
+                "RepeatQues": "# 一、问题重述\n\n正文。",
+                "analysisQues": "# 二、问题分析\n\n正文。",
+                "modelAssumption": "# 三、模型假设\n\n正文。",
+                "symbol": (
+                    "# 四、符号说明\n\n正文引用{[^1] Example reference}。\n\n"
+                    "## 参考文献\n\n[1] Writer 不应在分段中生成的局部参考文献。"
+                ),
+                "eda": "",
+                "ques1": (
+                    "# 五、模型的建立与求解\n\n模型正文。\n\n"
+                    "[1] Writer 也不应在分段末尾生成裸编号参考文献。"
+                ),
+                "sensitivity_analysis": "# 六、模型的分析与检验\n\n检验正文。",
+                "judge": "# 七、模型的评价、改进与推广\n\n评价正文。",
+            }
+            for key, content in sections.items():
+                output.set_res(key, WriterResponse(response_content=content, footnotes=[]))
+
+            result = output.get_result_to_save()
+
+        self.assertIn("# 五、模型的建立与求解", result)
+        self.assertIn("# 六、模型的分析与检验", result)
+        self.assertIn("# 七、模型的评价、改进与推广", result)
+        self.assertNotIn("Writer 不应在分段中生成的局部参考文献", result)
+        self.assertNotIn("Writer 也不应在分段末尾生成裸编号参考文献", result)
+        self.assertIn("[1] Example reference.", result)
+
 
 class TestTaskListStatus(unittest.TestCase):
     """验证失败任务不会被空 res.md 误判为完成。"""

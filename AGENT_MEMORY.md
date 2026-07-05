@@ -13,14 +13,24 @@
   - `pdf_visual_check.json`
 - `latex_project/` 是候选 LaTeX sidecar，不是主交付链路。
 - LaTeX sidecar 当前已修复 CUMCM 图片路径、新版 pandoc `\pandocbounded`
-  图片宏、notebook `# Cell n` 原始代码段拆分问题；自动编译时若 `latexmk`
-  失败，会 fallback 到连续两次 `xelatex`，并在 `tex_export_status.json`
-  记录 `compile_reason` / `compile_failure_summary`。
+  图片宏、notebook `# Cell n` 原始代码段拆分问题；导出时会扫描 Markdown/LaTeX
+  中引用的本地图片，将可找到的图片复制到 `latex_project/` 和
+  `latex_project/figures/`，并在 `tex_export_status.json` 记录
+  `copied_assets` / `missing_assets`。自动编译时若 `latexmk` 失败，会 fallback
+  到连续两次 `xelatex`，并记录 `compile_reason` / `compile_failure_summary`。
+- CUMCM sidecar 模板字体 fallback 已覆盖 `KaiTi` / `STXinwei` / `LiSu`；Docker
+  中缺少 Windows 字体或 `AR PL KaitiM GB` 时，会继续 fallback 到 Noto CJK 字体，
+  优先保证候选 LaTeX 工程可编译。
 - 当前最新真实烟雾任务的主链路曾达到：
+  - `task_id = 20260705-095041-36750d99`
   - `paper_preflight_report.json = PASS`
   - `export_status.json -> pdf.success = true`
   - `pdf_visual_check = PASS`
+  - `tex_export_status.json -> compile_success = true`
+  - `latex_project/main.pdf` 已生成
 - `cumcm2026` 是基于 2026 修订稿规范实现的暂定模板，不是官方最终 DOCX/LaTeX 模板包。
+- 主 PDF 导出会在摘要/关键词后做 PDF-only 分页，保证摘要页独占第一页、
+  正文从第二页开始；该分页不写回 `res.md`，也不影响 DOCX 或 LaTeX sidecar。
 - 真实提交前仍需人工复核论文内容和 PDF 排版。
 
 ## 接手时禁止全盘扫描
@@ -80,9 +90,13 @@
   - 主 PDF 导出。
   - Pandoc + XeLaTeX。
   - 主 PDF 禁 raw TeX，支持 `$...$` 和 `\(...\)`。
+  - PDF-only 预处理会在关键词后插入内部分页标记，再由
+    `pandoc_filters/pdf_pagebreak.lua` 转为 LaTeX `\clearpage`。
 - `backend/app/tools/tex_project_exporter.py`
   - LaTeX sidecar 导出。
   - `latex_project/` 是候选产物。
+  - 负责复制 Markdown/LaTeX 引用的本地图片并记录 `copied_assets` /
+    `missing_assets`。
 - `backend/app/tools/paper_postprocessor.py`
   - 参考文献、附录、支撑材料、预检、claim trace。
   - 负责 `paper_preflight_report.json/md`。
@@ -123,6 +137,8 @@
 - 如果 PDF 视觉检查失败，优先看：
   `pdf_visual_check.json -> checks`
 - 如果 sidecar 失败，先确认是否影响主交付；通常不阻断。
+- 如果 sidecar 报图片缺失，先看 `tex_export_status.json -> missing_assets`，再确认
+  `res.md` 或 `sections/*.tex` 中的图片引用是否存在于任务 work_dir。
 - 如果报告被后续重新导出覆盖，先说明无法从当前文件复原旧 stderr。
 
 ## 常用验证命令
@@ -141,6 +157,10 @@ uv run python scripts/smoke_pdf_export.py
   - `export_status.json -> pdf.success = true`
   - `pdf_visual_check.json = PASS`
   - `candidate_manifest.json` 登记主交付文件。
+- sidecar 候选工程成功通常看：
+  - `tex_export_status.json -> compile_success = true`
+  - `latex_project/main.pdf` 存在且非空
+  - `tex_export_status.json -> missing_assets = []`
 - 如果 `res.pdf` 成功但 `latex_project/` 编译失败，先汇报 sidecar 非阻断。
 - 如果 `preflight PASS` 但论文内容可疑，使用最终人工复核清单。
 - 如果官方发布 2026 Word/DOCX 模板，按 `docs/md/CUMCM2026模板替换指南.md` 替换 `cumcm2026_docx`。
@@ -155,6 +175,8 @@ uv run python scripts/smoke_pdf_export.py
 
 ## 最近相关提交
 
+- `43db371 docs: require handoff memory sync after tasks`
+- `b05bc2f Fix LaTeX sidecar compilation fallback`
 - `93b02b5 docs: add CUMCM 2026 template replacement guide`
 - `dfa89d1 Default modeling exports to cumcm2026`
 - `012a68f Fix CUMCM 2026 export validation`

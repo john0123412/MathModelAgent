@@ -7,6 +7,13 @@ from app.schemas.A2A import WriterResponse
 import json
 import uuid
 
+EMBEDDED_REFERENCE_HEADING_RE = re.compile(
+    r"(?m)^\s*#{0,6}\s*(?:[一二三四五六七八九十]+、)?参考文献\s*$"
+)
+TRAILING_REFERENCE_BLOCK_RE = re.compile(
+    r"(?ms)\n{2,}(?:\[\d+\]\s+[^\n]+(?:\n|$))+\s*$"
+)
+
 
 class UserOutput:
     """管理建模任务的输出结果，处理引用编号、脚注和最终论文拼接。"""
@@ -122,6 +129,17 @@ class UserOutput:
 
         return text
 
+    def strip_embedded_references(self, text: str) -> str:
+        """移除 Writer 分段内误生成的局部参考文献块。
+
+        最终参考文献由 UserOutput 在全文末尾统一追加；如果分段中提前出现
+        参考文献标题，后处理会把后续章节当作参考文献续行而破坏论文结构。
+        """
+        match = EMBEDDED_REFERENCE_HEADING_RE.search(text)
+        if not match:
+            return TRAILING_REFERENCE_BLOCK_RE.sub("", text).rstrip()
+        return TRAILING_REFERENCE_BLOCK_RE.sub("", text[: match.start()]).rstrip()
+
     def sort_text_with_footnotes(self, replace_res: dict) -> dict:
         """按章节顺序排列文本并将 UUID 替换为连续编号。
 
@@ -182,7 +200,8 @@ class UserOutput:
         replace_res = {}
 
         for key, value in self.res.items():
-            new_text = self.replace_references_with_uuid(value["response_content"])
+            section_text = self.strip_embedded_references(value["response_content"])
+            new_text = self.replace_references_with_uuid(section_text)
             replace_res[key] = {
                 "response_content": new_text,
             }

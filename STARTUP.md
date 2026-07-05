@@ -167,6 +167,7 @@ curl.exe -X POST http://127.0.0.1:8000/modeling `
 
 **`cumcm2026` 相对 `cumcm2025` 的差异**：
 1. **PDF**：不生成目录，也不使用 `--number-sections`。当前 Markdown 模板已经带有 `一、`、`1.1` 等手写编号，关闭 pandoc 自动编号可以避免导出后出现 `2 一、问题重述`、`2.1 1.1 问题背景` 之类的重复编号。
+   PDF 导出会在摘要/关键词后做 PDF-only 分页，保证摘要页独占第一页、正文从第二页开始；该分页不写回 `res.md`，也不影响 DOCX 或 LaTeX sidecar。
 2. **LaTeX sidecar**：沿用 gmcmthesis 资源目录，但模板键为 `zh/cumcm2026-gmcmthesis`，电子版从摘要页开始；`latex_project/main.tex` 默认输入结构化 `sections/*.tex`，同时保留 `sections/imported_body.tex` 作为兼容审计文件。
 
 > 当前若目标赛事是高教社杯全国大学生数学建模竞赛，应优先使用 `export_profile=cumcm2026`；不要使用 `huashubei`，后者是华数杯 profile。
@@ -233,11 +234,18 @@ LaTeX sidecar 现在生成两类正文文件：
 `\pandocbounded`、`\passthrough` 图片/inline 片段，并把图片搜索路径设为
 `./`、`../`、`sections/`、`figures/`，以便引用任务目录根部图片。
 
+导出器会扫描 Markdown 和生成的 LaTeX 中引用的本地图片，把存在的图片复制到
+`latex_project/` 和 `latex_project/figures/`，并把缺失引用写入
+`tex_export_status.json -> missing_assets`。这样候选 LaTeX 工程脱离任务根目录后也
+能尽量独立编译；如果图片确实不存在，主交付链路不受影响，但 sidecar 风险会被记录。
+
 `latex_project/main.tex` 默认输入结构化章节文件，`tex_export_status.json` 会记录：
 
 - `structured_sections`
 - `structured_section_count`
 - `main_uses_structured_sections`
+- `copied_assets`
+- `missing_assets`
 - `compile_attempted`
 - `compile_success`
 - `compile_reason`
@@ -384,10 +392,15 @@ B 需要 1 小时机器时间、2 小时人工时间，利润 30 元；
 验收标准：
 
 - `GET /tasks` 中任务状态为 `completed`
-- 工作目录生成 `res.md`、`res.json`、`res.docx`、`candidate_manifest.json`
+- 工作目录生成 `res.md`、`res.json`、`res.docx`、`res.pdf`、`candidate_manifest.json`
+- `paper_preflight_report.json = PASS`
+- `export_status.json -> pdf.success = true`
+- `pdf_visual_check.json = PASS`
+- `tex_export_status.json -> compile_success = true`
+- `latex_project/main.pdf` 存在且非空
 - 续传相关测试应生成 `checkpoint.json`、`variable_snapshot.pkl`、`variable_snapshot_meta.json`
 - 后端日志出现 `变量快照已恢复` 或 `快照后增量重放`
-- 如果容器未安装 `pandoc`，`res.pdf` 和 LaTeX sidecar 可能被跳过；只要 Markdown/Word/JSON 成功，不视为主流程失败
+- 如果容器环境异常导致 `pandoc`/`xelatex` 不可用，`res.pdf` 和 LaTeX sidecar 可能被跳过；只要 Markdown/Word/JSON 成功，不视为主流程失败，但正式提交前必须补导出 PDF 并复核。
 
 ### 测试 A：断点续传
 
@@ -435,7 +448,7 @@ curl.exe -X POST http://127.0.0.1:8000/modeling `
 - 任务正常完成，`res.md`/`res.docx`/`res.pdf`（如已装 pandoc）正常生成
 - `export_status.json` 中 `export_profile` 应为 `cumcm2026`，PDF 命令不应包含 `--toc` 或 `--number-sections`
 - `paper_preflight_report.json` 应包含 `status`/`conclusion`、`export_profile`、`claim_trace` 等检查项
-- 如果本机装了 pandoc + latexmk/xelatex，`latex_project/main.tex` 应包含 `CUMCM 2026 LaTeX sidecar`，且 `latex_project/gmcmthesis.cls`、`latex_project/figures/logo2025.png` 等模板资源已被复制
+- 如果本机装了 pandoc + latexmk/xelatex，`latex_project/main.tex` 应包含 `CUMCM 2026 LaTeX sidecar`，且 `latex_project/gmcmthesis.cls`、`latex_project/figures/logo2025.png` 等模板资源已被复制；正文引用的本地图片应出现在 `tex_export_status.json -> copied_assets`，不存在的图片会出现在 `missing_assets`
 - 换回 `export_profile=default`（或不传该字段）重新提交一次，确认输出与之前完全一致（回归验证）
 
 ---

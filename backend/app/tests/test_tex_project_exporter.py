@@ -212,6 +212,103 @@ class TestTexProjectExporterCumcm2025Profile(unittest.TestCase):
             self.assertIn(r"\providecommand{\passthrough}[1]{#1}", main_tex_content)
             self.assertNotIn(r"\tableofcontents", main_tex_content)
 
+    def test_referenced_root_images_are_copied_into_latex_project(self):
+        real_which = shutil.which
+
+        def which_side_effect(cmd, *args, **kwargs):
+            if cmd == "pandoc":
+                return real_which(cmd)
+            return None
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            md_path = os.path.join(work_dir, "res.md")
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write("# 标题\n\n![敏感性图](machine_profit_sensitivity.png)\n")
+            with open(os.path.join(work_dir, "machine_profit_sensitivity.png"), "wb") as f:
+                f.write(b"png")
+
+            with mock.patch(
+                "app.tools.tex_project_exporter.shutil.which",
+                side_effect=which_side_effect,
+            ):
+                result = export_markdown_to_latex_project(
+                    md_path, work_dir, export_profile=ExportProfile.CUMCM2026
+                )
+
+            self.assertTrue(result["success"], msg=result)
+            self.assertIn("machine_profit_sensitivity.png", result["copied_assets"])
+            self.assertIn("figures/machine_profit_sensitivity.png", result["copied_assets"])
+            self.assertEqual(result["missing_assets"], [])
+            self.assertTrue(
+                os.path.exists(
+                    os.path.join(
+                        work_dir,
+                        "latex_project",
+                        "figures",
+                        "machine_profit_sensitivity.png",
+                    )
+                )
+            )
+
+    def test_missing_referenced_images_are_recorded(self):
+        real_which = shutil.which
+
+        def which_side_effect(cmd, *args, **kwargs):
+            if cmd == "pandoc":
+                return real_which(cmd)
+            return None
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            md_path = os.path.join(work_dir, "res.md")
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write("# 标题\n\n![缺图](missing.png)\n")
+
+            with mock.patch(
+                "app.tools.tex_project_exporter.shutil.which",
+                side_effect=which_side_effect,
+            ):
+                result = export_markdown_to_latex_project(
+                    md_path, work_dir, export_profile=ExportProfile.CUMCM2026
+                )
+
+            self.assertTrue(result["success"], msg=result)
+            self.assertEqual(result["copied_assets"], [])
+            self.assertEqual(result["missing_assets"], ["missing.png"])
+
+    def test_referenced_images_outside_work_dir_are_not_copied(self):
+        real_which = shutil.which
+
+        def which_side_effect(cmd, *args, **kwargs):
+            if cmd == "pandoc":
+                return real_which(cmd)
+            return None
+
+        with tempfile.TemporaryDirectory() as root_dir:
+            work_dir = os.path.join(root_dir, "task")
+            os.makedirs(work_dir)
+            with open(os.path.join(root_dir, "outside.png"), "wb") as f:
+                f.write(b"png")
+            md_path = os.path.join(work_dir, "res.md")
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write("# 标题\n\n![外部图](../outside.png)\n")
+
+            with mock.patch(
+                "app.tools.tex_project_exporter.shutil.which",
+                side_effect=which_side_effect,
+            ):
+                result = export_markdown_to_latex_project(
+                    md_path, work_dir, export_profile=ExportProfile.CUMCM2026
+                )
+
+            self.assertTrue(result["success"], msg=result)
+            self.assertEqual(result["copied_assets"], [])
+            self.assertEqual(result["missing_assets"], ["../outside.png"])
+            self.assertFalse(
+                os.path.exists(
+                    os.path.join(work_dir, "latex_project", "figures", "outside.png")
+                )
+            )
+
     def test_huashubei_profile_uses_single_body_compatible_template(self):
         """huashubei sidecar 使用兼容外壳，但 main.tex 输入结构化 sections。"""
         real_which = shutil.which

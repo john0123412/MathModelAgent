@@ -18,6 +18,7 @@ from app.schemas.enums import ExportProfile
 from app.tools.export_profiles import HUASHUBEI_PAGE_MARGIN, get_export_profile_config
 
 SECTION_INPUTS_PLACEHOLDER = "% MMA_SECTION_INPUTS"
+PANDOC_LATEX_MARKDOWN_FORMAT = "markdown+tex_math_dollars+tex_math_single_backslash+pipe_tables+raw_tex"
 
 _MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 % =============================================================================
@@ -292,7 +293,7 @@ def _run_pandoc_to_latex(
         "pandoc",
         md_path,
         "-f",
-        "markdown",
+        PANDOC_LATEX_MARKDOWN_FORMAT,
         "-t",
         "latex",
         "-o",
@@ -436,7 +437,7 @@ def export_markdown_to_latex_project(
         "pandoc",
         md_path,
         "-f",
-        "markdown",
+        PANDOC_LATEX_MARKDOWN_FORMAT,
         "-t",
         "latex",
         "-o",

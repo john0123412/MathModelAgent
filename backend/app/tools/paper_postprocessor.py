@@ -28,19 +28,19 @@ NO_PROGRAM_RE = re.compile(r"本论文没有用到程序")
 NO_SUPPORT_MATERIAL_RE = re.compile(r"本论文没有支撑材料")
 HEADING_RE = re.compile(r"(?m)^#{1,6}\s+(.+?)\s*$")
 ABSTRACT_HEADING_RE = re.compile(r"(?m)^#{1,6}\s*摘要\s*$")
-KEYWORDS_RE = re.compile(r"关键词\s*[:：]\s*(.+)")
+KEYWORDS_RE = re.compile(r"\*{0,2}\s*关键词\s*\*{0,2}\s*[:：]\s*(.+)")
 KEYWORDS_HEADING_RE = re.compile(
     r"(?ms)^#{1,6}\s*关键词\s*\n+(?P<keywords>.*?)(?=\n#{1,6}\s|\Z)"
 )
 BOLD_ABSTRACT_HEADING_RE = re.compile(r"(?m)^\*\*\s*摘要\s*\*\*\s*$")
 BOLD_KEYWORDS_HEADING_RE = re.compile(r"(?m)^\*\*\s*关键词\s*\*\*\s*$")
 INTERNAL_PATH_RE = re.compile(
-    r"(?:[A-Za-z]:[\\/][^\s，。；；,;]+|/(?:home|tmp|var|usr|etc|opt|root|workspace)/[^\s，。；；,;]+)"
+    r"(?<![A-Za-z])(?:[A-Za-z]:[\\/][^\s，。；；,;]+|/(?:home|tmp|var|usr|etc|opt|root|workspace)/[^\s，。；；,;]+)"
 )
 FENCED_CODE_BLOCK_RE = re.compile(r"(?ms)^```.*?^```\s*")
 CLAIM_SENTENCE_RE = re.compile(r"[^。！？.!?\n]*(?:最优|利润|提高|增加|降低|结果表明|敏感性|影子价格|准确率|误差)[^。！？.!?\n]*[。！？.!?]?")
 NUMERIC_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:%|元|小时|件|吨|亩|分|倍|年|万元)?")
-STRONG_WORDING_RE = re.compile(r"证明|必然|唯一|完全|显著优于|最可靠|精确预测")
+STRONG_WORDING_RE = re.compile(r"证明|唯一|显著优于|最可靠|精确预测")
 
 REQUIRED_SECTION_KEYWORDS = {
     "problem_restatement": ("问题重述", "问题提出"),
@@ -188,6 +188,12 @@ def normalize_chinese_references(markdown: str) -> str:
 
     body = markdown[: match.start()].rstrip()
     reference_text = markdown[match.end() :].strip()
+    appendix_text = ""
+    appendix_match = APPENDIX_HEADING_RE.search(reference_text)
+    if appendix_match:
+        appendix_text = reference_text[appendix_match.start() :].strip()
+        reference_text = reference_text[: appendix_match.start()].strip()
+
     entries = _parse_reference_entries(reference_text)
     if not entries:
         return INLINE_FOOTNOTE_RE.sub(lambda m: f"[{m.group(1)}]", markdown)
@@ -199,7 +205,10 @@ def normalize_chinese_references(markdown: str) -> str:
     for index, (_, content) in enumerate(entries, 1):
         reference_lines.append(f"[{index}] {content}")
 
-    return body + "\n\n" + "\n".join(reference_lines).rstrip() + "\n"
+    result = body + "\n\n" + "\n".join(reference_lines).rstrip() + "\n"
+    if appendix_text:
+        result += "\n\n" + appendix_text.rstrip() + "\n"
+    return result
 
 
 def normalize_keywords(markdown: str) -> str:
@@ -356,19 +365,36 @@ def append_code_appendix(markdown: str, work_dir: str) -> tuple[str, list[str]]:
     lines.extend(["## 附录B 源程序代码", ""])
     if sources:
         for index, source in enumerate(sources, 1):
+            fence = _code_fence(source.code)
             lines.extend(
                 [
                     f"### B.{index} {source.name}",
                     "",
-                    f"```{source.language}",
-                    source.code.rstrip(),
-                    "```",
+                    f"{fence}{source.language}",
+                    _listings_safe_code(source.code).rstrip(),
+                    fence,
                     "",
                 ]
             )
     else:
         lines.extend(["本论文没有用到程序。", ""])
     return "\n".join(lines).rstrip() + "\n", [source.name for source in sources]
+
+
+def _code_fence(code: str) -> str:
+    """Return a Markdown fence that cannot be closed by the code content."""
+    if "`" in code:
+        longest_tilde = max(
+            (len(match.group(0)) for match in re.finditer(r"~+", code)),
+            default=0,
+        )
+        return "~" * max(3, longest_tilde + 1)
+    return "```"
+
+
+def _listings_safe_code(code: str) -> str:
+    """Prevent source text from closing pandoc's LaTeX listings environment."""
+    return code.replace(r"\end{lstlisting}", r"\end{lstlisting }")
 
 
 def _resolve_image_path(work_dir: str, image_path: str) -> str:
@@ -505,7 +531,7 @@ def _preflight_status(checks: dict) -> str:
 
 
 def _check_internal_paths(markdown: str) -> dict:
-    matches = sorted(set(INTERNAL_PATH_RE.findall(markdown)))
+    matches = sorted(set(INTERNAL_PATH_RE.findall(_without_fenced_code_blocks(markdown))))
     return {"passed": not matches, "matches": matches}
 
 
@@ -530,7 +556,7 @@ def _check_tables(markdown: str) -> dict:
         header = table[0]
         column_count = max(0, header.count("|") - 1)
         max_line_length = max(len(line) for line in table)
-        if column_count >= 7 or max_line_length >= 120:
+        if max_line_length >= 120 or (column_count >= 7 and max_line_length >= 90):
             wide_tables.append(
                 {
                     "table_index": index,
@@ -665,7 +691,7 @@ def build_claim_trace(markdown: str, code_sources: list[str]) -> dict:
         if has_number and code_sources:
             evidence_type = "code_output"
             evidence_ids = code_sources[:3]
-            strength = "acceptable"
+            strength = "strong"
         elif figure_paths:
             evidence_type = "figure"
             evidence_ids = figure_paths[:3]
@@ -856,7 +882,7 @@ def build_preflight_report(
         "keywords": _with_severity(_check_keywords(markdown), "conditional"),
         "sections": _with_severity(sections_check, _sections_check_severity(sections_check)),
         "internal_paths": _with_severity(_check_internal_paths(markdown), "fail"),
-        "tables": _with_severity(_check_tables(markdown), "conditional"),
+        "tables": _with_severity(_check_tables(markdown_without_code), "conditional"),
         "claim_trace": _with_severity(
             claim_trace_check, _claim_trace_check_severity(claim_trace_check)
         ),

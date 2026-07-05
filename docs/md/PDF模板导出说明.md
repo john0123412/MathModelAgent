@@ -48,6 +48,24 @@ Docker 生成 res.md/res.docx（+ 自动化预览用的 res.pdf） ->
 Windows 本机工具读取 res.md -> Pandoc + XeLaTeX 用真实系统字体重新生成 res.pdf
 ```
 
+## 高教社杯 `cumcm2026` 验收要点
+
+最近一次真实链路烟雾任务 `20260705-052900-29e33d1f` 使用
+`export_profile=cumcm2026` 重新导出并通过主交付验收：
+
+- `paper_preflight_report.json`：`PASS`
+- `pdf_visual_check.json`：`PASS`，A4、非空、文本可提取，且 `text_margin.overflows=[]`
+- `res.md`、`res.pdf`、`res.docx`、`res.json`、`candidate_manifest.json` 均生成
+- 真实产物包含 PNG 图片、CSV 表格数据和 `notebook.ipynb` 源码附录
+- Docker 中官方 Windows 字体缺失时，`SimSun/SimHei/Times New Roman` 会 fallback 到
+  `Noto Serif CJK SC`、`Noto Sans CJK SC`、`Liberation Serif`；正式提交前仍建议在
+  Windows 本机用真实字体重新导出
+
+`cumcm2026` 主 PDF 导出现在显式关闭 pandoc raw TeX，并支持 `\( ... \)` 内联数学；
+附录代码会防止源码中的 `\end{lstlisting}` 提前结束 LaTeX 代码环境，避免 notebook
+里嵌套的 LaTeX 模板字符串把 `\begin{table}[H]` 等内容泄漏成正文 LaTeX，从而造成
+PDF 编译失败或代码越界。
+
 注意：当前模板 PDF 不是从 `res.docx` 转换而来，而是从 `res.md` 直接生成。
 这样可以稳定控制论文模板参数，例如 `ctexart`、中文字体、A4 纸张、页边距、
 页脚页码和是否生成目录页。若强行走 `DOCX -> PDF`，通常需要 LibreOffice

@@ -15,6 +15,7 @@ from app.config.setting import settings
 
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _INVALID_FILENAME_CHARS = {"/", "\\", ":", "\x00"}
+PANDOC_DOCX_MARKDOWN_FORMAT = "markdown+tex_math_dollars+tex_math_single_backslash"
 
 # 所有任务工作目录的根路径约定，供 create_work_dir/get_work_dir 及路由层复用，
 # 避免各处硬编码 "project/work_dir" 字符串。
@@ -257,7 +258,7 @@ def md_2_docx(
         source_file=md_path,
         to="docx",
         outputfile=docx_path,
-        format="markdown+tex_math_dollars",
+        format=PANDOC_DOCX_MARKDOWN_FORMAT,
         extra_args=extra_args,
     )
     print(f"转换完成: {docx_path}")

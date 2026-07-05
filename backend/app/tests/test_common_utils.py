@@ -51,6 +51,10 @@ class TestMd2DocxExportProfile(unittest.TestCase):
                 md_2_docx("task-default", export_profile=ExportProfile.DEFAULT)
 
         extra_args = convert_mock.call_args.kwargs["extra_args"]
+        self.assertEqual(
+            convert_mock.call_args.kwargs["format"],
+            "markdown+tex_math_dollars+tex_math_single_backslash",
+        )
         self.assertNotIn("--reference-doc", extra_args)
 
     def test_cumcm2025_profile_adds_reference_doc_when_file_exists(self):

@@ -34,6 +34,10 @@ class TestPdfTemplateCommand(unittest.TestCase):
         self.assertIn("--standalone", command)
         self.assertIn("--listings", command)
         self.assertIn("--pdf-engine=xelatex", command)
+        self.assertIn(
+            "markdown-raw_tex+tex_math_dollars+tex_math_single_backslash+pipe_tables",
+            command,
+        )
         self.assertIn("documentclass=ctexart", command)
         self.assertIn("papersize=a4", command)
         self.assertIn("CJKmainfont=SimSun", command)

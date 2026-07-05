@@ -51,6 +51,26 @@ class TestNormalizeChineseReferences(unittest.TestCase):
         self.assertIn("\n[2] 第八条文献跨行 继续说明。", normalized)
         self.assertNotIn("[8]", normalized)
 
+    def test_reference_normalization_preserves_existing_appendix(self):
+        markdown = (
+            "# 标题\n\n"
+            "正文[1]。\n\n"
+            "## 参考文献\n\n"
+            "[1] 文献。\n\n"
+            "# 附录\n\n"
+            "## 附录B 源程序代码\n\n"
+            "```python\n"
+            "print('ok')\n"
+            "```\n"
+        )
+
+        normalized = normalize_chinese_references(markdown)
+
+        self.assertIn("## 参考文献\n\n[1] 文献。", normalized)
+        self.assertIn("# 附录\n\n## 附录B 源程序代码", normalized)
+        self.assertIn("```python\nprint('ok')\n```", normalized)
+        self.assertNotIn("[1] 文献。 # 附录", normalized)
+
     def test_keywords_heading_is_normalized_to_single_line(self):
         markdown = "## 摘要\n\n正文。\n\n## 关键词\n\n线性规划 敏感性分析 生产优化 资源分配\n\n# 一、问题重述"
 
@@ -70,6 +90,20 @@ class TestNormalizeChineseReferences(unittest.TestCase):
 
         self.assertIn("## 摘要\n这是摘要正文。", normalized)
         self.assertIn("关键词：线性规划；敏感性分析；生产优化；资源分配", normalized)
+
+    def test_bold_inline_keywords_are_detected(self):
+        markdown = (
+            "## 摘要\n\n这是摘要正文。\n\n"
+            "**关键词**：线性规划；敏感性分析；生产优化；资源分配\n"
+        )
+
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(),
+            markdown=markdown,
+            code_sources=[],
+        )
+
+        self.assertTrue(report["checks"]["keywords"]["passed"])
 
 
 class TestAppendCodeAppendix(unittest.TestCase):
@@ -119,6 +153,28 @@ class TestAppendCodeAppendix(unittest.TestCase):
         self.assertIn("| notebook.ipynb | 源程序代码 |", updated)
         self.assertIn("# Cell 1", updated)
         self.assertIn("x = 1\nprint(x)", updated)
+
+    def test_code_appendix_fence_is_longer_than_embedded_backticks(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(os.path.join(work_dir, "problem.py"), "w", encoding="utf-8") as f:
+                f.write("snippet = '''\\n```python\\nprint(1)\\n```\\n'''\n")
+
+            updated, sources = append_code_appendix("正文。", work_dir)
+
+        self.assertEqual(sources, ["problem.py"])
+        self.assertIn("~~~python\nsnippet = '''", updated)
+        self.assertIn("\n~~~", updated)
+
+    def test_code_appendix_escapes_lstlisting_end_marker(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(os.path.join(work_dir, "problem.py"), "w", encoding="utf-8") as f:
+                f.write("latex = r'''\\end{lstlisting}\\n\\begin{table}[H]\\n'''")
+
+            updated, sources = append_code_appendix("正文。", work_dir)
+
+        self.assertEqual(sources, ["problem.py"])
+        self.assertNotIn(r"\end{lstlisting}", updated)
+        self.assertIn(r"\end{lstlisting }", updated)
 
     def test_appends_no_program_statement_when_no_code_exists(self):
         with tempfile.TemporaryDirectory() as work_dir:
@@ -305,6 +361,16 @@ class TestPreparePaperMarkdown(unittest.TestCase):
         self.assertFalse(report["checks"]["claim_trace"]["passed"])
         self.assertEqual(report["checks"]["claim_trace"]["severity"], "fail")
 
+    def test_numeric_code_backed_strong_wording_passes_claim_trace(self):
+        markdown = (
+            "# 方案\n\n"
+            "结果表明，最优解处机器时间完全利用，利润增加166.7元。\n"
+        )
+
+        trace = build_claim_trace(markdown, ["notebook.ipynb"])
+
+        self.assertEqual(trace["status"], "PASS")
+
 
 class TestEnhancedPreflightChecks(unittest.TestCase):
     """验证增强预检规则。"""
@@ -380,6 +446,71 @@ class TestEnhancedPreflightChecks(unittest.TestCase):
         self.assertNotIn("Cell 1", headings)
         self.assertNotIn("1. 参数定义", headings)
 
+    def test_wide_tables_inside_code_blocks_are_ignored(self):
+        markdown = (
+            "# 基于优化模型的生产方案研究\n\n"
+            "## 摘要\n\n"
+            "本文围绕生产优化问题建立线性规划模型，结合资源约束、利润目标和敏感性分析给出可复核的生产方案。"
+            "模型首先对机器时间和人工时间进行约束刻画，随后通过目标函数求解最大利润，并在结果分析中讨论资源变化对利润的影响。"
+            "结果表明，所给方案能够在约束范围内获得较高利润，同时机器时间增加会带来边际收益变化。\n\n"
+            "关键词：线性规划；敏感性分析；生产优化；资源约束\n\n"
+            "# 一、问题重述\n\n正文。\n\n"
+            "# 二、问题分析\n\n正文。\n\n"
+            "# 三、模型假设\n\n正文。\n\n"
+            "# 四、符号说明\n\n正文。\n\n"
+            "# 五、模型的建立与求解\n\n正文。\n\n"
+            "# 六、模型的分析与检验\n\n正文。\n\n"
+            "# 七、模型的评价、改进与推广\n\n正文。\n\n"
+            "## 参考文献\n\n[1] 文献。\n\n"
+            "# 附录\n\n"
+            "## 附录A 支撑材料文件列表\n\n本论文没有支撑材料。\n\n"
+            "## 附录B 源程序代码\n\n"
+            "```python\n"
+            "print('| A | B | C | D | E | F | G |')\n"
+            "print('| --- | --- | --- | --- | --- | --- | --- |')\n"
+            "```\n"
+        )
+
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(),
+            markdown=markdown,
+            code_sources=["problem.py"],
+        )
+
+        self.assertTrue(report["checks"]["tables"]["passed"])
+
+    def test_short_numeric_seven_column_table_is_allowed(self):
+        markdown = (
+            "# 基于优化模型的生产方案研究\n\n"
+            "## 摘要\n\n"
+            "本文围绕生产优化问题建立线性规划模型，结合资源约束、利润目标和敏感性分析给出可复核的生产方案。"
+            "模型首先对机器时间和人工时间进行约束刻画，随后通过目标函数求解最大利润，并在结果分析中讨论资源变化对利润的影响。"
+            "结果表明，所给方案能够在约束范围内获得较高利润，同时机器时间增加会带来边际收益变化。\n\n"
+            "关键词：线性规划；敏感性分析；生产优化；资源约束\n\n"
+            "# 一、问题重述\n\n正文。\n\n"
+            "# 二、问题分析\n\n正文。\n\n"
+            "# 三、模型假设\n\n正文。\n\n"
+            "# 四、符号说明\n\n正文。\n\n"
+            "# 五、模型的建立与求解\n\n正文。\n\n"
+            "# 六、模型的分析与检验\n\n正文。\n\n"
+            "# 七、模型的评价、改进与推广\n\n正文。\n\n"
+            "| 角点编号 | x值 | y值 | 2x+y | x+2y | 40x+30y | 是否可行 |\n"
+            "|:--------:|:---:|:---:|:----:|:----:|:-------:|:--------:|\n"
+            "| 4 | 40 | 20 | 100 | 80 | 2200 | 是 |\n\n"
+            "## 参考文献\n\n[1] 文献。\n\n"
+            "# 附录\n\n"
+            "## 附录A 支撑材料文件列表\n\n本论文没有支撑材料。\n\n"
+            "## 附录B 源程序代码\n\n```python\nprint('ok')\n```\n"
+        )
+
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(),
+            markdown=markdown,
+            code_sources=["problem.py"],
+        )
+
+        self.assertTrue(report["checks"]["tables"]["passed"])
+
     def test_detects_missing_structure_path_leak_wide_table_and_unused_image(self):
         with tempfile.TemporaryDirectory() as work_dir:
             os.makedirs(os.path.join(work_dir, "figures"), exist_ok=True)
@@ -391,9 +522,9 @@ class TestEnhancedPreflightChecks(unittest.TestCase):
                 "摘要太短。\n\n"
                 "关键词：线性规划\n\n"
                 "正文泄露路径 D:\\workspace\\MathModelAgent\\backend\\project\\work_dir\\task-1。\n\n"
-                "| A | B | C | D | E | F | G |\n"
+                "| A指标说明 | B指标说明 | C指标说明 | D指标说明 | E指标说明 | F指标说明 | G指标说明 |\n"
                 "| --- | --- | --- | --- | --- | --- | --- |\n"
-                "| 1 | 2 | 3 | 4 | 5 | 6 | 7 |\n\n"
+                "| 该列包含较长的说明文本 | 该列包含较长的说明文本 | 该列包含较长的说明文本 | 该列包含较长的说明文本 | 该列包含较长的说明文本 | 该列包含较长的说明文本 | 该列包含较长的说明文本 |\n\n"
                 "## 参考文献\n\n[1] 文献。\n\n"
                 "# 附录\n\n"
                 "## 附录A 支撑材料文件列表\n\n本论文没有支撑材料。\n\n"
@@ -415,6 +546,40 @@ class TestEnhancedPreflightChecks(unittest.TestCase):
         self.assertFalse(report["checks"]["images"]["passed"])
         self.assertIn("figures/unused.png", report["checks"]["images"]["unused_generated"])
         self.assertTrue(report["checks"]["tables"]["wide_tables"])
+
+    def test_internal_path_check_ignores_urls_and_fenced_code(self):
+        markdown = (
+            "# 基于优化模型的生产方案研究\n\n"
+            "## 摘要\n\n"
+            "本文围绕生产优化问题建立线性规划模型，结合资源约束、利润目标和敏感性分析给出可复核的生产方案。"
+            "模型首先对机器时间和人工时间进行约束刻画，随后通过目标函数求解最大利润，并在结果分析中讨论资源变化对利润的影响。"
+            "结果表明，所给方案能够在约束范围内获得较高利润，同时机器时间增加会带来边际收益变化。\n\n"
+            "关键词：线性规划；生产优化；敏感性分析；资源约束\n\n"
+            "正文引用 https://www.tug.org/texlive/ 作为外部资料链接。\n\n"
+            "# 一、问题重述\n\n正文。\n\n"
+            "# 二、问题分析\n\n正文。\n\n"
+            "# 三、模型假设\n\n正文。\n\n"
+            "# 四、符号说明\n\n正文。\n\n"
+            "# 五、模型的建立与求解\n\n正文。\n\n"
+            "# 六、模型的分析与检验\n\n正文。\n\n"
+            "# 七、模型的评价、改进与推广\n\n正文。\n\n"
+            "## 参考文献\n\n[1] 文献。\n\n"
+            "# 附录\n\n"
+            "## 附录A 支撑材料文件列表\n\n本论文没有支撑材料。\n\n"
+            "## 附录B 源程序代码\n\n"
+            "```python\n"
+            "path = 'D:\\\\workspace\\\\MathModelAgent\\\\backend\\\\project\\\\work_dir\\\\task-1'\n"
+            "print(path)\n"
+            "```\n"
+        )
+
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(),
+            markdown=markdown,
+            code_sources=["problem.py"],
+        )
+
+        self.assertTrue(report["checks"]["internal_paths"]["passed"])
 
     def test_missing_keywords_only_is_conditional_pass(self):
         markdown = (

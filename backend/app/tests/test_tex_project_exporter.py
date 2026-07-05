@@ -81,6 +81,10 @@ class TestTexProjectExporterHappyPath(unittest.TestCase):
             self.assertTrue(result["enabled"])
             self.assertTrue(result["success"], msg=result)
             self.assertFalse(result["compile_attempted"])
+            self.assertIn(
+                "markdown+tex_math_dollars+tex_math_single_backslash+pipe_tables+raw_tex",
+                result["command"],
+            )
 
             main_tex_path = os.path.join(work_dir, "latex_project", "main.tex")
             imported_body_path = os.path.join(

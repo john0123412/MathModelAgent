@@ -1,5 +1,6 @@
 """最终结果拼接和任务列表状态测试。"""
 
+import inspect
 import json
 import os
 import tempfile
@@ -7,8 +8,10 @@ import unittest
 from unittest import mock
 
 from app.models.user_output import UserOutput
-from app.routers import common_router
+from app.routers import common_router, modeling_router
 from app.schemas.A2A import WriterResponse
+from app.schemas.enums import ExportProfile
+from app.schemas.request import DEFAULT_MODELING_EXPORT_PROFILE, Problem
 
 
 class TestUserOutputReferences(unittest.TestCase):
@@ -110,6 +113,22 @@ class TestTaskFinalization(unittest.TestCase):
                 manifest = json.load(f)
 
         self.assertEqual(manifest["files"]["res_docx"], "res.docx")
+
+
+class TestModelingExportProfileDefaults(unittest.TestCase):
+    """验证新建建模任务默认使用高教社杯/国赛 2026 profile。"""
+
+    def test_problem_schema_defaults_to_cumcm2026(self):
+        problem = Problem(task_id="task-1")
+
+        self.assertEqual(DEFAULT_MODELING_EXPORT_PROFILE, ExportProfile.CUMCM2026)
+        self.assertEqual(problem.export_profile, ExportProfile.CUMCM2026)
+
+    def test_modeling_form_default_is_cumcm2026(self):
+        signature = inspect.signature(modeling_router.modeling)
+        form_default = signature.parameters["export_profile"].default
+
+        self.assertEqual(form_default.default, ExportProfile.CUMCM2026)
 
 
 if __name__ == "__main__":

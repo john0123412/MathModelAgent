@@ -137,15 +137,18 @@ pnpm run dev
 
 ### 导出模板选项（Export Profile）
 
-**这是新增的可选功能，不影响默认导出行为**——不传 `export_profile` 或传 `default` 时，导出结果与之前完全一致。
+新建建模任务默认使用 `cumcm2026`，匹配当前高教社杯/国赛交付口径。历史兼容的
+`default` profile 仍保留；只有显式传 `export_profile=default` 时才会走旧默认排版。
 
 **可选值**：
-- `default`（默认）：保持原有 Markdown/DOCX/PDF/LaTeX sidecar 导出行为
+- `default`（兼容）：保持原有 Markdown/DOCX/PDF/LaTeX sidecar 导出行为
 - `cumcm2025`：套用 2025 年高教社杯/国赛（CUMCM）格式规范
 - `cumcm2026`：套用 2026 年高教社杯/国赛（CUMCM）格式修订稿；PDF 不生成目录，也不启用 pandoc 自动章节编号，避免与 Markdown 模板中的 `一、`、`1.1` 手写编号叠加
 - `huashubei`：华数杯模板，仅用于华数杯任务；参加高教社杯/国赛时请使用 `cumcm2026`
 
-**如何选择**：前端提交页已经暴露“排版”选择，默认使用 `cumcm2026`；也可以直接调用 `POST /modeling` 表单字段 `export_profile`（`Form(ExportProfile.DEFAULT)`），例如：
+**如何选择**：前端提交页已经暴露“排版”选择，默认使用 `cumcm2026`；后端
+`POST /modeling` 表单字段漏传 `export_profile` 时也默认使用 `cumcm2026`。脚本、
+curl 或旧客户端仍建议显式传入，便于审计：
 
 ```powershell
 curl.exe -X POST http://127.0.0.1:8000/modeling `
@@ -169,7 +172,13 @@ curl.exe -X POST http://127.0.0.1:8000/modeling `
 > 当前若目标赛事是高教社杯全国大学生数学建模竞赛，应优先使用 `export_profile=cumcm2026`；不要使用 `huashubei`，后者是华数杯 profile。
 
 **已知限制**：
-- LaTeX sidecar 编译产物（`latex_project/`）属于候选导出，提交前仍需人工核对（`candidate_manifest.json` 中会标注 `known_risks`）
+- `cumcm2026` 当前复用 2025 年 `gmcmthesis` 模板资源目录和 `format2025_reference.docx`
+  的 Word 样式作为修订稿口径实现；2026 正式模板文件发布后，需要重新复核并替换
+  LaTeX 模板与 DOCX reference-doc。
+- LaTeX sidecar 编译产物（`latex_project/`）属于候选导出，提交前仍需人工核对（`candidate_manifest.json` 中会标注 `known_risks`）。主交付链路是 `res.md`、`res.docx`、`res.pdf` 和 `res.json`。
+- PDF 视觉检查是低成本后验检查，只覆盖 A4、非空、文本可提取和基础边距风险；不能替代人工排版验收。正式提交前仍需人工翻看摘要页、公式密集页、宽表、附录源码、参考文献和最后几页。
+- 主 PDF 导出显式关闭 pandoc raw TeX，避免源码中的 LaTeX 模板字符串泄漏成正文命令。正文应优先使用 Markdown 表格和标准 `$...$`、`\(...\)` 数学公式，不要依赖 `\begin{table}`、`\begin{align}` 等 raw LaTeX 环境。
+- `paper_preflight_report.json` 是规则/正则驱动的格式与证据链门禁，不证明模型、求解和论证一定正确；`PASS` 后仍需人工复核数学内容。
 - **字体**：PDF/LaTeX sidecar 优先使用官方格式规定的 Times New Roman/SimSun 等正式字体；精简版 Docker 镜像默认不含这些 Windows/Office 专有字体，会在编译期自动检测（`fc-match` / fontspec `\IfFontExistsTF`）并回退到免费等效字体，不影响能否编译成功，但正式提交前建议人工核对排版观感是否符合要求。两类字体的 fallback 途径不同：
   - **英文/Latin 字体**（Times New Roman → Liberation Serif、Courier New → Liberation Mono、Arial → Liberation Sans）：可通过构建时开启 `INSTALL_MS_FONTS=true` 装真正的 Microsoft Core Fonts（`ttf-mscorefonts-installer`），从而不必 fallback：
     ```bash

@@ -581,6 +581,44 @@ class TestEnhancedPreflightChecks(unittest.TestCase):
 
         self.assertTrue(report["checks"]["internal_paths"]["passed"])
 
+    def test_tilde_fenced_code_blocks_are_ignored_by_preflight(self):
+        markdown = (
+            "# 基于优化模型的生产方案研究\n\n"
+            "## 摘要\n\n"
+            "本文围绕生产优化问题建立线性规划模型，结合资源约束、利润目标和敏感性分析给出可复核的生产方案。"
+            "模型首先对机器时间和人工时间进行约束刻画，随后通过目标函数求解最大利润，并在结果分析中讨论资源变化对利润的影响。"
+            "结果表明，所给方案能够在约束范围内获得较高利润，同时机器时间增加会带来边际收益变化。\n\n"
+            "关键词：线性规划；生产优化；敏感性分析；资源约束\n\n"
+            "# 一、问题重述\n\n正文。\n\n"
+            "# 二、问题分析\n\n正文。\n\n"
+            "# 三、模型假设\n\n正文。\n\n"
+            "# 四、符号说明\n\n正文。\n\n"
+            "# 五、模型的建立与求解\n\n正文。\n\n"
+            "# 六、模型的分析与检验\n\n正文。\n\n"
+            "# 七、模型的评价、改进与推广\n\n正文。\n\n"
+            "## 参考文献\n\n[1] 文献。\n\n"
+            "# 附录\n\n"
+            "## 附录A 支撑材料文件列表\n\n本论文没有支撑材料。\n\n"
+            "## 附录B 源程序代码\n\n"
+            "~~~python\n"
+            "# 这个标题不应进入论文大纲\n"
+            "path = 'D:\\\\workspace\\\\MathModelAgent\\\\backend\\\\project\\\\work_dir\\\\task-1'\n"
+            "print('| A | B | C | D | E | F | G |')\n"
+            "print('| --- | --- | --- | --- | --- | --- | --- |')\n"
+            "~~~\n"
+        )
+
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(),
+            markdown=markdown,
+            code_sources=["problem.py"],
+        )
+
+        self.assertTrue(report["checks"]["internal_paths"]["passed"])
+        self.assertTrue(report["checks"]["sections"]["passed"])
+        self.assertNotIn("这个标题不应进入论文大纲", report["checks"]["sections"]["headings"])
+        self.assertTrue(report["checks"]["tables"]["passed"])
+
     def test_missing_keywords_only_is_conditional_pass(self):
         markdown = (
             "# 基于优化模型的生产方案研究\n\n"

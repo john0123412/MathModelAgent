@@ -37,7 +37,9 @@ BOLD_KEYWORDS_HEADING_RE = re.compile(r"(?m)^\*\*\s*关键词\s*\*\*\s*$")
 INTERNAL_PATH_RE = re.compile(
     r"(?<![A-Za-z])(?:[A-Za-z]:[\\/][^\s，。；；,;]+|/(?:home|tmp|var|usr|etc|opt|root|workspace)/[^\s，。；；,;]+)"
 )
-FENCED_CODE_BLOCK_RE = re.compile(r"(?ms)^```.*?^```\s*")
+FENCED_CODE_BLOCK_RE = re.compile(
+    r"(?ms)^(?P<fence>`{3,}|~{3,})[^\n]*\n.*?^(?P=fence)[ \t]*\n?"
+)
 CLAIM_SENTENCE_RE = re.compile(r"[^。！？.!?\n]*(?:最优|利润|提高|增加|降低|结果表明|敏感性|影子价格|准确率|误差)[^。！？.!?\n]*[。！？.!?]?")
 NUMERIC_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:%|元|小时|件|吨|亩|分|倍|年|万元)?")
 STRONG_WORDING_RE = re.compile(r"证明|唯一|显著优于|最可靠|精确预测")

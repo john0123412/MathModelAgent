@@ -20,6 +20,8 @@ _FONT_VARIABLE_KEYS = {
     "CJKmonofont",
 }
 
+PANDOC_MARKDOWN_FORMAT = "markdown-raw_tex+tex_math_dollars+tex_math_single_backslash+pipe_tables"
+
 
 def _resolve_pdf_variables(
     pdf_variables: list[str],
@@ -195,7 +197,7 @@ def export_markdown_to_pdf(
         pdf_path,
         "--pdf-engine=xelatex",
         "--from",
-        "markdown+tex_math_dollars+pipe_tables+raw_tex",
+        PANDOC_MARKDOWN_FORMAT,
         "--standalone",
         "--listings",
         "--resource-path",

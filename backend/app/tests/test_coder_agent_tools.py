@@ -56,6 +56,26 @@ class FakeRepeatingFinalExecuteModel:
         )
 
 
+class FakeRepeatingNonFinalExecuteModel:
+    api_type = ApiType.ANTHROPIC
+
+    def __init__(self):
+        self.calls = 0
+
+    async def chat(self, history, **kwargs):
+        self.calls += 1
+        return StandardResponse(
+            content="Generating another chart.",
+            tool_calls=[
+                ToolCall(
+                    id=f"chart{self.calls}",
+                    name="execute_code",
+                    arguments=f'{{"code":"print(\\"chart result {self.calls}\\")"}}',
+                )
+            ],
+        )
+
+
 class FakeCrossTaskFileModel:
     api_type = ApiType.ANTHROPIC
 
@@ -98,6 +118,12 @@ class FinalOutputInterpreter(RecordingInterpreter):
     async def execute_code(self, code):
         self.executed_code.append(code)
         return "项目完成，所有文件已生成", False, ""
+
+
+class NonFinalOutputInterpreter(RecordingInterpreter):
+    async def execute_code(self, code):
+        self.executed_code.append(code)
+        return f"图表分析输出 {len(self.executed_code)}", False, ""
 
 
 class CoderAgentToolHandlingTest(unittest.IsolatedAsyncioTestCase):
@@ -154,6 +180,23 @@ class CoderAgentToolHandlingTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("项目完成", result.code_response)
         self.assertEqual(len(interpreter.executed_code), 2)
+
+    async def test_repeated_successful_tool_outputs_auto_complete_at_cap(self):
+        interpreter = NonFinalOutputInterpreter()
+        agent = CoderAgent(
+            task_id="t1",
+            model=FakeRepeatingNonFinalExecuteModel(),
+            work_dir=".",
+            max_chat_turns=10,
+            max_successful_tool_calls=3,
+            code_interpreter=interpreter,
+        )
+
+        with patch("app.core.agents.coder_agent.redis_manager.publish_message", new=AsyncMock()):
+            result = await agent.run("solve", "ques2")
+
+        self.assertEqual(result.code_response, "图表分析输出 3")
+        self.assertEqual(len(interpreter.executed_code), 3)
 
     async def test_cross_task_parent_path_is_rejected_before_execution(self):
         interpreter = RecordingInterpreter()

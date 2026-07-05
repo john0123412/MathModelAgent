@@ -30,6 +30,47 @@ class TestCandidateExporter(unittest.TestCase):
                 json.dump({"questions_solution": {"ques1": "demo"}}, f)
             with open(os.path.join(work_dir, "export_status.json"), "w", encoding="utf-8") as f:
                 json.dump({"pdf": {"success": True}}, f)
+            with open(
+                os.path.join(work_dir, "paper_preflight_report.json"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                json.dump({"status": "pass"}, f)
+            with open(
+                os.path.join(work_dir, "paper_preflight_report.md"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                f.write("# Paper Preflight Report")
+            with open(
+                os.path.join(work_dir, "pdf_visual_check.json"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                json.dump({"status": "PASS"}, f)
+            for filename in ("paper_outline.json", "figure_usage.json"):
+                with open(os.path.join(work_dir, filename), "w", encoding="utf-8") as f:
+                    json.dump({"status": "PASS"}, f)
+            with open(os.path.join(work_dir, "claim_trace.json"), "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "status": "PASS",
+                        "claims": [
+                            {
+                                "claim": "最优利润为 2600 元。",
+                                "paper_section": "模型的建立与求解",
+                                "evidence_type": "code_output",
+                                "evidence_id_file": ["problem.py"],
+                                "strength": "acceptable",
+                                "paper_wording_check": "ok",
+                            }
+                        ],
+                    },
+                    f,
+                    ensure_ascii=False,
+                )
+            with open(os.path.join(work_dir, "claim_trace.md"), "w", encoding="utf-8") as f:
+                f.write("# Claim Trace")
 
             # 顶层图片 + 子目录图片 + 应被排除的缓存目录图片
             with open(os.path.join(work_dir, "top.png"), "wb") as f:
@@ -56,6 +97,22 @@ class TestCandidateExporter(unittest.TestCase):
                 manifest["files"]["modeler_plan_json"], "modeler_plan.json"
             )
             self.assertEqual(manifest["files"]["export_status"], "export_status.json")
+            self.assertEqual(
+                manifest["files"]["paper_preflight_report"],
+                "paper_preflight_report.json",
+            )
+            self.assertEqual(
+                manifest["files"]["paper_preflight_report_md"],
+                "paper_preflight_report.md",
+            )
+            self.assertEqual(
+                manifest["files"]["pdf_visual_check"],
+                "pdf_visual_check.json",
+            )
+            self.assertEqual(manifest["files"]["paper_outline"], "paper_outline.json")
+            self.assertEqual(manifest["files"]["figure_usage"], "figure_usage.json")
+            self.assertEqual(manifest["files"]["claim_trace"], "claim_trace.json")
+            self.assertEqual(manifest["files"]["claim_trace_md"], "claim_trace.md")
             self.assertIsNone(manifest["files"]["res_docx"])
 
             figures = manifest["files"]["figures"]
@@ -66,8 +123,8 @@ class TestCandidateExporter(unittest.TestCase):
                 f"缓存目录图片未被排除: {figures}",
             )
 
-            # claims 必须保持空数组，不伪造内容
-            self.assertEqual(manifest["claims"], [])
+            self.assertEqual(manifest["claims"][0]["claim"], "最优利润为 2600 元。")
+            self.assertEqual(manifest["claims"][0]["evidence_type"], "code_output")
 
 
 class TestPdfExporterMissingTools(unittest.TestCase):

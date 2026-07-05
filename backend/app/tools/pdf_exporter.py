@@ -197,6 +197,7 @@ def export_markdown_to_pdf(
         "--from",
         "markdown+tex_math_dollars+pipe_tables+raw_tex",
         "--standalone",
+        "--listings",
         "--resource-path",
         work_dir,
     ]

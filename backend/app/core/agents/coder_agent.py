@@ -76,6 +76,7 @@ class CoderAgent(Agent):
         work_dir: str,  # 工作目录
         max_chat_turns: int | None = settings.MAX_CHAT_TURNS,  # 最大聊天次数，None表示无限制
         max_retries: int | None = settings.MAX_RETRIES,  # 最大反思次数，None表示无限制
+        max_successful_tool_calls: int | None = settings.CODER_MAX_SUCCESSFUL_TOOL_CALLS_PER_SUBTASK,
         code_interpreter: BaseCodeInterpreter | None = None,
         context_window: int = 128000,
         cancel_event: asyncio.Event | None = None,
@@ -92,6 +93,7 @@ class CoderAgent(Agent):
         self.max_chat_turns = max_chat_turns
         self.current_chat_turns = 0
         self.max_retries = max_retries
+        self.max_successful_tool_calls = max_successful_tool_calls
         self.is_first_run = True
         self.system_prompt = CODER_PROMPT
         self.code_interpreter = code_interpreter
@@ -136,6 +138,7 @@ class CoderAgent(Agent):
         retry_count = 0
         last_error_message = ""
         consecutive_final_outputs = 0
+        successful_tool_calls = 0
 
         while True:
             if self.max_retries is not None and retry_count >= self.max_retries:
@@ -294,6 +297,7 @@ class CoderAgent(Agent):
                             continue
                         else:
                             # 成功执行的tool响应
+                            successful_tool_calls += 1
                             await self.append_chat_history(
                                 {
                                     "role": "tool",
@@ -312,6 +316,29 @@ class CoderAgent(Agent):
                                 await redis_manager.publish_message(
                                     self.task_id,
                                     SystemMessage(content="代码手检测到任务已完成，自动收束"),
+                                )
+                                return CoderToWriter(
+                                    code_response=text_to_gpt,
+                                    created_images=await self.code_interpreter.get_created_images(
+                                        subtask_title
+                                    ),
+                                )
+                            if (
+                                self.max_successful_tool_calls is not None
+                                and successful_tool_calls >= self.max_successful_tool_calls
+                            ):
+                                logger.info(
+                                    "成功工具调用达到上限，自动收束代码手任务: "
+                                    f"{successful_tool_calls}"
+                                )
+                                await redis_manager.publish_message(
+                                    self.task_id,
+                                    SystemMessage(
+                                        content=(
+                                            "代码手已完成多轮成功执行，达到自动收束上限，"
+                                            "进入下一阶段"
+                                        ),
+                                    ),
                                 )
                                 return CoderToWriter(
                                     code_response=text_to_gpt,

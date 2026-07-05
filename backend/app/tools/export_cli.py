@@ -258,7 +258,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--profile",
         choices=[p.value for p in ExportProfile],
         default=ExportProfile.DEFAULT.value,
-        help="导出排版配置，默认 default；cumcm2025 为 2025 年 CUMCM 官方格式",
+        help=(
+            "导出排版配置，默认 default；高教社杯/国赛（CUMCM）建议使用 "
+            "cumcm2026，cumcm2025 保留为 2025 格式；huashubei 仅用于华数杯"
+        ),
     )
     pdf_parser.add_argument(
         "--local",
@@ -281,8 +284,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--profile",
         choices=[p.value for p in ExportProfile],
         default=ExportProfile.DEFAULT.value,
-        help="导出排版配置，默认 default；cumcm2025 为 2025 年 CUMCM 官方格式（gmcmthesis 模板，"
-        "自带 \\IfFontExistsTF 字体检测，无需额外参数）",
+        help=(
+            "导出排版配置，默认 default；高教社杯/国赛（CUMCM）建议使用 cumcm2026，"
+            "cumcm2025 保留为 2025 gmcmthesis 格式；huashubei 仅用于华数杯"
+        ),
     )
     latex_parser.set_defaults(func=cmd_latex)
 

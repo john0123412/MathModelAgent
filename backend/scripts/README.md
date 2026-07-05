@@ -11,14 +11,15 @@
 > submission you should regenerate the PDF on a Windows machine that has the
 > real fonts. Two local tools are available now:
 >
-> - **`backend/app/tools/export_cli.py`** (recommended): supports both
->   `default`/`cumcm2025` layouts, detects installed fonts with clear
->   warnings on fallback, lets you override fonts (`--mainfont` etc.), and
->   can export the LaTeX sidecar project for manual compilation. See
+> - **`backend/app/tools/export_cli.py`** (recommended): supports
+>   `default`/`cumcm2025`/`cumcm2026`/`huashubei` layouts. Use
+>   `cumcm2026` for 高教社杯/CUMCM work; `huashubei` is only for 华数杯.
+>   It detects installed fonts with clear warnings on fallback, lets you
+>   override fonts (`--mainfont` etc.), and can export the LaTeX sidecar project for manual compilation. See
 >   `STARTUP.md`'s "Windows 本地 PDF 导出 / 手动编译" section.
 > - **`backend/scripts/export_pdf_local.py`** (described below): the earlier
 >   task_id-driven script. Only produces the default reference layout (no
->   `cumcm2025` awareness), font names are plain CLI arguments with no
+>   `cumcm2025`/`cumcm2026` awareness), font names are plain CLI arguments with no
 >   detection/fallback, but it's convenient when you just want to point at a
 >   Docker task directory (`backend/project/work_dir/<task_id>/`) and get a
 >   default-layout PDF with minimal fuss.
@@ -47,9 +48,9 @@ The default export follows the reference paper layout:
 
 This remains a handy path for a quick default-layout PDF from a Docker task
 directory, or as a fallback if the container-side PDF is missing for any
-reason. For `cumcm2025`-profile output, font detection/fallback reporting, or
-a manual-compile LaTeX sidecar workflow, use `app.tools.export_cli` instead
-(see the update note above).
+reason. For 高教社杯/CUMCM `cumcm2026` output, older `cumcm2025` output, font
+detection/fallback reporting, or a manual-compile LaTeX sidecar workflow, use
+`app.tools.export_cli` instead (see the update note above).
 
 Useful options:
 

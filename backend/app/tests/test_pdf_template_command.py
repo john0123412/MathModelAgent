@@ -32,6 +32,7 @@ class TestPdfTemplateCommand(unittest.TestCase):
 
         command = run_mock.call_args.args[0]
         self.assertIn("--standalone", command)
+        self.assertIn("--listings", command)
         self.assertIn("--pdf-engine=xelatex", command)
         self.assertIn("documentclass=ctexart", command)
         self.assertIn("papersize=a4", command)
@@ -41,6 +42,9 @@ class TestPdfTemplateCommand(unittest.TestCase):
         self.assertIn("pagestyle=plain", command)
         self.assertTrue(
             any("header-includes=" in item and r"\heiti" in item for item in command)
+        )
+        self.assertTrue(
+            any("header-includes=" in item and "breaklines=true" in item for item in command)
         )
         self.assertIn("geometry:left=3.17cm,right=3.17cm,top=2.6cm,bottom=2.6cm", command)
         self.assertNotIn("--toc", command)
@@ -69,6 +73,58 @@ class TestPdfTemplateCommand(unittest.TestCase):
         self.assertIn("--number-sections", command)
         self.assertIn("documentclass=ctexart", command)
         self.assertIn("geometry:left=3.17cm,right=3.17cm,top=3cm,bottom=2.5cm", command)
+
+    def test_pdf_command_cumcm2026_profile_has_no_toc_or_auto_numbering(self):
+        """cumcm2026 避免对已手写编号的 Markdown 标题二次自动编号。"""
+        with tempfile.TemporaryDirectory() as work_dir:
+            md_path = os.path.join(work_dir, "res.md")
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write("# 测试标题\n\n摘要 测试正文。")
+
+            proc = mock.Mock(returncode=1, stderr="expected test failure")
+            with (
+                mock.patch("shutil.which", return_value="tool"),
+                mock.patch("subprocess.run", return_value=proc) as run_mock,
+                mock.patch("app.utils.font_utils.check_font_installed", return_value=True),
+            ):
+                export_markdown_to_pdf(
+                    md_path, pdf_path, work_dir, export_profile=ExportProfile.CUMCM2026
+                )
+
+        command = run_mock.call_args.args[0]
+        self.assertNotIn("--number-sections", command)
+        self.assertNotIn("--toc", command)
+        self.assertIn("documentclass=ctexart", command)
+        self.assertIn("geometry:left=3.17cm,right=3.17cm,top=3cm,bottom=2.5cm", command)
+
+    def test_pdf_command_huashubei_profile_uses_confirmed_margin_baseline(self):
+        """huashubei profile 先按国赛基线 2.5cm 接入，等待官方规范发布后复核。"""
+        with tempfile.TemporaryDirectory() as work_dir:
+            md_path = os.path.join(work_dir, "res.md")
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write("# 测试标题\n\n摘要 测试正文。")
+
+            proc = mock.Mock(returncode=1, stderr="expected test failure")
+            with (
+                mock.patch("shutil.which", return_value="tool"),
+                mock.patch("subprocess.run", return_value=proc) as run_mock,
+                mock.patch("app.utils.font_utils.check_font_installed", return_value=True),
+            ):
+                export_markdown_to_pdf(
+                    md_path, pdf_path, work_dir, export_profile=ExportProfile.HUASHUBEI
+                )
+
+        command = run_mock.call_args.args[0]
+        self.assertIn("documentclass=ctexart", command)
+        self.assertIn("geometry:left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm", command)
+        self.assertIn("fontsize=12pt", command)
+        self.assertIn("linestretch=1.6", command)
+        self.assertTrue(
+            any(r"\fontsize{14pt}{16.8pt}" in item and r"\centering" in item for item in command)
+        )
+        self.assertNotIn("--toc", command)
 
     def test_pdf_result_records_font_resolution_fallbacks(self):
         with tempfile.TemporaryDirectory() as work_dir:

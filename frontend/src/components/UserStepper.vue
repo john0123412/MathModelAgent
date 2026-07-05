@@ -39,29 +39,60 @@ const uploadedFiles = ref<File[]>([]);
 /** 题目内容 */
 const question = ref("");
 
+type SelectedOptionKey = "template" | "language" | "format" | "exportProfile";
+type SelectedOptions = Record<SelectedOptionKey, string>;
+
 /** 选项配置 */
-const selectedOptions = ref({
-	template: "国赛",
+const selectedOptions = ref<SelectedOptions>({
+	template: "CHINA",
 	language: "中文",
 	format: "Markdown",
+	exportProfile: "cumcm2026",
 });
 
 /** 选择器配置列表 */
-const selectConfig = [
+const selectConfig: Array<{
+	key: SelectedOptionKey;
+	group: string;
+	label: string;
+	options: Array<{ label: string; value: string }>;
+}> = [
 	{
-		key: "模板",
-		label: "选择模板",
-		options: ["国赛", "美赛"],
+		key: "template",
+		group: "赛事",
+		label: "选择赛事",
+		options: [
+			{ label: "高教社杯/国赛", value: "CHINA" },
+			{ label: "美赛", value: "AMERICAN" },
+		],
 	},
 	{
-		key: "语言",
+		key: "language",
+		group: "语言",
 		label: "选择语言",
-		options: ["中文", "英文"],
+		options: [
+			{ label: "中文", value: "中文" },
+			{ label: "英文", value: "英文" },
+		],
 	},
 	{
-		key: "格式",
+		key: "format",
+		group: "格式",
 		label: "选择格式",
-		options: ["Markdown", "LaTeX"],
+		options: [
+			{ label: "Markdown", value: "Markdown" },
+			{ label: "LaTeX", value: "LaTeX" },
+		],
+	},
+	{
+		key: "exportProfile",
+		group: "排版",
+		label: "选择排版",
+		options: [
+			{ label: "高教社杯 2026", value: "cumcm2026" },
+			{ label: "高教社杯 2025", value: "cumcm2025" },
+			{ label: "默认", value: "default" },
+		],
 	},
 ];
 
@@ -137,6 +168,7 @@ const handleSubmit = async () => {
 				ques_all: question.value,
 				comp_template: selectedOptions.value.template,
 				format_output: selectedOptions.value.format,
+				export_profile: selectedOptions.value.exportProfile,
 			},
 			uploadedFiles.value,
 		);
@@ -231,18 +263,17 @@ const handleSubmit = async () => {
             <Textarea v-model="question" placeholder="PDF 中完整题目背景和多个小问" class="min-h-[120px]" />
           </div>
 
-          <div class="grid grid-cols-3 gap-3">
+          <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
             <div v-for="item in selectConfig" :key="item.key">
-              <Select v-model="selectedOptions[item.key.toLowerCase() as keyof typeof selectedOptions]"
-                :defaultValue="item.options[0].toLowerCase()">
+              <Select v-model="selectedOptions[item.key]" :defaultValue="item.options[0].value">
                 <SelectTrigger class="h-9">
                   <SelectValue :placeholder="item.label" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                    <SelectLabel>{{ item.key }}</SelectLabel>
-                    <SelectItem v-for="option in item.options" :key="option" :value="option.toLowerCase()">
-                      {{ option }}
+                    <SelectLabel>{{ item.group }}</SelectLabel>
+                    <SelectItem v-for="option in item.options" :key="option.value" :value="option.value">
+                      {{ option.label }}
                     </SelectItem>
                   </SelectGroup>
                 </SelectContent>

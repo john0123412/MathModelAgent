@@ -1,7 +1,7 @@
 """Smoke test for PDF export in Docker or a prepared local backend env.
 
 Purpose:
-    Verify that default/cumcm2025 direct PDF export and LaTeX sidecar export
+    Verify that default/cumcm2025/cumcm2026 direct PDF export and LaTeX sidecar export
     can generate non-empty PDF files.
 
 Run from backend/:
@@ -140,7 +140,11 @@ def main() -> int:
     with TemporaryDirectory(prefix="pdf-smoke-", dir=tmp_root) as temp_dir:
         run_root = Path(temp_dir)
         ok = True
-        for profile in (ExportProfile.DEFAULT, ExportProfile.CUMCM2025):
+        for profile in (
+            ExportProfile.DEFAULT,
+            ExportProfile.CUMCM2025,
+            ExportProfile.CUMCM2026,
+        ):
             ok = _run_profile(profile, run_root) and ok
         return 0 if ok else 1
 

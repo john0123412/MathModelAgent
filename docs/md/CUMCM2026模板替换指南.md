@@ -4,11 +4,18 @@
 
 - 当前 `cumcm2026` 是基于《全国大学生数学建模竞赛论文格式规范（2026年修订稿）》实现的暂定模板，不是官方最终 DOCX/LaTeX 模板包。
 - 主 PDF 按 2026 修订稿口径实现：电子版不生成目录，摘要页作为第一页，主 PDF 禁 raw TeX，支持 `$...$` 和 `\(...\)` 数学公式。
+- 主 PDF 会在摘要/关键词后做 PDF-only 分页，保证摘要页独占第一页、正文从第二页开始；该分页不写回 `res.md`，也不影响 DOCX 或 LaTeX sidecar。
 - 当前 DOCX reference 暂时复用 2025：
   `backend/app/templates/export_profiles/cumcm2025_docx/format2025_reference.docx`
 - 当前 LaTeX sidecar 暂时复用 2025 模板资源目录：
   `backend/app/templates/export_profiles/cumcm2025/`
 - 当前 LaTeX 2026 main 模板由 `backend/app/tools/tex_project_exporter.py` 中的 `_CUMCM2026_MAIN_TEX_TEMPLATE` 派生实现，主要区别是移除了目录。
+- 当前 LaTeX sidecar 导出器会复制正文引用的本地图片到 `latex_project/` /
+  `latex_project/figures/`，并在 `tex_export_status.json` 记录 `copied_assets` /
+  `missing_assets`。
+- 当前复用的 `gmcmthesis.cls` 对 `KaiTi` / `STXinwei` / `LiSu` 做了容器友好的
+  fontspec fallback；若缺少 Windows 字体和 `AR PL KaitiM GB`，会继续 fallback 到
+  Noto CJK 字体，优先保证 sidecar 可编译。
 - 主交付链路是：
   `res.md`
   `res.pdf`
@@ -118,6 +125,7 @@ uv run python -m app.tools.export_cli pdf --input examples\pdf_export_sample\res
   - 根据官方 `main.tex` 更新 `_CUMCM2026_MAIN_TEX_TEMPLATE`
   - 保留 `% MMA_SECTION_INPUTS` 占位符
   - 确保生成的 `main.tex` 会 input `sections/*.tex`
+  - 保留本地图片复制和 `copied_assets` / `missing_assets` 状态记录逻辑
   - 如果官方模板要求题号、队号、学校等信息，不要硬编码真实身份；需要保持空值或占位，避免论文泄露身份
 - 验证：
 

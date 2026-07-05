@@ -40,7 +40,9 @@ Docker 后端默认负责完成建模主流程，并生成：
   fallback 字体，仅用于自动化预览）
 - `latex_project/`（候选 LaTeX sidecar；`main.tex` 输入结构化 `sections/*.tex`，
   并保留 `sections/imported_body.tex` 作为兼容审计文件；编译失败只记录到
-  `tex_export_status.json`，不阻断主交付链路）
+  `tex_export_status.json`，不阻断主交付链路；导出器会复制正文引用的本地图片到
+  `latex_project/` / `latex_project/figures/`，并记录 `copied_assets` /
+  `missing_assets`）
 
 正式提交前，PDF 推荐在 Windows 本机用官方字体重新生成一份。推荐路径是：
 
@@ -56,16 +58,19 @@ Windows 本机工具读取 res.md -> Pandoc + XeLaTeX 用真实系统字体重�
 官方站和知网提交系统；如果新增 Word/DOCX 或 LaTeX 模板，按
 `docs/md/CUMCM2026模板替换指南.md` 替换。
 
-最近一次真实链路烟雾任务 `20260705-052900-29e33d1f` 使用
+最近一次真实链路烟雾任务 `20260705-095041-36750d99` 使用
 `export_profile=cumcm2026` 重新导出并通过主交付验收：
 
 - `paper_preflight_report.json`：`PASS`
 - `pdf_visual_check.json`：`PASS`，A4、非空、文本可提取，且 `text_margin.overflows=[]`
 - `res.md`、`res.pdf`、`res.docx`、`res.json`、`candidate_manifest.json` 均生成
+- `tex_export_status.json`：`compile_success=true`，`missing_assets=[]`
+- `latex_project/main.pdf` 已生成且非空
 - 真实产物包含 PNG 图片、CSV 表格数据和 `notebook.ipynb` 源码附录
 - Docker 中官方 Windows 字体缺失时，`SimSun/SimHei/Times New Roman` 会 fallback 到
-  `Noto Serif CJK SC`、`Noto Sans CJK SC`、`Liberation Serif`；正式提交前仍建议在
-  Windows 本机用真实字体重新导出
+  `Noto Serif CJK SC`、`Noto Sans CJK SC`、`Liberation Serif`；CUMCM sidecar 中
+  `KaiTi` / `STXinwei` / `LiSu` 会优先 fallback 到 `AR PL KaitiM GB`，若仍缺失则
+  fallback 到 Noto CJK 字体。正式提交前仍建议在 Windows 本机用真实字体重新导出。
 
 `cumcm2026` 主 PDF 导出现在显式关闭 pandoc raw TeX，并支持 `\( ... \)` 内联数学；
 附录代码会防止源码中的 `\end{lstlisting}` 提前结束 LaTeX 代码环境，避免 notebook
@@ -117,7 +122,9 @@ Docker 后端镜像现在默认已安装 Pandoc / TeX Live（含 `fonts-liberati
 默认 PDF 模板约定如下：
 
 - A4 纸张。
-- 首页直接为题目、摘要、关键词，不自动生成封面或目录页。
+- 第一页直接为题目、摘要、关键词，摘要页独占第一页；正文从第二页开始。
+  该分页是 PDF-only 预处理，不写回 `res.md`，也不影响 DOCX 或 LaTeX sidecar。
+- 不自动生成封面或目录页。
 - 无页眉，页码使用页脚 plain 样式。
 - 文档类为 `ctexart`。
 - 中文正文字体为 `SimSun`。
@@ -186,6 +193,9 @@ D:\texlive\2026\bin\windows\pdfinfo.exe backend\project\work_dir\<task_id>\res.p
 - `pdf_visual_check.json` 应为 `PASS`，尤其是 `checks.text_margin.passed=true`。
 - `tex_export_status.json` 中 `main_uses_structured_sections=true` 时，`latex_project/main.tex`
   应输入 `sections/00_*.tex`、`sections/01_*.tex` 等结构化章节。
+- `tex_export_status.json` 中 `copied_assets` 会列出复制到 `latex_project/` 和
+  `latex_project/figures/` 的本地图片；`missing_assets` 应为空。若不为空，应先修正
+  `res.md` / `sections/*.tex` 中不存在的图片引用。
 - `tex_export_status.json` 中 `compile_attempted=true` 时，重点看 `compile_success`、
   `compile_reason`、`compile_failure_summary`。当前自动编译优先尝试 `latexmk -xelatex`，
   失败后会 fallback 到连续两次 `xelatex`；如果 `compile_success=false`，该失败仍是

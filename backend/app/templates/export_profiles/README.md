@@ -1,6 +1,9 @@
 # Export Profile Template Resources
 
 - `cumcm2025/`: 2025 LaTeX sidecar 模板资源，目前也被 `cumcm2026` 暂时复用。
+  `gmcmthesis.cls` 已加入容器友好的中文字体 fallback，`KaiTi` / `STXinwei` /
+  `LiSu` 不存在时会回退到 `AR PL KaitiM GB` 或 Noto CJK 字体，优先保证候选
+  LaTeX sidecar 可编译。
 - `cumcm2025_docx/`: 2025 DOCX reference，目前也被 `cumcm2026` 暂时复用。
 - 如果官方发布 2026 Word/DOCX 模板，应新增：
   `cumcm2026_docx/format2026_reference.docx`

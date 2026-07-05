@@ -3,6 +3,7 @@
 import os
 import shutil
 import subprocess
+import tempfile
 from app.utils.log_util import logger
 from app.utils import font_utils
 from app.schemas.enums import ExportProfile
@@ -21,6 +22,60 @@ _FONT_VARIABLE_KEYS = {
 }
 
 PANDOC_MARKDOWN_FORMAT = "markdown-raw_tex+tex_math_dollars+tex_math_single_backslash+pipe_tables"
+PDF_PAGEBREAK_FILTER = os.path.join(
+    os.path.dirname(__file__), "pandoc_filters", "pdf_pagebreak.lua"
+)
+PDF_PAGEBREAK_MARKER = "MMA_PDF_PAGEBREAK"
+
+
+def _insert_abstract_pagebreak(markdown: str) -> tuple[str, bool]:
+    """Insert a PDF-only page break after keywords and before the first body section."""
+    if PDF_PAGEBREAK_MARKER in markdown:
+        return markdown, False
+
+    lines = markdown.splitlines(keepends=True)
+    keyword_index: int | None = None
+    for index, line in enumerate(lines):
+        if line.lstrip().startswith(("关键词", "关键字")):
+            keyword_index = index
+            break
+    if keyword_index is None:
+        return markdown, False
+
+    body_heading_index: int | None = None
+    for index in range(keyword_index + 1, len(lines)):
+        stripped = lines[index].strip()
+        if not stripped:
+            continue
+        if stripped.startswith("# "):
+            body_heading_index = index
+            break
+    if body_heading_index is None:
+        return markdown, False
+
+    lines.insert(body_heading_index, f"\n{PDF_PAGEBREAK_MARKER}\n\n")
+    return "".join(lines), True
+
+
+def _prepare_pdf_markdown_source(md_path: str, work_dir: str) -> tuple[str, bool]:
+    """Create a temporary PDF input when layout-only Markdown tweaks are needed."""
+    with open(md_path, encoding="utf-8") as f:
+        markdown = f.read()
+    prepared_markdown, inserted = _insert_abstract_pagebreak(markdown)
+    if not inserted:
+        return md_path, False
+
+    os.makedirs(work_dir, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        suffix=".pdf.md",
+        prefix=".mma_pdf_",
+        dir=work_dir,
+        delete=False,
+    ) as f:
+        f.write(prepared_markdown)
+        return f.name, True
 
 
 def _resolve_pdf_variables(
@@ -189,10 +244,18 @@ def export_markdown_to_pdf(
         return result
 
     profile_config = get_export_profile_config(export_profile)
+    pdf_md_path = md_path
+    cleanup_pdf_md = False
+    try:
+        pdf_md_path, cleanup_pdf_md = _prepare_pdf_markdown_source(md_path, work_dir)
+    except Exception as e:
+        result["reason"] = f"PDF 输入预处理失败: {e}"
+        logger.error(f"PDF 导出异常: {result['reason']}")
+        return result
 
     command = [
         "pandoc",
-        md_path,
+        pdf_md_path,
         "-o",
         pdf_path,
         "--pdf-engine=xelatex",
@@ -203,6 +266,8 @@ def export_markdown_to_pdf(
         "--resource-path",
         work_dir,
     ]
+    if os.path.exists(PDF_PAGEBREAK_FILTER):
+        command.extend(["--lua-filter", PDF_PAGEBREAK_FILTER])
     resolved_variables, font_warnings, font_resolution = _resolve_pdf_variables(
         profile_config.pdf_variables, font_overrides, local_fonts
     )
@@ -224,6 +289,12 @@ def export_markdown_to_pdf(
         result["reason"] = f"PDF 生成异常: {e}"
         logger.error(f"PDF 导出异常: {e}")
         return result
+    finally:
+        if cleanup_pdf_md:
+            try:
+                os.remove(pdf_md_path)
+            except OSError:
+                logger.warning(f"PDF 临时 Markdown 清理失败: {pdf_md_path}")
 
     if proc.returncode == 0 and os.path.exists(pdf_path):
         result["success"] = True

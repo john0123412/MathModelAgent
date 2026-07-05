@@ -163,21 +163,29 @@ Just choose `xelatex', no `pdflatex' or `latex' and so on.}
 \IfFontExistsTF{SimSun}
   {\IfFontExistsTF{KaiTi}
     {\setCJKmainfont[AutoFakeBold = {2.15},ItalicFont={KaiTi}]{SimSun}}
-    {\setCJKmainfont[AutoFakeBold = {2.15},ItalicFont={AR PL KaitiM GB}]{SimSun}}}
+    {\IfFontExistsTF{AR PL KaitiM GB}
+      {\setCJKmainfont[AutoFakeBold = {2.15},ItalicFont={AR PL KaitiM GB}]{SimSun}}
+      {\setCJKmainfont[AutoFakeBold = {2.15}]{SimSun}}}}
   {\IfFontExistsTF{KaiTi}
     {\setCJKmainfont[AutoFakeBold = {2.15},ItalicFont={KaiTi}]{Noto Serif CJK SC}}
-    {\setCJKmainfont[AutoFakeBold = {2.15},ItalicFont={AR PL KaitiM GB}]{Noto Serif CJK SC}}}
+    {\IfFontExistsTF{AR PL KaitiM GB}
+      {\setCJKmainfont[AutoFakeBold = {2.15},ItalicFont={AR PL KaitiM GB}]{Noto Serif CJK SC}}
+      {\setCJKmainfont[AutoFakeBold = {2.15}]{Noto Serif CJK SC}}}}
 
 \IfFontExistsTF{STXinwei}
   {\setCJKfamilyfont{xw}{STXinwei}}
-  {\setCJKfamilyfont{xw}{Noto Sans CJK SC}}
+  {\IfFontExistsTF{AR PL KaitiM GB}
+    {\setCJKfamilyfont{xw}{AR PL KaitiM GB}}
+    {\setCJKfamilyfont{xw}{Noto Sans CJK SC}}}
 
 %
 %\setCJKfamilyfont{zhyou}{YouYuan}
 \ifx\lishu\undefined%
  \IfFontExistsTF{LiSu}
    {\setCJKfamilyfont{zhli}{LiSu}}
-   {\setCJKfamilyfont{zhli}{AR PL KaitiM GB}}
+   {\IfFontExistsTF{AR PL KaitiM GB}
+     {\setCJKfamilyfont{zhli}{AR PL KaitiM GB}}
+     {\setCJKfamilyfont{zhli}{Noto Serif CJK SC}}}
  \newcommand*{\lishu}{\CJKfamily{zhli}} %% Do this if it is undefined
 \else
   %% Do this if it is defined
@@ -468,7 +476,6 @@ Just choose `xelatex', no `pdflatex' or `latex' and so on.}
 
 \pagestyle{plain}
 \endinput
-
 
 
 

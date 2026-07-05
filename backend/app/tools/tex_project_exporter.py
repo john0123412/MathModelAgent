@@ -21,6 +21,12 @@ SECTION_INPUTS_PLACEHOLDER = "% MMA_SECTION_INPUTS"
 PANDOC_LATEX_MARKDOWN_FORMAT = "markdown+tex_math_dollars+tex_math_single_backslash+pipe_tables+raw_tex"
 FENCED_CODE_RE = re.compile(r"^\s*(```+|~~~+)")
 NOTEBOOK_CELL_HEADING_RE = re.compile(r"^#\s+Cell\s+\d+\s*$")
+MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+LATEX_INCLUDEGRAPHICS_RE = re.compile(
+    r"\\(?:pandocbounded\s*)?\{?\s*\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}"
+    r"|\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}"
+)
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".pdf", ".eps", ".bmp", ".webp")
 
 _MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 % =============================================================================
@@ -58,8 +64,8 @@ _MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 \@ifundefined{c@none}{\newcounter{none}}{}
 \makeatother
 
-% 图片可能位于 latex_project 本身、其上级 work_dir，或 sections 子目录
-\graphicspath{{./}{../}{sections/}}
+% 图片可能位于 latex_project 本身、其上级 work_dir，或复制后的 figures/ 目录
+\graphicspath{{./}{../}{sections/}{figures/}}
 
 \begin{document}
 
@@ -214,7 +220,7 @@ _HUASHUBEI_MAIN_TEX_TEMPLATE = rf"""% !TEX program = xelatex
 \@ifundefined{{c@none}}{{\newcounter{{none}}}}{{}}
 \makeatother
 
-\graphicspath{{{{./}}{{../}}{{sections/}}}}
+\graphicspath{{{{./}}{{../}}{{sections/}}{{figures/}}}}
 
 \begin{{document}}
 
@@ -247,6 +253,100 @@ def _copy_template_assets(template_dir: str | None, latex_project_dir: str) -> l
             shutil.copy2(src, dst)
             copied.append(os.path.relpath(dst, latex_project_dir).replace(os.sep, "/"))
     return sorted(copied)
+
+
+def _clean_asset_path(path: str) -> str:
+    path = path.strip().strip("<>").strip()
+    path = path.split("#", 1)[0].split("?", 1)[0].strip()
+    return path.replace("\\", "/")
+
+
+def _is_local_image_path(path: str) -> bool:
+    cleaned = _clean_asset_path(path)
+    if not cleaned:
+        return False
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", cleaned):
+        return False
+    return os.path.splitext(cleaned.lower())[1] in IMAGE_EXTENSIONS
+
+
+def _extract_referenced_assets(markdown: str, tex_paths: list[str]) -> list[str]:
+    references: set[str] = set()
+    for match in MARKDOWN_IMAGE_RE.finditer(markdown):
+        path = _clean_asset_path(match.group(1))
+        if _is_local_image_path(path):
+            references.add(path)
+
+    for tex_path in tex_paths:
+        try:
+            with open(tex_path, encoding="utf-8") as f:
+                tex = f.read()
+        except OSError:
+            continue
+        for match in LATEX_INCLUDEGRAPHICS_RE.finditer(tex):
+            path = _clean_asset_path(match.group(1) or match.group(2) or "")
+            if _is_local_image_path(path):
+                references.add(path)
+
+    return sorted(references)
+
+
+def _asset_source_path(work_dir: str, reference: str) -> str | None:
+    source = os.path.normpath(os.path.join(work_dir, reference.replace("/", os.sep)))
+    work_dir_abs = os.path.abspath(work_dir)
+    source_abs = os.path.abspath(source)
+    try:
+        if os.path.commonpath([work_dir_abs, source_abs]) != work_dir_abs:
+            return None
+    except ValueError:
+        return None
+    return source
+
+
+def _copy_file_once(src: str, dst: str) -> bool:
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    if os.path.exists(dst):
+        try:
+            if os.path.samefile(src, dst):
+                return False
+        except OSError:
+            pass
+    shutil.copy2(src, dst)
+    return True
+
+
+def _copy_referenced_assets(
+    work_dir: str,
+    latex_project_dir: str,
+    markdown: str,
+    tex_paths: list[str],
+) -> tuple[list[str], list[str]]:
+    """Copy local figures referenced by Markdown/LaTeX into latex_project."""
+    copied: set[str] = set()
+    missing: list[str] = []
+    figures_dir = os.path.join(latex_project_dir, "figures")
+
+    for reference in _extract_referenced_assets(markdown, tex_paths):
+        src = _asset_source_path(work_dir, reference)
+        if not src or not os.path.exists(src):
+            missing.append(reference)
+            continue
+
+        reference_parts = [
+            part for part in reference.replace("\\", "/").split("/") if part and part != "."
+        ]
+        if not reference_parts or any(part == ".." for part in reference_parts):
+            reference_parts = [os.path.basename(reference)]
+
+        candidate_targets = [
+            os.path.join(latex_project_dir, *reference_parts),
+            os.path.join(figures_dir, os.path.basename(reference)),
+        ]
+        for dst in candidate_targets:
+            if _copy_file_once(src, dst):
+                copied.add(os.path.relpath(dst, latex_project_dir).replace(os.sep, "/"))
+
+    return sorted(copied), sorted(missing)
 
 
 def _write_status(status_path: str, result: dict) -> None:
@@ -590,6 +690,8 @@ def export_markdown_to_latex_project(
         "structured_section_count": 0,
         "main_uses_structured_sections": False,
         "template_assets": [],
+        "copied_assets": [],
+        "missing_assets": [],
         "reason": "",
         "command": [],
         "stderr": "",
@@ -685,6 +787,22 @@ def export_markdown_to_latex_project(
     result["structured_sections"] = structured_sections
     result["structured_section_count"] = len(structured_sections)
     result["main_uses_structured_sections"] = bool(structured_sections)
+
+    try:
+        tex_paths = [imported_body_path] + [
+            os.path.join(work_dir, item["path"].replace("/", os.sep))
+            for item in structured_sections
+        ]
+        copied_assets, missing_assets = _copy_referenced_assets(
+            work_dir, latex_project_dir, latex_markdown, tex_paths
+        )
+        result["copied_assets"] = copied_assets
+        result["missing_assets"] = missing_assets
+    except Exception as e:
+        result["reason"] = f"复制 LaTeX 引用资源失败: {e}"
+        logger.error(f"LaTeX sidecar 导出失败: {result['reason']}")
+        _write_status(status_path, result)
+        return result
 
     try:
         result["template_assets"] = _copy_template_assets(

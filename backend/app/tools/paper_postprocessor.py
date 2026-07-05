@@ -34,6 +34,7 @@ KEYWORDS_HEADING_RE = re.compile(
 )
 BOLD_ABSTRACT_HEADING_RE = re.compile(r"(?m)^\*\*\s*摘要\s*\*\*\s*$")
 BOLD_KEYWORDS_HEADING_RE = re.compile(r"(?m)^\*\*\s*关键词\s*\*\*\s*$")
+BARE_ABSTRACT_HEADING_RE = re.compile(r"(?m)^\s*摘要\s*$")
 INTERNAL_PATH_RE = re.compile(
     r"(?<![A-Za-z])(?:[A-Za-z]:[\\/][^\s，。；；,;]+|/(?:home|tmp|var|usr|etc|opt|root|workspace)/[^\s，。；；,;]+)"
 )
@@ -231,6 +232,8 @@ def normalize_keywords(markdown: str) -> str:
 def normalize_markdown_headings(markdown: str) -> str:
     """规范 Writer 偶发输出的加粗摘要/关键词标题。"""
     markdown = BOLD_ABSTRACT_HEADING_RE.sub("## 摘要", markdown)
+    if not ABSTRACT_HEADING_RE.search(markdown):
+        markdown = BARE_ABSTRACT_HEADING_RE.sub("## 摘要", markdown, count=1)
     return BOLD_KEYWORDS_HEADING_RE.sub("## 关键词", markdown)
 
 

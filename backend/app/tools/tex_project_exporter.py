@@ -19,6 +19,8 @@ from app.tools.export_profiles import HUASHUBEI_PAGE_MARGIN, get_export_profile_
 
 SECTION_INPUTS_PLACEHOLDER = "% MMA_SECTION_INPUTS"
 PANDOC_LATEX_MARKDOWN_FORMAT = "markdown+tex_math_dollars+tex_math_single_backslash+pipe_tables+raw_tex"
+FENCED_CODE_RE = re.compile(r"^\s*(```+|~~~+)")
+NOTEBOOK_CELL_HEADING_RE = re.compile(r"^#\s+Cell\s+\d+\s*$")
 
 _MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 % =============================================================================
@@ -40,6 +42,15 @@ _MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 \usepackage{longtable}
 \usepackage{listings}
 \providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+
+% 兼容新版 pandoc 图片片段：限制图片不超过文本区域，并定义 \pandocbounded。
+\makeatletter
+\def\maxwidth{\ifdim\Gin@nat@width>\linewidth\linewidth\else\Gin@nat@width\fi}
+\def\maxheight{\ifdim\Gin@nat@height>\textheight\textheight\else\Gin@nat@height\fi}
+\makeatother
+\setkeys{Gin}{width=\maxwidth,height=\maxheight,keepaspectratio}
+\providecommand{\pandocbounded}[1]{#1}
+\providecommand{\passthrough}[1]{#1}
 
 % pandoc 对无标题的 longtable 会输出 \def\LTcaptype{none}，若当前文档类/宏包
 % （如 caption）未定义名为 "none" 的计数器会导致编译报错，这里兜底定义一次。
@@ -75,11 +86,22 @@ _CUMCM2025_MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 \usepackage{listings}
 \providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
 
+% 兼容新版 pandoc 图片片段：限制图片不超过文本区域，并定义 \pandocbounded。
+\makeatletter
+\def\maxwidth{\ifdim\Gin@nat@width>\linewidth\linewidth\else\Gin@nat@width\fi}
+\def\maxheight{\ifdim\Gin@nat@height>\textheight\textheight\else\Gin@nat@height\fi}
+\makeatother
+\setkeys{Gin}{width=\maxwidth,height=\maxheight,keepaspectratio}
+\providecommand{\pandocbounded}[1]{#1}
+\providecommand{\passthrough}[1]{#1}
+
 % pandoc 对无标题的 longtable 会输出 \def\LTcaptype{none}，gmcmthesis.cls 依赖的
 % caption 宏包会据此查找名为 "none" 的计数器，这里兜底定义一次避免编译报错。
 \makeatletter
 \@ifundefined{c@none}{\newcounter{none}}{}
 \makeatother
+
+\graphicspath{{./}{../}{sections/}{figures/}}
 
 \numberwithin{figure}{section}
 \renewcommand{\thefigure}{\arabic{section}-\arabic{figure}}
@@ -139,6 +161,15 @@ _HUASHUBEI_MAIN_TEX_TEMPLATE = rf"""% !TEX program = xelatex
 \usepackage{{enumitem}}
 \usepackage{{hyperref}}
 \providecommand{{\tightlist}}{{\setlength{{\itemsep}}{{0pt}}\setlength{{\parskip}}{{0pt}}}}
+
+% 兼容新版 pandoc 图片片段：限制图片不超过文本区域，并定义 \pandocbounded。
+\makeatletter
+\def\maxwidth{{\ifdim\Gin@nat@width>\linewidth\linewidth\else\Gin@nat@width\fi}}
+\def\maxheight{{\ifdim\Gin@nat@height>\textheight\textheight\else\Gin@nat@height\fi}}
+\makeatother
+\setkeys{{Gin}}{{width=\maxwidth,height=\maxheight,keepaspectratio}}
+\providecommand{{\pandocbounded}}[1]{{#1}}
+\providecommand{{\passthrough}}[1]{{#1}}
 
 \IfFontExistsTF{{Times New Roman}}{{\setmainfont{{Times New Roman}}}}{{}}
 \linespread{{1.6}}
@@ -254,15 +285,94 @@ def _section_filename(index: int, title: str) -> str:
     return f"{index:02d}_{suffix}.tex"
 
 
+def _normalize_markdown_for_latex_sidecar(markdown: str) -> str:
+    """Fence raw notebook cell blocks before handing Markdown to pandoc."""
+    lines = markdown.splitlines(keepends=True)
+    output: list[str] = []
+    in_cell = False
+    cell_fence_open = False
+    in_source_fence = False
+    source_fence_marker = ""
+
+    for line in lines:
+        fence_match = FENCED_CODE_RE.match(line)
+        if fence_match and not cell_fence_open:
+            marker = fence_match.group(1)
+            if not in_source_fence:
+                in_source_fence = True
+                source_fence_marker = marker[:3]
+            elif marker.startswith(source_fence_marker):
+                in_source_fence = False
+                source_fence_marker = ""
+            output.append(line)
+            continue
+
+        if in_source_fence:
+            output.append(line)
+            continue
+
+        if NOTEBOOK_CELL_HEADING_RE.match(line.strip()):
+            if cell_fence_open:
+                output.append("\n````\n")
+                cell_fence_open = False
+            output.append(line)
+            in_cell = True
+            continue
+
+        if in_cell:
+            if not cell_fence_open and line.strip():
+                output.append("````python\n")
+                cell_fence_open = True
+            output.append(line)
+            continue
+
+        output.append(line)
+
+    if cell_fence_open:
+        output.append("\n````\n")
+
+    return "".join(output)
+
+
+def _iter_top_level_headings(markdown: str) -> list[tuple[int, int, str]]:
+    headings: list[tuple[int, int, str]] = []
+    in_fence = False
+    fence_marker = ""
+    position = 0
+
+    for line in markdown.splitlines(keepends=True):
+        fence_match = FENCED_CODE_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker[:3]
+            elif marker.startswith(fence_marker):
+                in_fence = False
+                fence_marker = ""
+        elif not in_fence:
+            heading_match = re.match(r"^#\s+(.+?)\s*$", line)
+            if heading_match:
+                headings.append(
+                    (
+                        position,
+                        position + len(line),
+                        heading_match.group(1).strip(),
+                    )
+                )
+        position += len(line)
+
+    return headings
+
+
 def _split_markdown_sections(markdown: str) -> list[dict]:
     """按 Markdown 顶层标题拆分为结构化 LaTeX sections 输入。"""
-    heading_re = re.compile(r"(?m)^#\s+(.+?)\s*$")
-    matches = list(heading_re.finditer(markdown))
+    matches = _iter_top_level_headings(markdown)
     sections: list[dict] = []
     if not matches:
         return sections
 
-    front_matter = markdown[: matches[0].start()].strip()
+    front_matter = markdown[: matches[0][0]].strip()
     if front_matter:
         sections.append(
             {
@@ -273,9 +383,9 @@ def _split_markdown_sections(markdown: str) -> list[dict]:
         )
 
     for index, match in enumerate(matches, 1):
-        end = matches[index].start() if index < len(matches) else len(markdown)
-        title = match.group(1).strip()
-        chunk = markdown[match.start() : end].strip()
+        end = matches[index][0] if index < len(matches) else len(markdown)
+        title = match[2]
+        chunk = markdown[match[0] : end].strip()
         if not chunk:
             continue
         sections.append(
@@ -308,6 +418,85 @@ def _run_pandoc_to_latex(
         work_dir,
     ]
     return subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+
+
+def _run_pandoc_markdown_to_latex(
+    markdown: str,
+    tex_path: str,
+    sections_dir: str,
+    work_dir: str,
+    timeout: int = 120,
+) -> subprocess.CompletedProcess[str]:
+    temp_md_path = os.path.join(sections_dir, "_pandoc_input.md")
+    try:
+        with open(temp_md_path, "w", encoding="utf-8") as f:
+            f.write(markdown)
+        return _run_pandoc_to_latex(temp_md_path, tex_path, work_dir, timeout=timeout)
+    finally:
+        try:
+            if os.path.exists(temp_md_path):
+                os.remove(temp_md_path)
+        except OSError:
+            pass
+
+
+def _latex_output_tail(proc: subprocess.CompletedProcess[str]) -> dict[str, str]:
+    return {
+        "stdout": proc.stdout[-2000:],
+        "stderr": proc.stderr[-2000:],
+    }
+
+
+def _extract_latex_failure_summary(stdout: str, stderr: str) -> str:
+    """Extract a compact human-readable LaTeX error summary for status JSON."""
+    combined = "\n".join(part for part in [stdout, stderr] if part)
+    summary_lines: list[str] = []
+    for line in combined.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if (
+            stripped.startswith("!")
+            or "LaTeX Warning: File `" in stripped
+            or stripped.startswith("l.")
+        ):
+            summary_lines.append(stripped)
+        if len(summary_lines) >= 8:
+            break
+    return "\n".join(summary_lines)
+
+
+def _run_xelatex_twice(
+    latex_project_dir: str,
+    timeout: int = 180,
+) -> subprocess.CompletedProcess[str]:
+    """Run xelatex twice so references/toc-like side effects can settle."""
+    cmd = [
+        "xelatex",
+        "-interaction=nonstopmode",
+        "-halt-on-error",
+        "main.tex",
+    ]
+    first_proc = subprocess.run(
+        cmd,
+        cwd=latex_project_dir,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if first_proc.returncode != 0:
+        return first_proc
+    second_proc = subprocess.run(
+        cmd,
+        cwd=latex_project_dir,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if second_proc.returncode != 0:
+        second_proc.stdout = first_proc.stdout + "\n" + second_proc.stdout
+        second_proc.stderr = first_proc.stderr + "\n" + second_proc.stderr
+    return second_proc
 
 
 def _write_structured_sections(
@@ -409,6 +598,9 @@ def export_markdown_to_latex_project(
         "compile_reason": "",
         "compile_stdout_tail": "",
         "compile_stderr_tail": "",
+        "compile_failure_summary": "",
+        "compile_command": [],
+        "compile_fallback_command": [],
     }
 
     status_path = os.path.join(work_dir, "tex_export_status.json")
@@ -431,6 +623,7 @@ def export_markdown_to_latex_project(
         os.makedirs(sections_dir, exist_ok=True)
         with open(md_path, encoding="utf-8") as f:
             markdown = f.read()
+        latex_markdown = _normalize_markdown_for_latex_sidecar(markdown)
     except Exception as e:
         result["reason"] = f"准备 latex_project 失败: {e}"
         logger.error(f"LaTeX sidecar 导出失败: {result['reason']}")
@@ -455,7 +648,9 @@ def export_markdown_to_latex_project(
     result["command"] = command
 
     try:
-        proc = _run_pandoc_to_latex(md_path, imported_body_path, work_dir)
+        proc = _run_pandoc_markdown_to_latex(
+            latex_markdown, imported_body_path, sections_dir, work_dir
+        )
     except subprocess.TimeoutExpired:
         result["reason"] = "LaTeX 正文转换超时（120秒）"
         logger.error(f"LaTeX sidecar 导出超时: {md_path}")
@@ -480,7 +675,7 @@ def export_markdown_to_latex_project(
 
     try:
         structured_sections, section_inputs = _write_structured_sections(
-            markdown, sections_dir, work_dir
+            latex_markdown, sections_dir, work_dir
         )
     except Exception as e:
         result["reason"] = str(e)
@@ -545,21 +740,29 @@ def export_markdown_to_latex_project(
                 "-halt-on-error",
                 "main.tex",
             ]
+        result["compile_command"] = compile_cmd
         try:
-            compile_proc = subprocess.run(
-                compile_cmd,
-                cwd=latex_project_dir,
-                capture_output=True,
-                text=True,
-                timeout=180,
-            )
+            if compiler == "xelatex":
+                compile_proc = _run_xelatex_twice(latex_project_dir)
+            else:
+                compile_proc = subprocess.run(
+                    compile_cmd,
+                    cwd=latex_project_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
+                )
             if compile_proc.returncode == 0:
                 result["compile_success"] = True
                 logger.info(f"LaTeX sidecar 编译成功: {main_tex_path}")
             else:
                 result["compile_reason"] = f"编译返回码非 0: {compile_proc.returncode}"
-                result["compile_stdout_tail"] = compile_proc.stdout[-2000:]
-                result["compile_stderr_tail"] = compile_proc.stderr[-2000:]
+                tails = _latex_output_tail(compile_proc)
+                result["compile_stdout_tail"] = tails["stdout"]
+                result["compile_stderr_tail"] = tails["stderr"]
+                result["compile_failure_summary"] = _extract_latex_failure_summary(
+                    compile_proc.stdout, compile_proc.stderr
+                )
                 if compiler == "latexmk" and shutil.which("xelatex"):
                     fallback_cmd = [
                         "xelatex",
@@ -567,26 +770,27 @@ def export_markdown_to_latex_project(
                         "-halt-on-error",
                         "main.tex",
                     ]
-                    fallback_proc = subprocess.run(
-                        fallback_cmd,
-                        cwd=latex_project_dir,
-                        capture_output=True,
-                        text=True,
-                        timeout=180,
-                    )
+                    result["compile_fallback_command"] = fallback_cmd
+                    fallback_proc = _run_xelatex_twice(latex_project_dir)
                     if fallback_proc.returncode == 0:
                         result["compile_success"] = True
-                        result["compile_reason"] = "latexmk 失败，已用 xelatex 编译成功"
-                        result["compile_stdout_tail"] = fallback_proc.stdout[-2000:]
-                        result["compile_stderr_tail"] = fallback_proc.stderr[-2000:]
+                        result["compile_reason"] = "latexmk 失败，已用 xelatex 连续编译两次成功"
+                        tails = _latex_output_tail(fallback_proc)
+                        result["compile_stdout_tail"] = tails["stdout"]
+                        result["compile_stderr_tail"] = tails["stderr"]
+                        result["compile_failure_summary"] = ""
                         logger.info(f"LaTeX sidecar xelatex fallback 编译成功: {main_tex_path}")
                     else:
                         result["compile_reason"] = (
                             "latexmk/xelatex 编译均失败: "
                             f"latexmk={compile_proc.returncode}, xelatex={fallback_proc.returncode}"
                         )
-                        result["compile_stdout_tail"] = fallback_proc.stdout[-2000:]
-                        result["compile_stderr_tail"] = fallback_proc.stderr[-2000:]
+                        tails = _latex_output_tail(fallback_proc)
+                        result["compile_stdout_tail"] = tails["stdout"]
+                        result["compile_stderr_tail"] = tails["stderr"]
+                        result["compile_failure_summary"] = _extract_latex_failure_summary(
+                            fallback_proc.stdout, fallback_proc.stderr
+                        )
                 if not result["compile_success"]:
                     logger.warning(
                         f"LaTeX sidecar 编译失败（不阻断主任务）: returncode={compile_proc.returncode}"

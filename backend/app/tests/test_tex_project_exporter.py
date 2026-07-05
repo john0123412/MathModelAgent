@@ -8,12 +8,14 @@
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
 
 from app.schemas.enums import ExportProfile
 from app.tools.candidate_exporter import write_candidate_manifest
+from app.tools import tex_project_exporter
 from app.tools.tex_project_exporter import export_markdown_to_latex_project
 
 
@@ -165,6 +167,50 @@ class TestTexProjectExporterCumcm2025Profile(unittest.TestCase):
             # 兜底定义 \newcounter{none}，避免 pandoc 无标题 longtable 与
             # caption 宏包冲突导致的 "No counter 'none' defined" 编译错误。
             self.assertIn(r"\newcounter{none}", main_tex_content)
+            self.assertIn(r"\providecommand{\pandocbounded}[1]{#1}", main_tex_content)
+            self.assertIn(r"\providecommand{\passthrough}[1]{#1}", main_tex_content)
+            # 图片位于 latex_project 上级 work_dir 时也应能被 gmcmthesis sidecar 找到。
+            self.assertIn(
+                r"\graphicspath{{./}{../}{sections/}{figures/}}",
+                main_tex_content,
+            )
+
+    def test_cumcm2026_profile_uses_gmcmthesis_without_toc(self):
+        real_which = shutil.which
+
+        def which_side_effect(cmd, *args, **kwargs):
+            if cmd == "pandoc":
+                return real_which(cmd)
+            return None
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            md_path = os.path.join(work_dir, "res.md")
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write("# 标题\n\n![示例图](demo.png)\n")
+
+            with mock.patch(
+                "app.tools.tex_project_exporter.shutil.which",
+                side_effect=which_side_effect,
+            ):
+                result = export_markdown_to_latex_project(
+                    md_path, work_dir, export_profile=ExportProfile.CUMCM2026
+                )
+
+            self.assertTrue(result["success"], msg=result)
+            self.assertEqual(result["export_profile"], "cumcm2026")
+            self.assertEqual(result["template_key"], "zh/cumcm2026-gmcmthesis")
+
+            main_tex_path = os.path.join(work_dir, "latex_project", "main.tex")
+            with open(main_tex_path, "r", encoding="utf-8") as f:
+                main_tex_content = f.read()
+            self.assertIn(r"\documentclass[bwprint]{gmcmthesis}", main_tex_content)
+            self.assertIn(
+                r"\graphicspath{{./}{../}{sections/}{figures/}}",
+                main_tex_content,
+            )
+            self.assertIn(r"\providecommand{\pandocbounded}[1]{#1}", main_tex_content)
+            self.assertIn(r"\providecommand{\passthrough}[1]{#1}", main_tex_content)
+            self.assertNotIn(r"\tableofcontents", main_tex_content)
 
     def test_huashubei_profile_uses_single_body_compatible_template(self):
         """huashubei sidecar 使用兼容外壳，但 main.tex 输入结构化 sections。"""
@@ -199,6 +245,8 @@ class TestTexProjectExporterCumcm2025Profile(unittest.TestCase):
             self.assertIn(r"\input{sections/01_section.tex}", main_tex_content)
             self.assertNotIn(r"\input{sections/imported_body}", main_tex_content)
             self.assertNotIn(r"\input{sections/1_restatement}", main_tex_content)
+            self.assertIn(r"\providecommand{\pandocbounded}[1]{#1}", main_tex_content)
+            self.assertIn(r"\providecommand{\passthrough}[1]{#1}", main_tex_content)
             self.assertIn("top=2.5cm, bottom=2.5cm, left=2.5cm, right=2.5cm", main_tex_content)
             self.assertIn(r"\fontsize{14pt}{16.8pt}\heiti\bfseries", main_tex_content)
 
@@ -235,6 +283,8 @@ class TestTexProjectExporterCumcm2025Profile(unittest.TestCase):
             self.assertNotIn("gmcmthesis", main_tex_content)
             # 默认 profile 同样受益于兜底 counter 修复。
             self.assertIn(r"\newcounter{none}", main_tex_content)
+            self.assertIn(r"\providecommand{\pandocbounded}[1]{#1}", main_tex_content)
+            self.assertIn(r"\providecommand{\passthrough}[1]{#1}", main_tex_content)
 
 
 class TestCandidateManifestIncludesTexFields(unittest.TestCase):
@@ -280,6 +330,95 @@ class TestCandidateManifestIncludesTexFields(unittest.TestCase):
             self.assertIsNone(manifest["files"]["latex_main"])
             self.assertIsNone(manifest["files"]["latex_project"])
             self.assertIsNone(manifest["files"]["tex_export_status"])
+
+
+class TestLatexCompileHelpers(unittest.TestCase):
+    """验证 sidecar 编译 helper 的 fallback 行为和失败摘要提取。"""
+
+    def test_normalize_notebook_cells_and_split_ignores_fenced_headings(self):
+        markdown = (
+            "# 正文\n\n"
+            "论文内容。\n\n"
+            "# Cell 1\n"
+            "print(\"demo\")\n"
+            "# 这是代码注释，不应拆成章节\n"
+            "print(\"done\")\n\n"
+            "# Cell 2\n"
+            "# another code comment\n"
+        )
+
+        normalized = tex_project_exporter._normalize_markdown_for_latex_sidecar(
+            markdown
+        )
+        sections = tex_project_exporter._split_markdown_sections(normalized)
+
+        self.assertIn("````python", normalized)
+        self.assertEqual(
+            [section["title"] for section in sections],
+            ["正文", "Cell 1", "Cell 2"],
+        )
+
+    def test_normalize_does_not_rewrite_existing_fenced_code_cells(self):
+        markdown = (
+            "# 附录\n\n"
+            "```python\n"
+            "# Cell 1\n"
+            "# 已在代码块里的注释，不应触发额外 fence\n"
+            "print('demo')\n"
+            "```\n"
+        )
+
+        normalized = tex_project_exporter._normalize_markdown_for_latex_sidecar(
+            markdown
+        )
+        sections = tex_project_exporter._split_markdown_sections(normalized)
+
+        self.assertEqual(normalized.count("```python"), 1)
+        self.assertNotIn("````python", normalized)
+        self.assertEqual([section["title"] for section in sections], ["附录"])
+
+    def test_run_xelatex_twice_runs_second_pass_after_success(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            first = subprocess.CompletedProcess(
+                args=["xelatex"], returncode=0, stdout="first", stderr=""
+            )
+            second = subprocess.CompletedProcess(
+                args=["xelatex"], returncode=0, stdout="second", stderr=""
+            )
+            with mock.patch(
+                "app.tools.tex_project_exporter.subprocess.run",
+                side_effect=[first, second],
+            ) as run_mock:
+                result = tex_project_exporter._run_xelatex_twice(work_dir)
+
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "second")
+            self.assertEqual(run_mock.call_count, 2)
+
+    def test_run_xelatex_twice_stops_after_first_failure(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            failed = subprocess.CompletedProcess(
+                args=["xelatex"], returncode=1, stdout="! Missing file", stderr=""
+            )
+            with mock.patch(
+                "app.tools.tex_project_exporter.subprocess.run",
+                return_value=failed,
+            ) as run_mock:
+                result = tex_project_exporter._run_xelatex_twice(work_dir)
+
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(run_mock.call_count, 1)
+
+    def test_extract_latex_failure_summary_keeps_key_error_lines(self):
+        summary = tex_project_exporter._extract_latex_failure_summary(
+            "LaTeX Warning: File `demo.png' not found on input line 12.\n"
+            "! Unable to load picture or PDF file 'demo.png'.\n"
+            "l.12 \\includegraphics{demo.png}\n",
+            "",
+        )
+
+        self.assertIn("demo.png", summary)
+        self.assertIn("Unable to load picture", summary)
 
 
 if __name__ == "__main__":

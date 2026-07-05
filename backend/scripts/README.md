@@ -15,7 +15,9 @@
 >   `default`/`cumcm2025`/`cumcm2026`/`huashubei` layouts. Use
 >   `cumcm2026` for 高教社杯/CUMCM work; `huashubei` is only for 华数杯.
 >   It detects installed fonts with clear warnings on fallback, lets you
->   override fonts (`--mainfont` etc.), and can export the LaTeX sidecar project for manual compilation. See
+>   override fonts (`--mainfont` etc.), and can export the LaTeX sidecar project for manual compilation.
+>   The sidecar keeps `sections/imported_body.tex` for compatibility and now
+>   writes structured `sections/*.tex` files that `main.tex` inputs by default. See
 >   `STARTUP.md`'s "Windows 本地 PDF 导出 / 手动编译" section.
 > - **`backend/scripts/export_pdf_local.py`** (described below): the earlier
 >   task_id-driven script. Only produces the default reference layout (no
@@ -51,6 +53,11 @@ directory, or as a fallback if the container-side PDF is missing for any
 reason. For 高教社杯/CUMCM `cumcm2026` output, older `cumcm2025` output, font
 detection/fallback reporting, or a manual-compile LaTeX sidecar workflow, use
 `app.tools.export_cli` instead (see the update note above).
+
+When `HUMAN_MODEL_GATE_ENABLED=true`, Docker/Web tasks stop after Modeler and
+write `modeling_decision.json/md` plus `checkpoint.json`. Confirm with
+`POST /modeling/<task_id>/approve-modeling` to resume from Coder without
+rerunning Coordinator/Modeler.
 
 Useful options:
 

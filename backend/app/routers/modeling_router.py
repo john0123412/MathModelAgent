@@ -24,6 +24,8 @@ from app.tools.candidate_exporter import write_candidate_manifest
 import os
 import asyncio
 import shutil
+import datetime
+import json
 from typing import Dict, Tuple
 from fastapi import HTTPException
 from icecream import ic  # type: ignore[import-unresolved]
@@ -383,7 +385,14 @@ async def run_modeling_task_async(
     task_completed = False
     try:
         # 设置超时时间（5 小时）
-        await asyncio.wait_for(task, timeout=3600 * 5)
+        workflow_result = await asyncio.wait_for(task, timeout=3600 * 5)
+        if workflow_result == "waiting_review":
+            await redis_manager.publish_message(
+                task_id,
+                SystemMessage(content="任务等待人工确认建模方案", type="warning"),
+            )
+            write_task_status(task_id, "waiting_review", "任务等待人工确认建模方案")
+            return
         task_completed = True
 
         # 发送任务完成状态
@@ -453,6 +462,69 @@ async def cancel_task(task_id: str):
 class ResumeTaskResponse(BaseModel):
     task_id: str
     status: str
+
+
+class ApproveModelingRequest(BaseModel):
+    comment: str = ""
+
+
+def _mark_modeling_decision_approved(work_dir: str, comment: str = "") -> None:
+    decision_path = os.path.join(work_dir, "modeling_decision.json")
+    if not os.path.exists(decision_path):
+        raise HTTPException(status_code=404, detail="未找到建模确认文件")
+    try:
+        with open(decision_path, encoding="utf-8") as f:
+            decision = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail="建模确认文件读取失败") from exc
+
+    decision["status"] = "approved"
+    decision.setdefault("review", {})
+    decision["review"].update(
+        {
+            "approved": True,
+            "approved_at": datetime.datetime.now().isoformat(),
+            "comment": comment,
+        }
+    )
+    tmp_path = decision_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(decision, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, decision_path)
+
+
+@router.post("/modeling/{task_id}/approve-modeling", response_model=ResumeTaskResponse)
+async def approve_modeling(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    request: ApproveModelingRequest | None = None,
+):
+    """确认建模手方案并从 Coder 阶段继续执行。"""
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        work_dir = get_work_dir(safe_task_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    if safe_task_id in _active_tasks:
+        raise HTTPException(status_code=409, detail="任务仍在运行中")
+
+    checkpoint = CheckpointManager(work_dir).load()
+    if checkpoint is None:
+        raise HTTPException(status_code=404, detail="未找到可继续执行的检查点")
+
+    _mark_modeling_decision_approved(
+        work_dir,
+        "" if request is None else request.comment,
+    )
+    write_task_status(safe_task_id, "resuming", "建模方案已确认，任务续传中")
+    await redis_manager.set(f"task_id:{safe_task_id}", safe_task_id)
+    await redis_manager.publish_message(
+        safe_task_id,
+        SystemMessage(content="建模方案已确认，继续代码求解与论文写作"),
+    )
+    background_tasks.add_task(run_resume_task_async, safe_task_id)
+    return ResumeTaskResponse(task_id=safe_task_id, status="resuming")
 
 
 @router.post("/modeling/{task_id}/resume", response_model=ResumeTaskResponse)

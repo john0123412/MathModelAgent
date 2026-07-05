@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     MAX_CHAT_TURNS: Optional[int] = None
     MAX_RETRIES: Optional[int] = None
     CODER_MAX_SUCCESSFUL_TOOL_CALLS_PER_SUBTASK: Optional[int] = 8
+    HUMAN_MODEL_GATE_ENABLED: bool = False
     E2B_API_KEY: Optional[str] = None
     LOG_LEVEL: str = "DEBUG"
     DEBUG: bool = True

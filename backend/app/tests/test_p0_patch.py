@@ -28,6 +28,10 @@ class TestCandidateExporter(unittest.TestCase):
                 f.write("# 建模手方案")
             with open(os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8") as f:
                 json.dump({"questions_solution": {"ques1": "demo"}}, f)
+            with open(os.path.join(work_dir, "modeling_decision.json"), "w", encoding="utf-8") as f:
+                json.dump({"status": "waiting_review"}, f)
+            with open(os.path.join(work_dir, "modeling_decision.md"), "w", encoding="utf-8") as f:
+                f.write("# 建模方案人工确认")
             with open(os.path.join(work_dir, "export_status.json"), "w", encoding="utf-8") as f:
                 json.dump({"pdf": {"success": True}}, f)
             with open(
@@ -95,6 +99,12 @@ class TestCandidateExporter(unittest.TestCase):
             self.assertEqual(manifest["files"]["modeler_plan_md"], "modeler_plan.md")
             self.assertEqual(
                 manifest["files"]["modeler_plan_json"], "modeler_plan.json"
+            )
+            self.assertEqual(
+                manifest["files"]["modeling_decision"], "modeling_decision.json"
+            )
+            self.assertEqual(
+                manifest["files"]["modeling_decision_md"], "modeling_decision.md"
             )
             self.assertEqual(manifest["files"]["export_status"], "export_status.json")
             self.assertEqual(

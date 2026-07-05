@@ -11,6 +11,7 @@ from app.utils.log_util import logger
 TaskStatus = Literal[
     "pending",
     "running",
+    "waiting_review",
     "resuming",
     "interrupted",
     "failed",

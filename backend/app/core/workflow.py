@@ -446,6 +446,60 @@ class MathModelWorkFlow(WorkFlow):
         with open(plan_md_path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines).rstrip() + "\n")
 
+    def _write_modeling_decision(
+        self,
+        problem: Problem,
+        modeler_response: ModelerToCoder,
+    ) -> None:
+        """写出人工建模确认门禁所需的审计文件。"""
+        decision_json_path = os.path.join(self.work_dir, "modeling_decision.json")
+        decision_md_path = os.path.join(self.work_dir, "modeling_decision.md")
+        payload = {
+            "task_id": self.task_id,
+            "status": "waiting_review",
+            "gate_enabled": settings.HUMAN_MODEL_GATE_ENABLED,
+            "created_at": datetime.datetime.now().isoformat(),
+            "comp_template": problem.comp_template.value,
+            "format_output": problem.format_output.value,
+            "export_profile": problem.export_profile.value,
+            "questions": self.questions,
+            "ques_count": self.ques_count,
+            "modeler_response": modeler_response.model_dump(),
+            "review": {
+                "approved": False,
+                "approved_at": None,
+                "comment": "",
+            },
+        }
+        with open(decision_json_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+        lines = [
+            "# 建模方案人工确认",
+            "",
+            f"- 任务 ID：`{self.task_id}`",
+            "- 状态：`waiting_review`",
+            f"- 导出排版：`{problem.export_profile.value}`",
+            "",
+            "## 拆分问题",
+            "",
+        ]
+        for key, question in self.questions.items():
+            lines.append(f"- `{key}`：{question}")
+        lines.extend(["", "## 建模方案", ""])
+        for key, solution in modeler_response.questions_solution.items():
+            lines.extend([f"### {key}", "", str(solution).strip(), ""])
+        lines.extend(
+            [
+                "## 确认方式",
+                "",
+                f"通过 `POST /modeling/{self.task_id}/approve-modeling` 确认后继续代码求解与写作流程。",
+                "",
+            ]
+        )
+        with open(decision_md_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines).rstrip() + "\n")
+
     async def _export_results(
         self,
         user_output: UserOutput,
@@ -696,6 +750,19 @@ class MathModelWorkFlow(WorkFlow):
                 updated_at=datetime.datetime.now().isoformat(),
             )
         )
+        self._write_modeling_decision(problem, modeler_response)
+        if settings.HUMAN_MODEL_GATE_ENABLED:
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(
+                    content=(
+                        "建模方案已生成，任务等待人工确认。"
+                        "请查看 modeling_decision.md，确认后继续代码求解。"
+                    ),
+                    type="warning",
+                ),
+            )
+            return "waiting_review"
 
         user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
 

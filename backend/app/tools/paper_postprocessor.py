@@ -96,6 +96,8 @@ _SUPPORT_EXCLUDED_FILENAMES = {
     "export_status.json",
     "modeler_plan.json",
     "modeler_plan.md",
+    "modeling_decision.json",
+    "modeling_decision.md",
     "paper_preflight_report.json",
     "paper_preflight_report.md",
     "paper_outline.json",

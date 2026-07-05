@@ -88,10 +88,13 @@ class TestTexProjectExporterHappyPath(unittest.TestCase):
             )
             self.assertTrue(os.path.exists(main_tex_path))
             self.assertTrue(os.path.exists(imported_body_path))
+            self.assertGreaterEqual(result["structured_section_count"], 1)
+            self.assertTrue(result["main_uses_structured_sections"])
 
             with open(main_tex_path, "r", encoding="utf-8") as f:
                 main_tex_content = f.read()
-            self.assertIn(r"\input{sections/imported_body}", main_tex_content)
+            self.assertIn(r"\input{sections/01_section.tex}", main_tex_content)
+            self.assertNotIn(r"\input{sections/imported_body}", main_tex_content)
             self.assertIn("ctexart", main_tex_content)
 
             status_path = os.path.join(work_dir, "tex_export_status.json")
@@ -99,6 +102,7 @@ class TestTexProjectExporterHappyPath(unittest.TestCase):
             with open(status_path, "r", encoding="utf-8") as f:
                 status = json.load(f)
             self.assertTrue(status["success"])
+            self.assertTrue(status["main_uses_structured_sections"])
 
 
 @unittest.skipUnless(shutil.which("pandoc"), "本机未安装 pandoc，跳过真实转换用例")
@@ -152,13 +156,14 @@ class TestTexProjectExporterCumcm2025Profile(unittest.TestCase):
             with open(main_tex_path, "r", encoding="utf-8") as f:
                 main_tex_content = f.read()
             self.assertIn(r"\documentclass[bwprint]{gmcmthesis}", main_tex_content)
-            self.assertIn(r"\input{sections/imported_body}", main_tex_content)
+            self.assertIn(r"\input{sections/01_section.tex}", main_tex_content)
+            self.assertNotIn(r"\input{sections/imported_body}", main_tex_content)
             # 兜底定义 \newcounter{none}，避免 pandoc 无标题 longtable 与
             # caption 宏包冲突导致的 "No counter 'none' defined" 编译错误。
             self.assertIn(r"\newcounter{none}", main_tex_content)
 
     def test_huashubei_profile_uses_single_body_compatible_template(self):
-        """huashubei sidecar 先适配 imported_body.tex，不直接套结构化 sections 模板。"""
+        """huashubei sidecar 使用兼容外壳，但 main.tex 输入结构化 sections。"""
         real_which = shutil.which
 
         def which_side_effect(cmd, *args, **kwargs):
@@ -187,7 +192,8 @@ class TestTexProjectExporterCumcm2025Profile(unittest.TestCase):
             with open(main_tex_path, "r", encoding="utf-8") as f:
                 main_tex_content = f.read()
             self.assertIn("华数杯", main_tex_content)
-            self.assertIn(r"\input{sections/imported_body}", main_tex_content)
+            self.assertIn(r"\input{sections/01_section.tex}", main_tex_content)
+            self.assertNotIn(r"\input{sections/imported_body}", main_tex_content)
             self.assertNotIn(r"\input{sections/1_restatement}", main_tex_content)
             self.assertIn("top=2.5cm, bottom=2.5cm, left=2.5cm, right=2.5cm", main_tex_content)
             self.assertIn(r"\fontsize{14pt}{16.8pt}\heiti\bfseries", main_tex_content)

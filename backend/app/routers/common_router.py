@@ -231,7 +231,14 @@ async def list_tasks():
                     if (
                         not task_info["has_result"]
                         and task_info["status"]
-                        not in {"completed", "failed", "cancelled", "running", "resuming"}
+                        not in {
+                            "completed",
+                            "failed",
+                            "cancelled",
+                            "running",
+                            "resuming",
+                            "waiting_review",
+                        }
                     ):
                         task_info["status"] = (
                             "interrupted" if files_exist["checkpoint"] else "running"

@@ -89,7 +89,8 @@ def write_candidate_manifest(work_dir: str, task_id: str) -> str:
     """生成候选方案导出协议文件 candidate_manifest.json。
 
     扫描 work_dir 下已产出的文件（res.md/res.json/res.docx/res.pdf/notebook.ipynb/
-    export_status.json/paper_preflight_report.json/paper_preflight_report.md/
+    export_status.json/modeling_decision.json/modeling_decision.md/
+    paper_preflight_report.json/paper_preflight_report.md/
     paper_outline.json/figure_usage.json/claim_trace.json/claim_trace.md/
     pdf_visual_check.json/图片），不存在的文件字段为 None，图片列表为空数组。
     claims 字段来自 claim_trace.json，不存在或不可读时保持空数组；本函数只记录
@@ -114,6 +115,12 @@ def write_candidate_manifest(work_dir: str, task_id: str) -> str:
             "res_pdf": _existing_or_none(work_dir, "res.pdf"),
             "modeler_plan_md": _existing_or_none(work_dir, "modeler_plan.md"),
             "modeler_plan_json": _existing_or_none(work_dir, "modeler_plan.json"),
+            "modeling_decision": _existing_or_none(
+                work_dir, "modeling_decision.json"
+            ),
+            "modeling_decision_md": _existing_or_none(
+                work_dir, "modeling_decision.md"
+            ),
             "notebook": _existing_or_none(work_dir, "notebook.ipynb"),
             "export_status": _existing_or_none(work_dir, "export_status.json"),
             "paper_preflight_report": _existing_or_none(

@@ -164,7 +164,7 @@ curl.exe -X POST http://127.0.0.1:8000/modeling `
 
 **`cumcm2026` 相对 `cumcm2025` 的差异**：
 1. **PDF**：不生成目录，也不使用 `--number-sections`。当前 Markdown 模板已经带有 `一、`、`1.1` 等手写编号，关闭 pandoc 自动编号可以避免导出后出现 `2 一、问题重述`、`2.1 1.1 问题背景` 之类的重复编号。
-2. **LaTeX sidecar**：沿用 gmcmthesis 资源目录，但模板键为 `zh/cumcm2026-gmcmthesis`，电子版从摘要页开始。
+2. **LaTeX sidecar**：沿用 gmcmthesis 资源目录，但模板键为 `zh/cumcm2026-gmcmthesis`，电子版从摘要页开始；`latex_project/main.tex` 默认输入结构化 `sections/*.tex`，同时保留 `sections/imported_body.tex` 作为兼容审计文件。
 
 > 当前若目标赛事是高教社杯全国大学生数学建模竞赛，应优先使用 `export_profile=cumcm2026`；不要使用 `huashubei`，后者是华数杯 profile。
 
@@ -177,6 +177,47 @@ curl.exe -X POST http://127.0.0.1:8000/modeling `
     ```
     该选项默认关闭，因为它需要接受 Microsoft 的字体许可协议（EULA）并在构建时从外部镜像下载字体二进制文件，不适合作为默认公开镜像行为，仅建议在你自己私有构建、且已知晓并接受该许可与网络依赖时开启。
   - **中文字体**（SimSun/SimHei/KaiTi/STXinwei/LiSu）：**`INSTALL_MS_FONTS` 对此无效**——`ttf-mscorefonts-installer` 只包含 Times New Roman/Arial/Courier New 等英文字体，不含任何中文 Windows 字体。这些中文字体本身没有可合法分发的开源渠道（不像 Liberation 之于 Times New Roman那样有官方免费克隆），因此容器内始终 fallback 到 `fonts-noto-cjk`/`texlive-lang-chinese` 提供的 Noto Serif/Sans CJK SC、AR PL KaitiM GB，没有"装包补全"的选项。如需真正的 SimSun/SimHei/KaiTi 排版效果，只能在已合法安装这些字体的宿主机（如 Windows 本地开发环境）上编译，或自行挂载你合法持有的字体文件到容器内。
+
+### 人工建模确认门禁
+
+默认关闭，不影响全自动流程：
+
+```env
+HUMAN_MODEL_GATE_ENABLED=false
+```
+
+开启后，建模手完成后会先写出：
+
+- `modeler_plan.json`
+- `modeler_plan.md`
+- `modeling_decision.json`
+- `modeling_decision.md`
+- `checkpoint.json`
+
+任务状态会变为 `waiting_review`，不会进入 Coder。人工确认建模方案后调用：
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/modeling/<task_id>/approve-modeling `
+  -H "Content-Type: application/json" `
+  -d "{\"comment\":\"建模方案确认通过\"}"
+```
+
+确认接口会把 `modeling_decision.json` 标记为 `approved`，再复用现有 checkpoint/resume 链路从 Coder 阶段继续执行，不会重跑 Coordinator 或 Modeler。
+
+### 结构化 LaTeX Sidecar
+
+LaTeX sidecar 现在生成两类正文文件：
+
+- `latex_project/sections/imported_body.tex`：完整 Markdown 一次性转换的兼容文件，便于对照和回退。
+- `latex_project/sections/00_*.tex`、`01_*.tex` 等：按 Markdown 顶层标题拆分后的结构化章节文件。
+
+`latex_project/main.tex` 默认输入结构化章节文件，`tex_export_status.json` 会记录：
+
+- `structured_sections`
+- `structured_section_count`
+- `main_uses_structured_sections`
+
+如果 Markdown 没有可拆分的顶层标题，sidecar 会回退到输入 `sections/imported_body.tex`。
   - Windows 本地导出可以直接使用系统自带的正式字体，不受 Docker 镜像限制，见下一节。
 
 ---

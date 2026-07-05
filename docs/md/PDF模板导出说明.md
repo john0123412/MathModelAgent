@@ -31,9 +31,15 @@ Docker 后端默认负责完成建模主流程，并生成：
 - `res.json`
 - `res.docx`
 - `candidate_manifest.json`
+- `paper_preflight_report.json/md`
+- `paper_outline.json`
+- `figure_usage.json`
+- `claim_trace.json/md`
 - 题目要求的中间结果文件，例如 `result1.xlsx`、`result2.xlsx`、`result3.xlsx`
 - `res.pdf`（容器内 pandoc/xelatex 已装好，正常情况下会一并生成；字体是开源
   fallback 字体，仅用于自动化预览）
+- `latex_project/`（候选 LaTeX sidecar；`main.tex` 输入结构化 `sections/*.tex`，
+  并保留 `sections/imported_body.tex` 作为兼容审计文件）
 
 正式提交前，PDF 推荐在 Windows 本机用官方字体重新生成一份。推荐路径是：
 
@@ -139,6 +145,9 @@ D:\texlive\2026\bin\windows\pdfinfo.exe backend\project\work_dir\<task_id>\res.p
 - `Page size` 应为 A4，通常显示为 `595.28 x 841.89 pts`。
 - `Creator` 应显示 `LaTeX via pandoc` 或类似信息。
 - `candidate_manifest.json` 中 `files.res_pdf` 应为 `res.pdf`。
+- `pdf_visual_check.json` 应为 `PASS`，尤其是 `checks.text_margin.passed=true`。
+- `tex_export_status.json` 中 `main_uses_structured_sections=true` 时，`latex_project/main.tex`
+  应输入 `sections/00_*.tex`、`sections/01_*.tex` 等结构化章节。
 
 如需视觉检查前几页，可渲染为 PNG：
 

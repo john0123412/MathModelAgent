@@ -39,7 +39,8 @@ Docker 后端默认负责完成建模主流程，并生成：
 - `res.pdf`（容器内 pandoc/xelatex 已装好，正常情况下会一并生成；字体是开源
   fallback 字体，仅用于自动化预览）
 - `latex_project/`（候选 LaTeX sidecar；`main.tex` 输入结构化 `sections/*.tex`，
-  并保留 `sections/imported_body.tex` 作为兼容审计文件）
+  并保留 `sections/imported_body.tex` 作为兼容审计文件；编译失败只记录到
+  `tex_export_status.json`，不阻断主交付链路）
 
 正式提交前，PDF 推荐在 Windows 本机用官方字体重新生成一份。推荐路径是：
 
@@ -77,8 +78,9 @@ PDF 编译失败或代码越界。
   `export_profile=cumcm2026`，便于复核。
 - `cumcm2026` 当前复用 2025 年 LaTeX 模板资源目录和 DOCX reference-doc；2026
   正式模板发布后应重新复核。
-- `latex_project/` 是候选 sidecar，不是主交付链路；若要把它作为正式可编译工程交付，
-  需要单独修复并人工验收编译日志。
+- `latex_project/` 是候选 sidecar，不是主交付链路；导出器会尽量自动编译，
+  但若失败只写入 `tex_export_status.json`，不影响 `res.md`/`res.pdf`/`res.docx`
+  主交付。若要把它作为正式可编译工程交付，需要单独复核 `main.pdf` 和编译日志。
 - `pdf_visual_check.json` 是低成本自动检查，不替代人工翻阅 PDF。
 - raw TeX 已在主 PDF 导出中关闭，正文不要依赖 `\begin{table}`、`\begin{align}`
   等 raw LaTeX 环境；标准 Markdown 表格与 `$...$`、`\(...\)` 数学公式仍可用。
@@ -184,6 +186,10 @@ D:\texlive\2026\bin\windows\pdfinfo.exe backend\project\work_dir\<task_id>\res.p
 - `pdf_visual_check.json` 应为 `PASS`，尤其是 `checks.text_margin.passed=true`。
 - `tex_export_status.json` 中 `main_uses_structured_sections=true` 时，`latex_project/main.tex`
   应输入 `sections/00_*.tex`、`sections/01_*.tex` 等结构化章节。
+- `tex_export_status.json` 中 `compile_attempted=true` 时，重点看 `compile_success`、
+  `compile_reason`、`compile_failure_summary`。当前自动编译优先尝试 `latexmk -xelatex`，
+  失败后会 fallback 到连续两次 `xelatex`；如果 `compile_success=false`，该失败仍是
+  sidecar 风险，不代表主 PDF/DOCX 导出失败。
 
 如需视觉检查前几页，可渲染为 PNG：
 
@@ -226,8 +232,9 @@ Docker Compose 服务和 `win_start.bat` 是两条不同启动路径：
 ### Docker 已完成任务但没有 PDF
 
 Docker 镜像现在默认装有 Pandoc/TeX Live，正常情况下应该会生成 `res.pdf`。
-如果确实没有，先看后端日志里 `tex_export_status.json`/PDF 相关的 `reason`
-字段定位原因；如果只是想尽快补一份 PDF，可以直接在 Windows 本机运行：
+如果确实没有，先看后端日志里 PDF 相关的 `reason` 字段定位原因；LaTeX sidecar
+单独看 `tex_export_status.json` 的 `compile_reason` / `compile_failure_summary`。
+如果只是想尽快补一份 PDF，可以直接在 Windows 本机运行：
 
 ```powershell
 python backend\scripts\export_pdf_local.py <task_id>

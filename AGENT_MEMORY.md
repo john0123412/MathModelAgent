@@ -12,6 +12,10 @@
   - `paper_preflight_report.json`
   - `pdf_visual_check.json`
 - `latex_project/` 是候选 LaTeX sidecar，不是主交付链路。
+- LaTeX sidecar 当前已修复 CUMCM 图片路径、新版 pandoc `\pandocbounded`
+  图片宏、notebook `# Cell n` 原始代码段拆分问题；自动编译时若 `latexmk`
+  失败，会 fallback 到连续两次 `xelatex`，并在 `tex_export_status.json`
+  记录 `compile_reason` / `compile_failure_summary`。
 - 当前最新真实烟雾任务的主链路曾达到：
   - `paper_preflight_report.json = PASS`
   - `export_status.json -> pdf.success = true`

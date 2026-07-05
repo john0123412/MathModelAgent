@@ -227,13 +227,25 @@ LaTeX sidecar 现在生成两类正文文件：
 - `latex_project/sections/imported_body.tex`：完整 Markdown 一次性转换的兼容文件，便于对照和回退。
 - `latex_project/sections/00_*.tex`、`01_*.tex` 等：按 Markdown 顶层标题拆分后的结构化章节文件。
 
+生成前会对 LaTeX sidecar 专用 Markdown 做轻量兼容处理：保留已有 fenced code block，
+对未 fenced 的 `# Cell n` notebook 片段补代码围栏，并在章节拆分时忽略代码块内的
+`#` 注释，避免附录源码被误拆成正文章节。模板外壳同时兼容新版 Pandoc 生成的
+`\pandocbounded`、`\passthrough` 图片/inline 片段，并把图片搜索路径设为
+`./`、`../`、`sections/`、`figures/`，以便引用任务目录根部图片。
+
 `latex_project/main.tex` 默认输入结构化章节文件，`tex_export_status.json` 会记录：
 
 - `structured_sections`
 - `structured_section_count`
 - `main_uses_structured_sections`
+- `compile_attempted`
+- `compile_success`
+- `compile_reason`
+- `compile_failure_summary`
 
 如果 Markdown 没有可拆分的顶层标题，sidecar 会回退到输入 `sections/imported_body.tex`。
+如果 `latexmk` 可用但编译失败，导出器会 fallback 到连续两次 `xelatex`。sidecar
+编译失败只写入 `tex_export_status.json`，不会让主交付链路失败。
   - Windows 本地导出可以直接使用系统自带的正式字体，不受 Docker 镜像限制，见下一节。
 
 ---
@@ -289,7 +301,7 @@ cd backend
 uv run python -m app.tools.export_cli latex --input path\to\res.md --work-dir path\to\workdir --profile cumcm2025
 ```
 
-导出后会在 `path\to\workdir\latex_project\` 下生成 `main.tex` 等文件；如果本机 `latexmk`/`xelatex` 在 PATH 里，命令会自动尝试编译一次并直接告诉你是否成功。如果想自己手动编译（或自动编译失败想看到完整报错），进入该目录执行：
+导出后会在 `path\to\workdir\latex_project\` 下生成 `main.tex` 等文件；如果本机 `latexmk`/`xelatex` 在 PATH 里，命令会自动尝试编译并直接告诉你是否成功。自动编译优先尝试 `latexmk -xelatex`，失败后 fallback 到连续两次 `xelatex`；如果仍失败，`tex_export_status.json` 会记录 `compile_reason`、`compile_failure_summary` 和日志尾部。想手动复现时，进入该目录执行：
 
 ```powershell
 cd path\to\workdir\latex_project

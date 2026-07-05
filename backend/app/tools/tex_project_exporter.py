@@ -100,6 +100,11 @@ _CUMCM2025_MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 \end{document}
 """
 
+# Current CUMCM 2026 sidecar main template is derived from the 2025 template and
+# mainly removes the table of contents for the electronic-paper flow. If an
+# official 2026 LaTeX template is released, replace this with the official
+# structure while preserving the % MMA_SECTION_INPUTS placeholder so generated
+# sections/*.tex files are still input into main.tex.
 _CUMCM2026_MAIN_TEX_TEMPLATE = _CUMCM2025_MAIN_TEX_TEMPLATE.replace(
     "CUMCM 2025 LaTeX sidecar",
     "CUMCM 2026 LaTeX sidecar",

@@ -127,6 +127,11 @@ CUMCM2025_PROFILE = ExportProfileConfig(
     docx_reference_doc=CUMCM2025_DOCX_REFERENCE,
 )
 
+# `cumcm2026` is a provisional implementation based on the 2026 revised
+# formatting specification. Until official 2026 DOCX/LaTeX template files are
+# published, it intentionally reuses the 2025 DOCX reference and LaTeX resource
+# directory. When official templates appear, replace these paths following
+# docs/md/CUMCM2026模板替换指南.md.
 CUMCM2026_PROFILE = ExportProfileConfig(
     key=ExportProfile.CUMCM2026,
     label="高教社杯/CUMCM 2026 模板",

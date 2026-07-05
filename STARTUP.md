@@ -171,6 +171,13 @@ curl.exe -X POST http://127.0.0.1:8000/modeling `
 
 > 当前若目标赛事是高教社杯全国大学生数学建模竞赛，应优先使用 `export_profile=cumcm2026`；不要使用 `huashubei`，后者是华数杯 profile。
 
+### CUMCM 2026 模板状态与替换入口
+
+`cumcm2026` 当前是基于官方 2026 修订稿规范实现的暂定模板，不是官方最终
+DOCX/LaTeX 模板包。当前暂时复用 2025 DOCX reference 和 2025 `gmcmthesis`
+LaTeX 资源；2026 正式 DOCX/LaTeX 模板发布后，按
+`docs/md/CUMCM2026模板替换指南.md` 替换。
+
 **已知限制**：
 - `cumcm2026` 当前复用 2025 年 `gmcmthesis` 模板资源目录和 `format2025_reference.docx`
   的 Word 样式作为修订稿口径实现；2026 正式模板文件发布后，需要重新复核并替换

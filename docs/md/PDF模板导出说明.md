@@ -66,6 +66,19 @@ Windows 本机工具读取 res.md -> Pandoc + XeLaTeX 用真实系统字体重�
 里嵌套的 LaTeX 模板字符串把 `\begin{table}[H]` 等内容泄漏成正文 LaTeX，从而造成
 PDF 编译失败或代码越界。
 
+需要注意的边界：
+
+- 新建 `/modeling` 任务默认使用 `cumcm2026`；脚本、curl 或旧客户端仍建议显式传
+  `export_profile=cumcm2026`，便于复核。
+- `cumcm2026` 当前复用 2025 年 LaTeX 模板资源目录和 DOCX reference-doc；2026
+  正式模板发布后应重新复核。
+- `latex_project/` 是候选 sidecar，不是主交付链路；若要把它作为正式可编译工程交付，
+  需要单独修复并人工验收编译日志。
+- `pdf_visual_check.json` 是低成本自动检查，不替代人工翻阅 PDF。
+- raw TeX 已在主 PDF 导出中关闭，正文不要依赖 `\begin{table}`、`\begin{align}`
+  等 raw LaTeX 环境；标准 Markdown 表格与 `$...$`、`\(...\)` 数学公式仍可用。
+- `paper_preflight_report.json` 只说明格式门禁和基本证据链通过，不证明数学模型和论文论证正确。
+
 注意：当前模板 PDF 不是从 `res.docx` 转换而来，而是从 `res.md` 直接生成。
 这样可以稳定控制论文模板参数，例如 `ctexart`、中文字体、A4 纸张、页边距、
 页脚页码和是否生成目录页。若强行走 `DOCX -> PDF`，通常需要 LibreOffice

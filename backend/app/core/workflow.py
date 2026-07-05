@@ -9,7 +9,7 @@ from app.core.agents import WriterAgent, CoderAgent, CoordinatorAgent, ModelerAg
 from app.core.checkpoint import CheckpointManager, TaskCheckpoint
 from app.schemas.A2A import ModelerToCoder, WriterResponse
 from app.schemas.enums import CompTemplate, ExportProfile, FormatOutPut
-from app.schemas.request import Problem
+from app.schemas.request import DEFAULT_MODELING_EXPORT_PROFILE, Problem
 from app.schemas.response import SystemMessage
 from app.services import user_input_queue
 from app.tools.base_interpreter import BaseCodeInterpreter
@@ -503,7 +503,7 @@ class MathModelWorkFlow(WorkFlow):
     async def _export_results(
         self,
         user_output: UserOutput,
-        export_profile: ExportProfile | str | None = ExportProfile.DEFAULT,
+        export_profile: ExportProfile | str | None = DEFAULT_MODELING_EXPORT_PROFILE,
     ) -> None:
         """保存结果并导出 PDF/LaTeX/候选清单（execute 与 resume 共享）。"""
         logger.info(user_output.get_res())

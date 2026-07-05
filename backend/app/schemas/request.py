@@ -3,6 +3,8 @@
 from pydantic import BaseModel
 from app.schemas.enums import CompTemplate, ExportProfile, FormatOutPut
 
+DEFAULT_MODELING_EXPORT_PROFILE = ExportProfile.CUMCM2026
+
 
 class ExampleRequest(BaseModel):
     """示例建模请求。"""
@@ -16,7 +18,7 @@ class Problem(BaseModel):
     ques_all: str = ""
     comp_template: CompTemplate = CompTemplate.CHINA
     format_output: FormatOutPut = FormatOutPut.Markdown
-    export_profile: ExportProfile = ExportProfile.DEFAULT
+    export_profile: ExportProfile = DEFAULT_MODELING_EXPORT_PROFILE
 
     def model_dump(self, **kwargs):
         data = super().model_dump(**kwargs)

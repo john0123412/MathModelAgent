@@ -8,7 +8,7 @@ from app.utils.log_util import logger
 from app.services.redis_manager import redis_manager
 from app.services import user_input_queue
 from app.services.task_status import write_task_status
-from app.schemas.request import Problem
+from app.schemas.request import DEFAULT_MODELING_EXPORT_PROFILE, Problem
 from app.schemas.response import SystemMessage
 from app.utils.common_utils import (
     create_task_id,
@@ -47,7 +47,7 @@ _active_tasks: Dict[str, Tuple[asyncio.Task, asyncio.Event]] = {}
 
 def _finalize_docx_and_manifest(
     task_id: str,
-    export_profile: ExportProfile | str | None = ExportProfile.DEFAULT,
+    export_profile: ExportProfile | str | None = DEFAULT_MODELING_EXPORT_PROFILE,
 ) -> None:
     """生成 DOCX 后刷新候选清单，确保 manifest 反映最终产物。"""
     md_2_docx(task_id, export_profile=export_profile)
@@ -274,7 +274,7 @@ async def exampleModeling(
         ques_all,
         CompTemplate.CHINA,
         FormatOutPut.Markdown,
-        ExportProfile.DEFAULT,
+        DEFAULT_MODELING_EXPORT_PROFILE,
     )
     return {"task_id": task_id, "status": "processing"}
 
@@ -285,7 +285,7 @@ async def modeling(
     ques_all: str = Form(...),  # 从表单获取
     comp_template: CompTemplate = Form(...),  # 从表单获取
     format_output: FormatOutPut = Form(...),  # 从表单获取
-    export_profile: ExportProfile = Form(ExportProfile.DEFAULT),  # 从表单获取
+    export_profile: ExportProfile = Form(DEFAULT_MODELING_EXPORT_PROFILE),  # 从表单获取
     files: list[UploadFile] = File(default=None),
 ):
     task_id = create_task_id()
@@ -341,7 +341,7 @@ async def run_modeling_task_async(
     ques_all: str,
     comp_template: CompTemplate,
     format_output: FormatOutPut,
-    export_profile: ExportProfile = ExportProfile.DEFAULT,
+    export_profile: ExportProfile = DEFAULT_MODELING_EXPORT_PROFILE,
 ):
     """异步执行建模任务。
 
@@ -609,7 +609,9 @@ async def run_resume_task_async(task_id: str):
             try:
                 checkpoint = CheckpointManager(get_work_dir(task_id)).load()
                 export_profile = (
-                    checkpoint.export_profile if checkpoint is not None else "default"
+                    checkpoint.export_profile
+                    if checkpoint is not None
+                    else DEFAULT_MODELING_EXPORT_PROFILE
                 )
                 _finalize_docx_and_manifest(task_id, export_profile)
             except Exception as e:

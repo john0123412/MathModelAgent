@@ -52,6 +52,19 @@
 - `backend/app/templates/export_profiles/README.md`
   - 模板资源目录说明。
 
+## 每次任务完成后的同步检查
+
+完成任何代码或导出链路修改后，提交前必须检查是否需要更新：
+
+- `AGENT_MEMORY.md`
+- `STARTUP.md`
+- `docs/md/PDF模板导出说明.md`
+- `docs/md/CUMCM2026模板替换指南.md`
+- `docs/md/CUMCM_FINAL_REVIEW_CHECKLIST.md`
+- `backend/app/templates/export_profiles/README.md`
+
+如果改动改变了当前稳定状态、已知风险、验证命令、失败诊断顺序或最近关键提交，必须更新本文件。
+
 ## 核心代码入口
 
 - `backend/app/schemas/request.py`

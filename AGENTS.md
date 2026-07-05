@@ -18,6 +18,35 @@
 - 不要擅自提交、推送、合并、删分支或清理 worktree，除非用户明确要求。
 - 验证结论必须基于实际运行结果；未运行就明确写“未验证”。
 
+## 任务收尾与记忆同步
+
+每次完成功能修复、风险修复、导出链路调整、模板调整、验证流程调整后，提交前必须检查是否需要同步更新以下文件：
+
+1. `AGENT_MEMORY.md`
+2. `STARTUP.md`
+3. `docs/md/PDF模板导出说明.md`
+4. `docs/md/CUMCM2026模板替换指南.md`
+5. `docs/md/CUMCM_FINAL_REVIEW_CHECKLIST.md`
+6. `backend/app/templates/export_profiles/README.md`
+
+判断标准：
+
+- 改变主交付链路、默认 profile、导出行为、验证命令、已知风险、失败诊断顺序，必须更新 `AGENT_MEMORY.md`。
+- 改变用户使用方式、启动方式、命令、Docker/Windows 导出路径，必须更新 `STARTUP.md`。
+- 改变 PDF/DOCX/LaTeX 导出行为、字体 fallback、模板路径或验收标准，必须更新 `docs/md/PDF模板导出说明.md`。
+- 涉及 `cumcm2026` 模板、官方模板替换路径、DOCX reference、LaTeX 模板资源，必须更新 `docs/md/CUMCM2026模板替换指南.md`。
+- 改变最终人工复核口径，必须更新 `docs/md/CUMCM_FINAL_REVIEW_CHECKLIST.md`。
+- 修改 `backend/app/templates/export_profiles/` 资源结构，必须更新 `backend/app/templates/export_profiles/README.md`。
+
+如果判断不需要更新说明文件，最终汇报也必须说明：“已检查说明文件同步需求：无需更新，原因是……”
+
+每次提交前的汇报必须包含：
+
+- 代码改动文件。
+- 文档/记忆文件是否已同步。
+- 未同步的理由。
+- 验证命令和结果。
+
 ## 前端本机 Node 工具链硬限制
 
 在 Windows 本机环境中，agent 不得主动运行任何会调用本地 `frontend/node_modules`、安装前端依赖、启动本地前端构建或检查的命令，包括但不限于：

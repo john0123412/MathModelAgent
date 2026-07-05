@@ -69,7 +69,10 @@ class Flows:
             "sensitivity_analysis": {
                 "coder_prompt": f"""
                         参考建模手给出的解决方案{solutions.get("sensitivity_analysis", "对模型进行灵敏度分析")}
-                        完成敏感性分析
+                        完成敏感性分析。
+                        敏感性分析不是新增题目问题；当前正式题目问题数为 {len(questions_quesx)}。
+                        除非题目原文确实存在对应问题，不要把图片或CSV命名为“问题{len(questions_quesx) + 1}_...”。
+                        请使用“灵敏度分析_...”或“扩展分析_...”作为敏感性分析输出文件前缀。
                     """,
             },
         }
@@ -133,6 +136,7 @@ class Flows:
             **quesx_writer_prompt,
             "sensitivity_analysis": f"""
                     问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output},按照如下模板撰写：{config_template["sensitivity_analysis"]}
+                    注意：敏感性分析不是新增题目问题。若题目重述只列出两问，不要在正文、图题或表题中称其为“问题三/问题3”；如图片路径历史上含“问题3_”，括号中的路径保持不变，方括号中的图题和正文表述改写为“灵敏度分析_...”或“扩展分析_...”。
                 """,
         }
 

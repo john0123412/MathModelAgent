@@ -9,10 +9,13 @@ from app.tools.paper_postprocessor import (
     append_code_appendix,
     build_claim_trace,
     build_preflight_report,
+    ensure_table_captions,
     normalize_chinese_references,
+    normalize_extra_problem_labels,
     normalize_keywords,
     normalize_markdown_headings,
     prepare_paper_markdown,
+    strip_unmatched_inline_references,
 )
 
 
@@ -125,6 +128,101 @@ class TestNormalizeChineseReferences(unittest.TestCase):
         )
 
         self.assertTrue(report["checks"]["keywords"]["passed"])
+
+    def test_unmatched_inline_numeric_references_are_removed(self):
+        markdown = (
+            "正文引用已有文献[1]，但这里误写了缺失文献[2]和[3]。\n\n"
+            "## 参考文献\n\n[1] 文献。"
+        )
+
+        updated, removed = strip_unmatched_inline_references(markdown)
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(),
+            markdown=updated,
+            code_sources=[],
+        )
+
+        self.assertEqual(removed, [2, 3])
+        self.assertIn("已有文献[1]", updated)
+        self.assertNotIn("[2]", updated)
+        self.assertNotIn("[3]", updated)
+        self.assertTrue(report["checks"]["references"]["passed"])
+        self.assertEqual(report["checks"]["references"]["missing_inline"], [])
+
+    def test_preflight_fails_unmatched_inline_numeric_references(self):
+        markdown = (
+            "正文引用已有文献[1]，但这里误写了缺失文献[2]。\n\n"
+            "## 参考文献\n\n[1] 文献。"
+        )
+
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(),
+            markdown=markdown,
+            code_sources=[],
+        )
+
+        self.assertEqual(report["status"], "FAIL")
+        self.assertFalse(report["checks"]["references"]["passed"])
+        self.assertEqual(report["checks"]["references"]["missing_inline"], [2])
+
+    def test_table_captions_are_inserted_before_markdown_tables(self):
+        markdown = (
+            "# 四、符号说明\n\n"
+            "| 符号 | 含义 |\n"
+            "| --- | --- |\n"
+            "| x | 产量 |\n\n"
+            "## 附录A 支撑材料文件列表\n\n"
+            "| 文件名 | 类型 |\n"
+            "| --- | --- |\n"
+            "| result.csv | 数据/结果文件 |\n"
+        )
+
+        updated = ensure_table_captions(markdown)
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(),
+            markdown=updated,
+            code_sources=[],
+        )
+
+        self.assertIn("表1 符号说明", updated)
+        self.assertIn("表2 支撑材料文件列表", updated)
+        self.assertTrue(report["checks"]["tables"]["passed"])
+        self.assertEqual(report["checks"]["tables"]["uncaptioned_tables"], [])
+
+    def test_preflight_flags_uncaptioned_markdown_tables(self):
+        markdown = (
+            "| 符号 | 含义 |\n"
+            "| --- | --- |\n"
+            "| x | 产量 |\n"
+        )
+
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(),
+            markdown=markdown,
+            code_sources=[],
+        )
+
+        self.assertFalse(report["checks"]["tables"]["passed"])
+        self.assertEqual(report["checks"]["tables"]["uncaptioned_tables"][0]["table_index"], 1)
+
+    def test_extra_problem_labels_are_normalized_outside_code_and_paths(self):
+        markdown = (
+            "本文只列出（1）和（2）两个问题。\n\n"
+            "![问题3_参数利润敏感性](问题3_参数利润敏感性.png)\n\n"
+            "| 文件名 | 类型 |\n"
+            "| --- | --- |\n"
+            "| 问题3_敏感性汇总.csv | 数据/结果文件 |\n\n"
+            "```python\n"
+            "fig.savefig('问题3_参数利润敏感性.png')\n"
+            "```\n"
+        )
+
+        updated, replacements = normalize_extra_problem_labels(markdown)
+
+        self.assertEqual(replacements, 2)
+        self.assertIn("![灵敏度分析_参数利润敏感性](问题3_参数利润敏感性.png)", updated)
+        self.assertIn("| 灵敏度分析_敏感性汇总.csv | 数据/结果文件 |", updated)
+        self.assertIn("fig.savefig('问题3_参数利润敏感性.png')", updated)
 
 
 class TestAppendCodeAppendix(unittest.TestCase):
@@ -409,6 +507,7 @@ class TestEnhancedPreflightChecks(unittest.TestCase):
             "# 三、模型假设\n\n正文。\n\n"
             "# 四、符号说明\n\n正文。\n\n"
             "# 五、模型的建立与求解\n\n"
+            "表1 变量说明\n\n"
             "| 变量 | 含义 | 单位 |\n| --- | --- | --- |\n| x | A产品数量 | 件 |\n"
             "# 六、模型的分析与检验\n\n正文。\n\n"
             "# 七、模型的评价、改进与推广\n\n正文。\n\n"
@@ -515,6 +614,7 @@ class TestEnhancedPreflightChecks(unittest.TestCase):
             "# 五、模型的建立与求解\n\n正文。\n\n"
             "# 六、模型的分析与检验\n\n正文。\n\n"
             "# 七、模型的评价、改进与推广\n\n正文。\n\n"
+            "表1 角点利润比较\n\n"
             "| 角点编号 | x值 | y值 | 2x+y | x+2y | 40x+30y | 是否可行 |\n"
             "|:--------:|:---:|:---:|:----:|:----:|:-------:|:--------:|\n"
             "| 4 | 40 | 20 | 100 | 80 | 2200 | 是 |\n\n"

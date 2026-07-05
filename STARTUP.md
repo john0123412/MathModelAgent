@@ -398,6 +398,9 @@ B 需要 1 小时机器时间、2 小时人工时间，利润 30 元；
 - `pdf_visual_check.json = PASS`
 - `tex_export_status.json -> compile_success = true`
 - `latex_project/main.pdf` 存在且非空
+- `paper_preflight_report.json -> checks.references.missing_inline = []`
+- `paper_preflight_report.json -> checks.tables.uncaptioned_tables = []`
+- `paper_preflight_report.json -> checks.extra_problem_labels.issues = []`
 - 续传相关测试应生成 `checkpoint.json`、`variable_snapshot.pkl`、`variable_snapshot_meta.json`
 - 后端日志出现 `变量快照已恢复` 或 `快照后增量重放`
 - 如果容器环境异常导致 `pandoc`/`xelatex` 不可用，`res.pdf` 和 LaTeX sidecar 可能被跳过；只要 Markdown/Word/JSON 成功，不视为主流程失败，但正式提交前必须补导出 PDF 并复核。

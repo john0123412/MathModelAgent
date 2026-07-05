@@ -22,15 +22,20 @@
   中缺少 Windows 字体或 `AR PL KaitiM GB` 时，会继续 fallback 到 Noto CJK 字体，
   优先保证候选 LaTeX 工程可编译。
 - 当前最新真实烟雾任务的主链路曾达到：
-  - `task_id = 20260705-095041-36750d99`
+  - `task_id = 20260705-151224-0659f137`
   - `paper_preflight_report.json = PASS`
   - `export_status.json -> pdf.success = true`
   - `pdf_visual_check = PASS`
   - `tex_export_status.json -> compile_success = true`
   - `latex_project/main.pdf` 已生成
+  - 该任务中途因外部模型接口 `Connection error` 失败过一次，随后通过
+    `/modeling/<task_id>/resume` 从 checkpoint/变量快照恢复并完成。
 - `cumcm2026` 是基于 2026 修订稿规范实现的暂定模板，不是官方最终 DOCX/LaTeX 模板包。
 - 主 PDF 导出会在摘要/关键词后做 PDF-only 分页，保证摘要页独占第一页、
   正文从第二页开始；该分页不写回 `res.md`，也不影响 DOCX 或 LaTeX sidecar。
+- 论文后处理会做三类内容一致性兜底：移除没有参考文献条目支撑的裸 `[n]`
+  引用、为 Markdown 表格自动补 `表n` 标题、在正式题目数不足时把可见
+  `问题3_...` 扩展分析标签规范为 `灵敏度分析_...`（图片路径保持原文件名）。
 - 真实提交前仍需人工复核论文内容和 PDF 排版。
 
 ## 接手时禁止全盘扫描
@@ -100,6 +105,8 @@
 - `backend/app/tools/paper_postprocessor.py`
   - 参考文献、附录、支撑材料、预检、claim trace。
   - 负责 `paper_preflight_report.json/md`。
+  - 检查正文引用编号是否都有文末参考文献条目、表格是否有编号标题、扩展分析是否
+    被误标为不存在的“问题3”。
 - `backend/app/tools/pdf_visual_checker.py`
   - PDF 后验视觉检查。
   - 检查 A4、非空、文本可提取、基础边距风险。
@@ -134,6 +141,9 @@
   `export_status.json -> pdf.stderr`
 - 如果 preflight FAIL，优先看：
   `paper_preflight_report.json -> checks`
+- 如果参考文献或表格细节异常，优先看：
+  `checks.references.missing_inline`、`checks.tables.uncaptioned_tables`、
+  `checks.extra_problem_labels.issues`。
 - 如果 PDF 视觉检查失败，优先看：
   `pdf_visual_check.json -> checks`
 - 如果 sidecar 失败，先确认是否影响主交付；通常不阻断。

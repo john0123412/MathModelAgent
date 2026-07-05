@@ -16,6 +16,7 @@ REFERENCE_HEADING_RE = re.compile(
 )
 INLINE_FOOTNOTE_RE = re.compile(r"\[\^(\d+)\]")
 INLINE_NUMERIC_RE = re.compile(r"\[(\d+)\]")
+IMAGE_MARKDOWN_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 REFERENCE_START_RE = re.compile(
     r"^\s*(?:[-*]\s*)?(?:\[\^?(\d+)\]|\^?(\d+)[:：.]|(\d+)[.、])\s*[:：]?\s*(.+?)\s*$"
 )
@@ -41,6 +42,10 @@ INTERNAL_PATH_RE = re.compile(
 FENCED_CODE_BLOCK_RE = re.compile(
     r"(?ms)^(?P<fence>`{3,}|~{3,})[^\n]*\n.*?^(?P=fence)[ \t]*\n?"
 )
+FENCE_START_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+TABLE_CAPTION_RE = re.compile(r"^\s*(?:表|Table)\s*\d+[\s：:、.-]")
+MARKDOWN_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
+EXTRA_PROBLEM_LABEL_RE = re.compile(r"问题(?P<number>\d+|[一二三四五六七八九十]+)(?P<suffix>[_、\s]?)")
 CLAIM_SENTENCE_RE = re.compile(r"[^。！？.!?\n]*(?:最优|利润|提高|增加|降低|结果表明|敏感性|影子价格|准确率|误差)[^。！？.!?\n]*[。！？.!?]?")
 NUMERIC_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:%|元|小时|件|吨|亩|分|倍|年|万元)?")
 STRONG_WORDING_RE = re.compile(r"证明|唯一|显著优于|最可靠|精确预测")
@@ -74,6 +79,18 @@ SECTION_KIND_KEYWORDS = {
     "evaluation": ("模型的评价", "模型评价", "改进与推广"),
     "references": ("参考文献",),
     "appendix": ("附录",),
+}
+CHINESE_NUMBER_MAP = {
+    "一": 1,
+    "二": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "十": 10,
 }
 
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")
@@ -183,6 +200,46 @@ def _renumber_inline_references(text: str, number_map: dict[int, int]) -> str:
     return INLINE_NUMERIC_RE.sub(replace_numeric, text)
 
 
+def _reference_body_parts(markdown: str) -> tuple[str, str]:
+    match = REFERENCE_HEADING_RE.search(markdown)
+    if not match:
+        return markdown, ""
+    reference_text = markdown[match.end() :]
+    appendix_match = APPENDIX_HEADING_RE.search(reference_text)
+    if appendix_match:
+        reference_text = reference_text[: appendix_match.start()]
+    return markdown[: match.start()], reference_text
+
+
+def _reference_numbers(reference_text: str) -> set[int]:
+    return {number for number, _ in _parse_reference_entries(reference_text)}
+
+
+def _inline_reference_numbers(body: str) -> set[int]:
+    body = _without_fenced_code_blocks(body)
+    body = IMAGE_RE.sub("", body)
+    return {int(match.group(1)) for match in INLINE_NUMERIC_RE.finditer(body)}
+
+
+def strip_unmatched_inline_references(markdown: str) -> tuple[str, list[int]]:
+    """Remove inline numeric references that do not have bibliography entries."""
+    body, reference_text = _reference_body_parts(markdown)
+    if not reference_text:
+        return markdown, []
+
+    existing_numbers = _reference_numbers(reference_text)
+    removed: set[int] = set()
+
+    def replace(match: re.Match[str]) -> str:
+        number = int(match.group(1))
+        if number in existing_numbers:
+            return match.group(0)
+        removed.add(number)
+        return ""
+
+    return INLINE_NUMERIC_RE.sub(replace, body) + markdown[len(body) :], sorted(removed)
+
+
 def normalize_chinese_references(markdown: str) -> str:
     """将参考文献章节整理为独立编号行，并把正文脚注标记改为数字引用。"""
     match = REFERENCE_HEADING_RE.search(markdown)
@@ -235,6 +292,115 @@ def normalize_markdown_headings(markdown: str) -> str:
     if not ABSTRACT_HEADING_RE.search(markdown):
         markdown = BARE_ABSTRACT_HEADING_RE.sub("## 摘要", markdown, count=1)
     return BOLD_KEYWORDS_HEADING_RE.sub("## 关键词", markdown)
+
+
+def _chinese_problem_number(text: str) -> int | None:
+    if text.isdigit():
+        return int(text)
+    if text in CHINESE_NUMBER_MAP:
+        return CHINESE_NUMBER_MAP[text]
+    if text.startswith("十") and len(text) == 2:
+        suffix = CHINESE_NUMBER_MAP.get(text[1])
+        return 10 + suffix if suffix else None
+    if text.endswith("十") and len(text) == 2:
+        prefix = CHINESE_NUMBER_MAP.get(text[0])
+        return prefix * 10 if prefix else None
+    if "十" in text and len(text) == 3:
+        prefix = CHINESE_NUMBER_MAP.get(text[0])
+        suffix = CHINESE_NUMBER_MAP.get(text[2])
+        return prefix * 10 + suffix if prefix and suffix else None
+    return None
+
+
+def _infer_declared_problem_count(markdown: str) -> int | None:
+    text = _without_fenced_code_blocks(markdown)
+    restatement_match = re.search(r"(?m)^#{1,6}\s*(?:一、)?问题重述\s*$", text)
+    search_area = text
+    if restatement_match:
+        next_heading = re.search(r"(?m)^#{1,6}\s*(?:二、)?问题分析\s*$", text[restatement_match.end() :])
+        end = restatement_match.end() + next_heading.start() if next_heading else len(text)
+        search_area = text[restatement_match.end() : end]
+
+    enumerated = [int(item) for item in re.findall(r"[（(](\d+)[）)]", search_area)]
+    if enumerated:
+        return max(enumerated)
+
+    problem_numbers = [
+        number
+        for number in (
+            _chinese_problem_number(match.group(1))
+            for match in re.finditer(r"问题([一二三四五六七八九十]+)", search_area)
+        )
+        if number is not None
+    ]
+    return max(problem_numbers) if problem_numbers else None
+
+
+def _normalise_extra_problem_label_text(text: str, declared_count: int | None) -> tuple[str, int]:
+    if declared_count is None:
+        return text, 0
+    replacements = 0
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal replacements
+        number = _chinese_problem_number(match.group("number"))
+        if number is None or number <= declared_count:
+            return match.group(0)
+        replacements += 1
+        suffix = match.group("suffix")
+        return "灵敏度分析_" if suffix == "_" else "灵敏度分析"
+
+    return EXTRA_PROBLEM_LABEL_RE.sub(replace, text), replacements
+
+
+def _normalise_visible_problem_labels_line(line: str, declared_count: int | None) -> tuple[str, int]:
+    placeholders: list[str] = []
+    image_replacements = 0
+
+    def replace_image(match: re.Match[str]) -> str:
+        nonlocal image_replacements
+        alt, path = match.group(1), match.group(2)
+        normalised_alt, count = _normalise_extra_problem_label_text(alt, declared_count)
+        image_replacements += count
+        placeholders.append(f"![{normalised_alt}]({path})")
+        return f"@@MMA_IMAGE_{len(placeholders) - 1}@@"
+
+    masked = IMAGE_MARKDOWN_RE.sub(replace_image, line)
+    normalised, replacements = _normalise_extra_problem_label_text(masked, declared_count)
+    for index, image_text in enumerate(placeholders):
+        normalised = normalised.replace(f"@@MMA_IMAGE_{index}@@", image_text)
+    return normalised, replacements + image_replacements
+
+
+def normalize_extra_problem_labels(markdown: str, include_code: bool = False) -> tuple[str, int]:
+    """Normalize visible labels like 问题3 when the formal statement has fewer questions."""
+    declared_count = _infer_declared_problem_count(markdown)
+    if declared_count is None:
+        return markdown, 0
+
+    lines: list[str] = []
+    replacements = 0
+    in_fence = False
+    fence_marker = ""
+    for line in markdown.splitlines(keepends=True):
+        fence_match = FENCE_START_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker[0]
+            elif marker.startswith(fence_marker):
+                in_fence = False
+                fence_marker = ""
+            lines.append(line)
+            continue
+        if in_fence and not include_code:
+            lines.append(line)
+            continue
+        normalised, count = _normalise_visible_problem_labels_line(line, declared_count)
+        replacements += count
+        lines.append(normalised)
+    return "".join(lines), replacements
 
 
 def _without_fenced_code_blocks(markdown: str) -> str:
@@ -555,8 +721,125 @@ def _find_markdown_tables(markdown: str) -> list[list[str]]:
     return tables
 
 
+def _is_markdown_table_line(line: str) -> bool:
+    stripped = line.strip()
+    return stripped.startswith("|") and stripped.endswith("|")
+
+
+def _previous_nonblank_line(lines: list[str]) -> str:
+    for line in reversed(lines):
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _table_caption_title(context_heading: str, table: list[str]) -> str:
+    header = table[0] if table else ""
+    if "支撑材料" in context_heading or "文件名" in header:
+        return "支撑材料文件列表"
+    if "符号" in context_heading or "符号" in header:
+        return "符号说明"
+    if "敏感性" in context_heading or "灵敏度" in context_heading:
+        return "灵敏度分析结果"
+    if "模型" in context_heading:
+        return "模型求解结果"
+    return "结果汇总"
+
+
+def ensure_table_captions(markdown: str) -> str:
+    """Insert simple numbered captions before Markdown tables that lack one."""
+    lines = markdown.splitlines()
+    output: list[str] = []
+    index = 0
+    table_index = 1
+    context_heading = ""
+    in_fence = False
+    fence_marker = ""
+
+    while index < len(lines):
+        line = lines[index]
+        fence_match = FENCE_START_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker[0]
+            elif marker.startswith(fence_marker):
+                in_fence = False
+                fence_marker = ""
+            output.append(line)
+            index += 1
+            continue
+
+        if not in_fence:
+            heading_match = HEADING_RE.match(line)
+            if heading_match:
+                context_heading = heading_match.group(1).strip()
+
+            if _is_markdown_table_line(line):
+                table: list[str] = []
+                while index < len(lines) and _is_markdown_table_line(lines[index]):
+                    table.append(lines[index])
+                    index += 1
+                previous = _previous_nonblank_line(output)
+                if not TABLE_CAPTION_RE.match(previous):
+                    title = _table_caption_title(context_heading, table)
+                    if output and output[-1].strip():
+                        output.append("")
+                    output.append(f"表{table_index} {title}")
+                    output.append("")
+                output.extend(table)
+                table_index += 1
+                continue
+
+        output.append(line)
+        index += 1
+
+    return "\n".join(output).rstrip() + ("\n" if markdown.endswith("\n") else "")
+
+
 def _check_tables(markdown: str) -> dict:
     wide_tables: list[dict] = []
+    uncaptioned_tables: list[dict] = []
+    lines = markdown.splitlines()
+    table_start_lines: list[int] = []
+    in_fence = False
+    fence_marker = ""
+    previous_nonblank = ""
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        fence_match = FENCE_START_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker[0]
+            elif marker.startswith(fence_marker):
+                in_fence = False
+                fence_marker = ""
+            index += 1
+            continue
+        if in_fence:
+            index += 1
+            continue
+        if _is_markdown_table_line(line):
+            table_start_lines.append(index + 1)
+            if not TABLE_CAPTION_RE.match(previous_nonblank):
+                uncaptioned_tables.append(
+                    {
+                        "table_index": len(table_start_lines),
+                        "line": index + 1,
+                    }
+                )
+            while index < len(lines) and _is_markdown_table_line(lines[index]):
+                index += 1
+            previous_nonblank = ""
+            continue
+        if line.strip():
+            previous_nonblank = line.strip()
+        index += 1
+
     for index, table in enumerate(_find_markdown_tables(markdown), 1):
         header = table[0]
         column_count = max(0, header.count("|") - 1)
@@ -569,7 +852,30 @@ def _check_tables(markdown: str) -> dict:
                     "max_line_length": max_line_length,
                 }
             )
-    return {"passed": not wide_tables, "wide_tables": wide_tables}
+    return {
+        "passed": not wide_tables and not uncaptioned_tables,
+        "wide_tables": wide_tables,
+        "uncaptioned_tables": uncaptioned_tables,
+    }
+
+
+def _extra_problem_label_issues(markdown: str) -> list[dict]:
+    declared_count = _infer_declared_problem_count(markdown)
+    if declared_count is None:
+        return []
+    visible_markdown = _without_fenced_code_blocks(markdown)
+    visible_markdown = IMAGE_MARKDOWN_RE.sub(lambda match: f"![{match.group(1)}]()", visible_markdown)
+    issues: list[dict] = []
+    for match in EXTRA_PROBLEM_LABEL_RE.finditer(visible_markdown):
+        number = _chinese_problem_number(match.group("number"))
+        if number is not None and number > declared_count:
+            issues.append(
+                {
+                    "label": match.group(0).strip(),
+                    "declared_problem_count": declared_count,
+                }
+            )
+    return issues
 
 
 def _section_kind(title: str) -> str:
@@ -829,6 +1135,15 @@ def build_preflight_report(
         for line in reference_lines
         if not re.match(r"^\[\d+\]\s+\S+", line)
     ]
+    reference_numbers = {
+        int(match.group(1))
+        for line in reference_lines
+        for match in [re.match(r"^\[(\d+)\]\s+\S+", line)]
+        if match
+    }
+    body_before_references, _ = _reference_body_parts(markdown)
+    inline_reference_numbers = _inline_reference_numbers(body_before_references)
+    missing_inline_references = sorted(inline_reference_numbers - reference_numbers)
 
     image_paths = IMAGE_RE.findall(markdown)
     missing_images = [
@@ -844,9 +1159,13 @@ def build_preflight_report(
     placeholders = sorted(set(PLACEHOLDER_RE.findall(markdown)))
 
     references_check = {
-        "passed": bool(reference_lines) and not bad_reference_lines,
+        "passed": bool(reference_lines)
+        and not bad_reference_lines
+        and not missing_inline_references,
         "count": len(reference_lines),
         "bad_lines": bad_reference_lines,
+        "inline": sorted(inline_reference_numbers),
+        "missing_inline": missing_inline_references,
     }
     support_materials_check = {
         "passed": bool(SUPPORT_MATERIAL_HEADING_RE.search(markdown))
@@ -870,6 +1189,10 @@ def build_preflight_report(
         "passed": not placeholders,
         "matches": placeholders,
     }
+    extra_problem_labels_check = {
+        "passed": not _extra_problem_label_issues(markdown),
+        "issues": _extra_problem_label_issues(markdown),
+    }
     sections_check = _check_sections(markdown_without_code)
     export_profile_check = _check_export_profile(export_profile)
     claim_trace_check = _check_claim_trace(
@@ -888,6 +1211,7 @@ def build_preflight_report(
         "sections": _with_severity(sections_check, _sections_check_severity(sections_check)),
         "internal_paths": _with_severity(_check_internal_paths(markdown), "fail"),
         "tables": _with_severity(_check_tables(markdown_without_code), "conditional"),
+        "extra_problem_labels": _with_severity(extra_problem_labels_check, "conditional"),
         "claim_trace": _with_severity(
             claim_trace_check, _claim_trace_check_severity(claim_trace_check)
         ),
@@ -905,7 +1229,11 @@ def _format_check_detail(check: dict) -> str:
     if "profile" in check and "expected" in check:
         return f"profile={check['profile']}; expected={check['expected']}"
     if "count" in check and "bad_lines" in check:
-        return f"count={check['count']}; bad_lines={len(check['bad_lines'])}"
+        missing_inline = check.get("missing_inline", [])
+        return (
+            f"count={check['count']}; bad_lines={len(check['bad_lines'])}; "
+            f"missing_inline={missing_inline or 'none'}"
+        )
     if "sources" in check:
         return ", ".join(check["sources"]) or "no code sources"
     if "missing" in check and "unused_generated" in check:
@@ -922,7 +1250,12 @@ def _format_check_detail(check: dict) -> str:
     if "headings" in check:
         return f"missing={', '.join(check['missing']) or 'none'}"
     if "wide_tables" in check:
-        return f"wide_tables={len(check['wide_tables'])}"
+        return (
+            f"wide_tables={len(check['wide_tables'])}; "
+            f"uncaptioned={len(check.get('uncaptioned_tables', []))}"
+        )
+    if "issues" in check:
+        return f"issues={len(check['issues'])}"
     if "status" in check and {"weak", "missing"}.issubset(check):
         return (
             f"status={check['status']}; total={check['total']}; "
@@ -1029,9 +1362,14 @@ def prepare_paper_markdown(
 
     markdown = normalize_markdown_headings(markdown)
     markdown = normalize_chinese_references(markdown)
+    markdown, removed_unmatched_references = strip_unmatched_inline_references(markdown)
     markdown = normalize_keywords(markdown)
     markdown, removed_missing_images = remove_missing_image_references(markdown, work_dir)
     markdown, code_sources = append_code_appendix(markdown, work_dir)
+    markdown, normalised_extra_problem_labels = normalize_extra_problem_labels(
+        markdown, include_code=True
+    )
+    markdown = ensure_table_captions(markdown)
     outline = build_paper_outline(markdown)
     figure_usage = build_figure_usage(work_dir, markdown)
     claim_trace = build_claim_trace(markdown, code_sources)
@@ -1042,8 +1380,15 @@ def prepare_paper_markdown(
         export_profile=export_profile,
         claim_trace=claim_trace,
     )
+    fixups = {}
     if removed_missing_images:
-        report["fixups"] = {"removed_missing_images": removed_missing_images}
+        fixups["removed_missing_images"] = removed_missing_images
+    if removed_unmatched_references:
+        fixups["removed_unmatched_references"] = removed_unmatched_references
+    if normalised_extra_problem_labels:
+        fixups["normalised_extra_problem_labels"] = normalised_extra_problem_labels
+    if fixups:
+        report["fixups"] = fixups
 
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(markdown)

@@ -1,5 +1,15 @@
 # MathModelAgent 项目规则
 
+## Agent 接手顺序
+
+新 agent 接手时必须先读：
+
+1. `AGENT_MEMORY.md`
+2. `AGENTS.md`
+3. 按任务需要再读 `STARTUP.md`、`docs/md/CUMCM2026模板替换指南.md`、`docs/md/PDF模板导出说明.md`
+
+不要一上来全盘搜索仓库；不要扫描 `.venv/`、`frontend/node_modules/`、`backend/project/work_dir/` 的历史任务，除非用户明确要求。
+
 ## 核心原则
 
 - 默认在仓库根目录 `D:\workspace\MathModelAgent` 内工作。

@@ -25,6 +25,8 @@ from app.tools.pdf_exporter import export_markdown_to_pdf
 from app.tools.tex_project_exporter import export_markdown_to_latex_project
 from app.tools.candidate_exporter import write_candidate_manifest
 from app.tools.export_profiles import normalize_export_profile
+from app.tools.paper_postprocessor import prepare_paper_markdown
+from app.tools.pdf_visual_checker import check_pdf_visual
 from app.core.flows import Flows
 from app.core.llm.llm_factory import LLMFactory
 
@@ -453,6 +455,38 @@ class MathModelWorkFlow(WorkFlow):
         logger.info(user_output.get_res())
 
         user_output.save_result()
+        try:
+            preflight_report = prepare_paper_markdown(
+                self.work_dir,
+                "res.md",
+                export_profile=normalize_export_profile(export_profile).value,
+            )
+            if preflight_report.get("status") == "PASS":
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(content="论文排版预检通过，已规范参考文献并附加核心代码"),
+                )
+            else:
+                logger.warning(f"论文排版预检存在风险: {preflight_report}")
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(
+                        content=(
+                            "论文排版预检完成但存在风险 "
+                            f"({preflight_report.get('status')})，请查看 paper_preflight_report.json"
+                        ),
+                        type="warning",
+                    ),
+                )
+        except Exception as e:
+            logger.error(f"论文排版后处理失败: {e}")
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(
+                    content=f"论文排版后处理失败: {e}，将继续导出原始 Markdown",
+                    type="warning",
+                ),
+            )
 
         ################################################ generate PDF
         await redis_manager.publish_message(
@@ -493,6 +527,24 @@ class MathModelWorkFlow(WorkFlow):
                 ),
             )
 
+        pdf_visual_result = None
+        if pdf_result["success"]:
+            pdf_visual_result = check_pdf_visual(pdf_path, self.work_dir)
+            if pdf_visual_result.get("success"):
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(content="PDF 后验视觉检查通过"),
+                )
+            else:
+                logger.warning(f"PDF 后验视觉检查存在风险: {pdf_visual_result}")
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(
+                        content="PDF 后验视觉检查存在风险，请查看 pdf_visual_check.json",
+                        type="warning",
+                    ),
+                )
+
         export_status_path = os.path.join(self.work_dir, "export_status.json")
         try:
             with open(export_status_path, "w", encoding="utf-8") as f:
@@ -502,6 +554,7 @@ class MathModelWorkFlow(WorkFlow):
                             export_profile
                         ).value,
                         "pdf": pdf_result,
+                        "pdf_visual_check": pdf_visual_result,
                     },
                     f,
                     ensure_ascii=False,

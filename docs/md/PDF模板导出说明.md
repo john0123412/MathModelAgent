@@ -12,12 +12,13 @@
 > 正式提交前，建议在已装有官方字体的 Windows 本机重新导出一次 PDF，本机默认会
 > 优先使用真实系统字体。现在有两个本机导出工具：
 >
-> - **`backend/app/tools/export_cli.py`**（推荐）：支持 `default`/`cumcm2025`
->   两种排版配置、字体检测+清晰的缺失提示、`--mainfont` 等参数手动覆盖字体、
+> - **`backend/app/tools/export_cli.py`**（推荐）：支持 `default`/`cumcm2025`/
+>   `cumcm2026`/`huashubei` 等排版配置；高教社杯/国赛（CUMCM）建议使用
+>   `cumcm2026`，`huashubei` 仅用于华数杯。该工具支持字体检测+清晰的缺失提示、`--mainfont` 等参数手动覆盖字体、
 >   以及导出 LaTeX sidecar 项目供手动编译。用法见 `STARTUP.md` 的
 >   "Windows 本地 PDF 导出 / 手动编译"一节。
 > - **`backend/scripts/export_pdf_local.py`**（本文档下方描述的脚本）：更早期的
->   task_id 驱动脚本，只支持默认参考排版（不感知 `cumcm2025` 等 profile），字体
+>   task_id 驱动脚本，只支持默认参考排版（不感知 `cumcm2025`/`cumcm2026` 等 profile），字体
 >   名通过参数直接指定、没有自动检测/fallback，胜在读取 Docker 任务目录
 >   （`backend/project/work_dir/<task_id>/`）更方便，适合"直接补一份默认排版
 >   PDF"这种最简场景。

@@ -32,6 +32,37 @@ PDF_HEADING_STYLE = (
     r"subsubsection={format={\normalsize\heiti}}"
     r"}"
 )
+PDF_CODE_BLOCK_STYLE = (
+    r"header-includes=\usepackage{listings}"
+    r"\lstset{"
+    r"breaklines=true,"
+    r"breakatwhitespace=false,"
+    r"columns=fullflexible,"
+    r"keepspaces=true,"
+    r"showspaces=false,"
+    r"showstringspaces=false,"
+    r"showtabs=false,"
+    r"basicstyle=\ttfamily\small"
+    r"}"
+)
+
+HUASHUBEI_PAGE_MARGIN = "2.5cm"
+HUASHUBEI_GEOMETRY = (
+    f"geometry:left={HUASHUBEI_PAGE_MARGIN},right={HUASHUBEI_PAGE_MARGIN},"
+    f"top={HUASHUBEI_PAGE_MARGIN},bottom={HUASHUBEI_PAGE_MARGIN}"
+)
+HUASHUBEI_PDF_HEADING_STYLE = (
+    r"header-includes=\usepackage{titlesec}"
+    r"\titleformat{\section}"
+    r"{\centering\fontsize{14pt}{16.8pt}\heiti\bfseries}"
+    r"{\chinese{section}、}{1em}{}"
+    r"\titleformat{\subsection}"
+    r"{\fontsize{12pt}{14.4pt}\heiti\bfseries}"
+    r"{\arabic{section}.\arabic{subsection}}{1em}{}"
+    r"\titleformat{\subsubsection}"
+    r"{\fontsize{12pt}{14.4pt}\heiti\bfseries}"
+    r"{\arabic{section}.\arabic{subsection}.\arabic{subsubsection}}{1em}{}"
+)
 
 
 DEFAULT_PROFILE = ExportProfileConfig(
@@ -47,6 +78,7 @@ DEFAULT_PROFILE = ExportProfileConfig(
         "mainfont=Times New Roman",
         "pagestyle=plain",
         PDF_HEADING_STYLE,
+        PDF_CODE_BLOCK_STYLE,
         "geometry:left=3.17cm,right=3.17cm,top=2.6cm,bottom=2.6cm",
         "fontsize=12pt",
     ],
@@ -70,10 +102,11 @@ CUMCM2025_DOCX_REFERENCE = os.path.join(
 
 CUMCM2025_PROFILE = ExportProfileConfig(
     key=ExportProfile.CUMCM2025,
-    label="CUMCM 2025 模板",
+    label="高教社杯/CUMCM 2025 模板",
     description=(
-        "参考 2025 年 LaTeX 模板和 format2025 要求，额外生成 "
-        "gmcmthesis LaTeX sidecar，DOCX 导出套用 format2025 页面/字体样式。"
+        "参考高教社杯全国大学生数学建模竞赛（CUMCM）2025 年 LaTeX 模板和 "
+        "format2025 要求，额外生成 gmcmthesis LaTeX sidecar，DOCX 导出套用 "
+        "format2025 页面/字体样式。"
     ),
     pdf_variables=[
         "documentclass=ctexart",
@@ -84,6 +117,7 @@ CUMCM2025_PROFILE = ExportProfileConfig(
         "mainfont=Times New Roman",
         "pagestyle=plain",
         PDF_HEADING_STYLE,
+        PDF_CODE_BLOCK_STYLE,
         "geometry:left=3.17cm,right=3.17cm,top=3cm,bottom=2.5cm",
         "fontsize=12pt",
     ],
@@ -93,10 +127,63 @@ CUMCM2025_PROFILE = ExportProfileConfig(
     docx_reference_doc=CUMCM2025_DOCX_REFERENCE,
 )
 
+CUMCM2026_PROFILE = ExportProfileConfig(
+    key=ExportProfile.CUMCM2026,
+    label="高教社杯/CUMCM 2026 模板",
+    description=(
+        "对齐高教社杯全国大学生数学建模竞赛（CUMCM）论文格式规范（2026 年修订稿）："
+        "电子版从摘要页开始，不生成目录；正文页边距满足至少 2.5cm。"
+    ),
+    pdf_variables=[
+        "documentclass=ctexart",
+        "classoption=scheme=chinese",
+        "papersize=a4",
+        "CJKmainfont=SimSun",
+        "CJKsansfont=SimHei",
+        "mainfont=Times New Roman",
+        "pagestyle=plain",
+        PDF_HEADING_STYLE,
+        PDF_CODE_BLOCK_STYLE,
+        "geometry:left=3.17cm,right=3.17cm,top=3cm,bottom=2.5cm",
+        "fontsize=12pt",
+    ],
+    pdf_extra_args=[],
+    latex_template_dir=CUMCM2025_TEMPLATE_DIR,
+    latex_template_key="zh/cumcm2026-gmcmthesis",
+    docx_reference_doc=CUMCM2025_DOCX_REFERENCE,
+)
+
+HUASHUBEI_PROFILE = ExportProfileConfig(
+    key=ExportProfile.HUASHUBEI,
+    label="华数杯模板",
+    description=(
+        "按现有 Huashubei 模板做版式参数级接入：A4、12pt、2.5cm 页边距、"
+        "1.6 倍行距和 14pt 居中一级标题；官方规范发布后需复核。"
+    ),
+    pdf_variables=[
+        "documentclass=ctexart",
+        "classoption=scheme=chinese",
+        "papersize=a4",
+        "CJKmainfont=SimSun",
+        "CJKsansfont=SimHei",
+        "mainfont=Times New Roman",
+        "pagestyle=plain",
+        HUASHUBEI_PDF_HEADING_STYLE,
+        PDF_CODE_BLOCK_STYLE,
+        HUASHUBEI_GEOMETRY,
+        "fontsize=12pt",
+        "linestretch=1.6",
+    ],
+    pdf_extra_args=[],
+    latex_template_key="zh/huashubei-latex",
+)
+
 
 _PROFILES = {
     ExportProfile.DEFAULT: DEFAULT_PROFILE,
     ExportProfile.CUMCM2025: CUMCM2025_PROFILE,
+    ExportProfile.CUMCM2026: CUMCM2026_PROFILE,
+    ExportProfile.HUASHUBEI: HUASHUBEI_PROFILE,
 }
 
 

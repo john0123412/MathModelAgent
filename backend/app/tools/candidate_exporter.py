@@ -58,14 +58,42 @@ def _scan_figures(work_dir: str) -> list[str]:
     return sorted(figures)
 
 
+def _load_claims(work_dir: str) -> list[dict]:
+    claim_trace_path = os.path.join(work_dir, "claim_trace.json")
+    if not os.path.exists(claim_trace_path):
+        return []
+    try:
+        with open(claim_trace_path, encoding="utf-8") as f:
+            claim_trace = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning(f"claim_trace.json 读取失败，manifest claims 留空: {exc}")
+        return []
+    claims = claim_trace.get("claims", [])
+    if not isinstance(claims, list):
+        return []
+    return [
+        {
+            "claim": item.get("claim", ""),
+            "paper_section": item.get("paper_section", ""),
+            "evidence_type": item.get("evidence_type", ""),
+            "evidence_id_file": item.get("evidence_id_file", []),
+            "strength": item.get("strength", ""),
+            "paper_wording_check": item.get("paper_wording_check", ""),
+        }
+        for item in claims
+        if isinstance(item, dict) and item.get("claim")
+    ]
+
+
 def write_candidate_manifest(work_dir: str, task_id: str) -> str:
     """生成候选方案导出协议文件 candidate_manifest.json。
 
     扫描 work_dir 下已产出的文件（res.md/res.json/res.docx/res.pdf/notebook.ipynb/
-    export_status.json/图片），不存在的文件字段为 None，图片列表为空数组。
-    claims 字段保持留空 —— 本文件只是外部候选草稿的清单，最终 claims（可验证结论）
-    由下游验收仓库（math-modeling-skills）解析 res.md/notebook 等产物后生成和校验，
-    本函数不伪造内容。
+    export_status.json/paper_preflight_report.json/paper_preflight_report.md/
+    paper_outline.json/figure_usage.json/claim_trace.json/claim_trace.md/
+    pdf_visual_check.json/图片），不存在的文件字段为 None，图片列表为空数组。
+    claims 字段来自 claim_trace.json，不存在或不可读时保持空数组；本函数只记录
+    已生成的可追踪结论，不自行从正文猜造额外内容。
 
     Args:
         work_dir: 任务工作目录路径。
@@ -88,12 +116,23 @@ def write_candidate_manifest(work_dir: str, task_id: str) -> str:
             "modeler_plan_json": _existing_or_none(work_dir, "modeler_plan.json"),
             "notebook": _existing_or_none(work_dir, "notebook.ipynb"),
             "export_status": _existing_or_none(work_dir, "export_status.json"),
+            "paper_preflight_report": _existing_or_none(
+                work_dir, "paper_preflight_report.json"
+            ),
+            "paper_preflight_report_md": _existing_or_none(
+                work_dir, "paper_preflight_report.md"
+            ),
+            "paper_outline": _existing_or_none(work_dir, "paper_outline.json"),
+            "figure_usage": _existing_or_none(work_dir, "figure_usage.json"),
+            "claim_trace": _existing_or_none(work_dir, "claim_trace.json"),
+            "claim_trace_md": _existing_or_none(work_dir, "claim_trace.md"),
+            "pdf_visual_check": _existing_or_none(work_dir, "pdf_visual_check.json"),
             "latex_main": _existing_or_none(work_dir, "latex_project/main.tex"),
             "latex_project": _existing_or_none(work_dir, "latex_project"),
             "tex_export_status": _existing_or_none(work_dir, "tex_export_status.json"),
             "figures": _scan_figures(work_dir),
         },
-        "claims": [],
+        "claims": _load_claims(work_dir),
         "known_risks": [
             "External candidate output must be revalidated before final submission.",
             "LaTeX project is a candidate sidecar export and must be verified before final submission.",

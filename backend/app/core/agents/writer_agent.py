@@ -1,6 +1,7 @@
 """写作手 Agent 模块，负责基于建模结果撰写学术论文。"""
 
 import asyncio
+import re
 from typing import Callable
 from app.core.agents.agent import Agent
 from app.core.llm.llm import LLM
@@ -19,6 +20,44 @@ from app.schemas.A2A import WriterResponse
 # TODO: 并行 parallel
 # TODO: 获取当前文件下的文件
 # TODO: 引用cites tool
+
+PSEUDO_SEARCH_TOOL_RE = re.compile(
+    r"<tool_call>\s*<function=search_papers>(?P<body>.*?)</function>\s*</tool_call>",
+    re.DOTALL,
+)
+PSEUDO_TOOL_PARAM_RE = re.compile(
+    r"<parameter=(?P<name>[a-zA-Z_][a-zA-Z0-9_]*)>(?P<value>.*?)</parameter>",
+    re.DOTALL,
+)
+
+
+def _has_pseudo_tool_call(content: str) -> bool:
+    return bool(PSEUDO_SEARCH_TOOL_RE.search(content or ""))
+
+
+def _parse_pseudo_search_tool_call(content: str) -> dict | None:
+    """Parse XML-like tool text emitted by some OpenAI-compatible models."""
+    match = PSEUDO_SEARCH_TOOL_RE.search(content or "")
+    if not match:
+        return None
+
+    params: dict = {}
+    for param in PSEUDO_TOOL_PARAM_RE.finditer(match.group("body")):
+        name = param.group("name")
+        value = param.group("value").strip()
+        if name in {"limit", "year_from", "year_to", "min_citations"}:
+            params[name] = int(value) if value and value.lower() != "none" else None
+        elif name == "include_web":
+            lowered = value.lower()
+            params[name] = None if lowered == "none" else lowered == "true"
+        elif name == "source_types":
+            try:
+                params[name] = json.loads(value)
+            except json.JSONDecodeError:
+                params[name] = [value] if value else None
+        else:
+            params[name] = value
+    return params if params.get("query") else None
 
 
 class WriterAgent(Agent):
@@ -180,6 +219,73 @@ class WriterAgent(Agent):
             response_content = next_response.content or ""
         else:
             response_content = response.content or ""
+            pseudo_arguments = _parse_pseudo_search_tool_call(response_content)
+            if pseudo_arguments is not None and self.scholar is not None:
+                logger.info("检测到文本形式 search_papers 伪工具调用，执行兼容检索")
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(content="写作手执行文本形式 search_papers 兼容检索"),
+                )
+                query = pseudo_arguments.get("query", "")
+                try:
+                    papers = await self.scholar.search_papers(
+                        query=query,
+                        limit=pseudo_arguments.get("limit", 8),
+                        year_from=pseudo_arguments.get("year_from"),
+                        year_to=pseudo_arguments.get("year_to"),
+                        min_citations=pseudo_arguments.get("min_citations"),
+                        source_types=pseudo_arguments.get("source_types"),
+                        include_web=pseudo_arguments.get("include_web"),
+                    )
+                    papers_str = self.scholar.papers_to_str(papers)
+                except Exception as e:
+                    logger.error(f"文本形式 search_papers 兼容检索失败: {e}")
+                    papers_str = f"文献检索失败: {e}"
+
+                await self.append_chat_history(
+                    {"role": "assistant", "content": response_content}
+                )
+                await self.append_chat_history(
+                    {
+                        "role": "user",
+                        "content": (
+                            "文献检索结果如下，请基于这些结果直接输出本节论文正文。"
+                            "不要输出工具调用标记。若使用文献，必须写成 "
+                            "{[^1] 完整引用信息} 格式：\n\n"
+                            f"{papers_str}"
+                        ),
+                    }
+                )
+                next_response = await self._chat(
+                    history=self.chat_history,
+                    tools=tools,
+                    tool_choice="auto",
+                    agent_name=self.__class__.__name__,
+                    sub_title=sub_title,
+                )
+                response_content = next_response.content or ""
+                if _has_pseudo_tool_call(response_content):
+                    await self.append_chat_history(
+                        {"role": "assistant", "content": response_content}
+                    )
+                    await self.append_chat_history(
+                        {
+                            "role": "user",
+                            "content": (
+                                "上一次输出仍然是工具调用标记。现在禁止调用任何工具，"
+                                "也不要输出 <tool_call>。请直接按照原写作任务输出完整论文正文；"
+                                "如果是模型章节，必须包含“# 五、模型的建立与求解”或对应的 5.x 小节标题。"
+                            ),
+                        }
+                    )
+                    final_response = await self._chat(
+                        history=self.chat_history,
+                        tools=[],
+                        tool_choice=None,
+                        agent_name=self.__class__.__name__,
+                        sub_title=sub_title,
+                    )
+                    response_content = final_response.content or ""
         self.chat_history.append({"role": "assistant", "content": response_content, "reasoning_content": response.reasoning_content} if response.reasoning_content else {"role": "assistant", "content": response_content})
         logger.info(f"{self.__class__.__name__}:完成:执行对话")
         return WriterResponse(response_content=response_content, footnotes=footnotes)

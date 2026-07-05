@@ -141,27 +141,34 @@ pnpm run dev
 
 **可选值**：
 - `default`（默认）：保持原有 Markdown/DOCX/PDF/LaTeX sidecar 导出行为
-- `cumcm2025`：套用 2025 年国赛（CUMCM）格式规范
+- `cumcm2025`：套用 2025 年高教社杯/国赛（CUMCM）格式规范
+- `cumcm2026`：套用 2026 年高教社杯/国赛（CUMCM）格式修订稿；PDF 不生成目录，也不启用 pandoc 自动章节编号，避免与 Markdown 模板中的 `一、`、`1.1` 手写编号叠加
+- `huashubei`：华数杯模板，仅用于华数杯任务；参加高教社杯/国赛时请使用 `cumcm2026`
 
-**如何选择**：`POST /modeling` 表单新增 `export_profile` 字段（`Form(ExportProfile.DEFAULT)`），例如：
+**如何选择**：前端提交页已经暴露“排版”选择，默认使用 `cumcm2026`；也可以直接调用 `POST /modeling` 表单字段 `export_profile`（`Form(ExportProfile.DEFAULT)`），例如：
 
 ```powershell
 curl.exe -X POST http://127.0.0.1:8000/modeling `
   -F "ques_all=..." `
   -F "comp_template=CHINA" `
   -F "format_output=Markdown" `
-  -F "export_profile=cumcm2025"
+  -F "export_profile=cumcm2026"
 ```
 
-> 前端目前没有暴露 `export_profile` 的选择控件（`UserStepper.vue` 提交时未传该字段，走默认值）；`frontend/src/apis/submitModelingApi.ts` 的 `submitModelingTask()` 已经支持传入 `export_profile`，如需从 UI 选择，需要自行在提交表单里加一个选项并透传。当前可用方式是直接调用 `/modeling` 接口传参，或修改前端代码后再选择。
+> 高教社杯/国赛任务应保持 `cumcm2026`；`huashubei` 仅保留为华数杯兼容 profile，不作为本次赛事默认选项。
 
 **`cumcm2025` 相对 `default` 的差异**：
 1. **PDF**：在默认排版变量基础上追加 `--toc`（生成目录）、`--number-sections`（章节自动编号），页边距调整为 `top=3cm,bottom=2.5cm`（默认为 `top=2.6cm,bottom=2.6cm`）
 2. **LaTeX sidecar**：使用 `gmcmthesis` 模板（`zh/cumcm2025-gmcmthesis`）而非默认的 `ctexart`，并复制模板资源（`gmcmthesis.cls`、封面图 `figures/logo2025.png`、`figures/title2025.pdf`）到生成的 `latex_project/` 目录
 3. **DOCX**：套用 `format2025_reference.docx` 作为 pandoc `--reference-doc`，页面样式（页边距 2.5cm、正文字体 Times New Roman / 宋体 10.5pt）来自 2025 年 CUMCM 官方论文格式规范（`format2025.doc`，用 LibreOffice 转换为 `.docx` 后仅取其 Word 样式，不含原文内容）
 
+**`cumcm2026` 相对 `cumcm2025` 的差异**：
+1. **PDF**：不生成目录，也不使用 `--number-sections`。当前 Markdown 模板已经带有 `一、`、`1.1` 等手写编号，关闭 pandoc 自动编号可以避免导出后出现 `2 一、问题重述`、`2.1 1.1 问题背景` 之类的重复编号。
+2. **LaTeX sidecar**：沿用 gmcmthesis 资源目录，但模板键为 `zh/cumcm2026-gmcmthesis`，电子版从摘要页开始。
+
+> 当前若目标赛事是高教社杯全国大学生数学建模竞赛，应优先使用 `export_profile=cumcm2026`；不要使用 `huashubei`，后者是华数杯 profile。
+
 **已知限制**：
-- 前端暂无 UI 选择入口（见上）
 - LaTeX sidecar 编译产物（`latex_project/`）属于候选导出，提交前仍需人工核对（`candidate_manifest.json` 中会标注 `known_risks`）
 - **字体**：PDF/LaTeX sidecar 优先使用官方格式规定的 Times New Roman/SimSun 等正式字体；精简版 Docker 镜像默认不含这些 Windows/Office 专有字体，会在编译期自动检测（`fc-match` / fontspec `\IfFontExistsTF`）并回退到免费等效字体，不影响能否编译成功，但正式提交前建议人工核对排版观感是否符合要求。两类字体的 fallback 途径不同：
   - **英文/Latin 字体**（Times New Roman → Liberation Serif、Courier New → Liberation Mono、Arial → Liberation Sans）：可通过构建时开启 `INSTALL_MS_FONTS=true` 装真正的 Microsoft Core Fonts（`ttf-mscorefonts-installer`），从而不必 fallback：
@@ -207,7 +214,7 @@ uv run python -m app.tools.export_cli pdf --input path\to\res.md --output path\t
 ```
 
 - `--local` 是关键参数：不加它会走跟 Docker 一样的策略（也能跑，但检测到 Times New Roman 缺失时不会给你打印本机安装状态提示，只写日志）；加了以后会明确报告每个字体是否命中本机已安装的版本，并且——只要你没有用下面的 `--mainfont` 等参数手动指定——官方字体检测到确实已经装了才会使用，检测不到就按开源字体回退并打印原因，不会不声不响换成别的字体。
-- `--profile` 可选 `default` / `cumcm2025`，与 Docker 端行为一致。
+- `--profile` 可选 `default` / `cumcm2025` / `cumcm2026` / `huashubei`，与 Docker 端行为一致。高教社杯/国赛建议用 `cumcm2026`。
 
 仓库内提供了一个最小样例，可直接用来检查 Windows 本地导出链路：
 
@@ -343,22 +350,23 @@ B 需要 1 小时机器时间、2 小时人工时间，利润 30 元；
    - 后端日志显示收到用户输入
    - Agent 行为是否有变化
 
-### 测试 C：cumcm2025 导出模板
+### 测试 C：cumcm2026 高教社杯/国赛导出模板
 
-前端暂无选择入口，用 curl 直接提交（参考"导出模板选项"一节）：
+前端排版选项默认就是 `cumcm2026`；也可以用 curl 直接提交（参考"导出模板选项"一节）：
 
 ```powershell
 curl.exe -X POST http://127.0.0.1:8000/modeling `
   -F "ques_all=某工厂生产 A、B 两种产品……（同测试 0 案例）" `
   -F "comp_template=CHINA" `
   -F "format_output=Markdown" `
-  -F "export_profile=cumcm2025"
+  -F "export_profile=cumcm2026"
 ```
 
 验收标准：
 - 任务正常完成，`res.md`/`res.docx`/`res.pdf`（如已装 pandoc）正常生成
-- `res.docx` 页边距/字体应与 `default` profile 生成的版本不同（可解压 `.docx` 查看 `word/document.xml` 中的 `<w:pgMar>`，或直接用 Word/WPS 打开对比页边距）
-- 如果本机装了 pandoc + latexmk/xelatex，`latex_project/main.tex` 应包含 `\documentclass[bwprint]{gmcmthesis}`（而不是 `ctexart`），且 `latex_project/gmcmthesis.cls`、`latex_project/figures/logo2025.png` 等模板资源已被复制
+- `export_status.json` 中 `export_profile` 应为 `cumcm2026`，PDF 命令不应包含 `--toc` 或 `--number-sections`
+- `paper_preflight_report.json` 应包含 `status`/`conclusion`、`export_profile`、`claim_trace` 等检查项
+- 如果本机装了 pandoc + latexmk/xelatex，`latex_project/main.tex` 应包含 `CUMCM 2026 LaTeX sidecar`，且 `latex_project/gmcmthesis.cls`、`latex_project/figures/logo2025.png` 等模板资源已被复制
 - 换回 `export_profile=default`（或不传该字段）重新提交一次，确认输出与之前完全一致（回归验证）
 
 ---

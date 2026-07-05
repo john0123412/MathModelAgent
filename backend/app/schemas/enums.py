@@ -19,6 +19,8 @@ class ExportProfile(str, Enum):
     """导出排版配置。"""
     DEFAULT = "default"
     CUMCM2025 = "cumcm2025"
+    CUMCM2026 = "cumcm2026"
+    HUASHUBEI = "huashubei"
 
 
 class AgentType(str, Enum):

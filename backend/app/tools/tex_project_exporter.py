@@ -14,7 +14,7 @@ import subprocess
 import json
 from app.utils.log_util import logger
 from app.schemas.enums import ExportProfile
-from app.tools.export_profiles import get_export_profile_config
+from app.tools.export_profiles import HUASHUBEI_PAGE_MARGIN, get_export_profile_config
 
 _MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 % =============================================================================
@@ -90,6 +90,92 @@ _CUMCM2025_MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 \input{sections/imported_body}
 
 \end{document}
+"""
+
+_CUMCM2026_MAIN_TEX_TEMPLATE = _CUMCM2025_MAIN_TEX_TEMPLATE.replace(
+    "CUMCM 2025 LaTeX sidecar",
+    "CUMCM 2026 LaTeX sidecar",
+).replace(
+    "摘要/关键词位置、目录、附录和参考文献。",
+    "摘要/关键词位置、附录和参考文献；2026 修订稿电子版不生成目录。",
+).replace(
+    "\\maketitle\n\\tableofcontents\n\n\\input{sections/imported_body}",
+    "\\maketitle\n\n\\input{sections/imported_body}",
+)
+
+_HUASHUBEI_MAIN_TEX_TEMPLATE = rf"""% !TEX program = xelatex
+% =============================================================================
+%  华数杯 LaTeX sidecar（由 MathModelAgent 自动生成）
+%  当前阶段只接入版式参数，并继续使用 sections/imported_body.tex 单正文输入。
+%  不直接套用 skills/5writing/templates/zh/huashubei-latex/main.tex 的结构化
+%  sections/1_restatement.tex 等输入，避免破坏现有 Harness 导出链路。
+% =============================================================================
+\documentclass[12pt,a4paper]{{ctexart}}
+
+\usepackage[a4paper, top={HUASHUBEI_PAGE_MARGIN}, bottom={HUASHUBEI_PAGE_MARGIN}, left={HUASHUBEI_PAGE_MARGIN}, right={HUASHUBEI_PAGE_MARGIN}]{{geometry}}
+\usepackage{{amsmath}}
+\usepackage{{amssymb}}
+\usepackage{{graphicx}}
+\usepackage{{float}}
+\usepackage{{booktabs}}
+\usepackage{{array}}
+\usepackage{{longtable}}
+\usepackage{{xcolor}}
+\usepackage{{listings}}
+\usepackage{{titlesec}}
+\usepackage{{enumitem}}
+\usepackage{{hyperref}}
+
+\IfFontExistsTF{{Times New Roman}}{{\setmainfont{{Times New Roman}}}}{{}}
+\linespread{{1.6}}
+\setlength{{\parindent}}{{2em}}
+\pagestyle{{plain}}
+
+\ctexset{{
+  section/number       = \chinese{{section}},
+  subsection/number    = \arabic{{section}}.\arabic{{subsection}},
+  subsubsection/number = \arabic{{section}}.\arabic{{subsection}}.\arabic{{subsubsection}},
+}}
+
+\titleformat{{\section}}
+  {{\centering\fontsize{{14pt}}{{16.8pt}}\heiti\bfseries}}
+  {{\chinese{{section}}、}}{{1em}}{{}}
+\titleformat{{\subsection}}
+  {{\fontsize{{12pt}}{{14.4pt}}\heiti\bfseries}}
+  {{\arabic{{section}}.\arabic{{subsection}}}}{{1em}}{{}}
+\titleformat{{\subsubsection}}
+  {{\fontsize{{12pt}}{{14.4pt}}\heiti\bfseries}}
+  {{\arabic{{section}}.\arabic{{subsection}}.\arabic{{subsubsection}}}}{{1em}}{{}}
+\titlespacing{{\section}}       {{0pt}}{{1.52em}}{{1.15em}}
+\titlespacing{{\subsection}}    {{0pt}}{{1.18em}}{{1.18em}}
+\titlespacing{{\subsubsection}} {{0pt}}{{0.9em}}{{0.75em}}
+
+\setlist[enumerate]{{label=\arabic*、, leftmargin=2em}}
+\lstset{{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{{black!3}},
+  frame=single,
+  framesep=6pt,
+  rulecolor=\color{{black!30}},
+  framerule=0.8pt,
+  breaklines=true,
+  showstringspaces=false,
+  columns=fullflexible,
+  keepspaces=true,
+}}
+
+% pandoc 对无标题的 longtable 会输出 \def\LTcaptype{{none}}，这里兜底定义一次。
+\makeatletter
+\@ifundefined{{c@none}}{{\newcounter{{none}}}}{{}}
+\makeatother
+
+\graphicspath{{{{./}}{{../}}{{sections/}}}}
+
+\begin{{document}}
+
+\input{{sections/imported_body}}
+
+\end{{document}}
 """
 
 
@@ -253,6 +339,10 @@ def export_markdown_to_latex_project(
         with open(main_tex_path, "w", encoding="utf-8") as f:
             if profile_config.key == ExportProfile.CUMCM2025:
                 f.write(_CUMCM2025_MAIN_TEX_TEMPLATE)
+            elif profile_config.key == ExportProfile.CUMCM2026:
+                f.write(_CUMCM2026_MAIN_TEX_TEMPLATE)
+            elif profile_config.key == ExportProfile.HUASHUBEI:
+                f.write(_HUASHUBEI_MAIN_TEX_TEMPLATE)
             else:
                 f.write(_MAIN_TEX_TEMPLATE)
     except Exception as e:

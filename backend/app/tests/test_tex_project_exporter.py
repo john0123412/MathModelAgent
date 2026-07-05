@@ -157,6 +157,41 @@ class TestTexProjectExporterCumcm2025Profile(unittest.TestCase):
             # caption 宏包冲突导致的 "No counter 'none' defined" 编译错误。
             self.assertIn(r"\newcounter{none}", main_tex_content)
 
+    def test_huashubei_profile_uses_single_body_compatible_template(self):
+        """huashubei sidecar 先适配 imported_body.tex，不直接套结构化 sections 模板。"""
+        real_which = shutil.which
+
+        def which_side_effect(cmd, *args, **kwargs):
+            if cmd == "pandoc":
+                return real_which(cmd)
+            return None
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            md_path = os.path.join(work_dir, "res.md")
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write("# 标题\n\n这是正文。")
+
+            with mock.patch(
+                "app.tools.tex_project_exporter.shutil.which",
+                side_effect=which_side_effect,
+            ):
+                result = export_markdown_to_latex_project(
+                    md_path, work_dir, export_profile=ExportProfile.HUASHUBEI
+                )
+
+            self.assertTrue(result["success"], msg=result)
+            self.assertEqual(result["export_profile"], "huashubei")
+            self.assertEqual(result["template_key"], "zh/huashubei-latex")
+
+            main_tex_path = os.path.join(work_dir, "latex_project", "main.tex")
+            with open(main_tex_path, "r", encoding="utf-8") as f:
+                main_tex_content = f.read()
+            self.assertIn("华数杯", main_tex_content)
+            self.assertIn(r"\input{sections/imported_body}", main_tex_content)
+            self.assertNotIn(r"\input{sections/1_restatement}", main_tex_content)
+            self.assertIn("top=2.5cm, bottom=2.5cm, left=2.5cm, right=2.5cm", main_tex_content)
+            self.assertIn(r"\fontsize{14pt}{16.8pt}\heiti\bfseries", main_tex_content)
+
     def test_default_profile_still_uses_ctexart_and_no_template_assets(self):
         """确认新增 cumcm2025 分支没有改变默认 profile 的既有行为。"""
         real_which = shutil.which

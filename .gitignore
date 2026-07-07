@@ -7,6 +7,7 @@
 .idea/
 settings.local.json
 dump.rdb
+.env
 backend/.env.dev
 .trae/
 .agent-work/

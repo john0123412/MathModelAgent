@@ -53,6 +53,13 @@ Docker 生成 res.md/res.docx（+ 自动化预览用的 res.pdf） ->
 Windows 本机工具读取 res.md -> Pandoc + XeLaTeX 用真实系统字体重新生成 res.pdf
 ```
 
+标准化依据：官方 2026 论文格式规范页面
+`https://www.mcm.edu.cn/html_cn/node/4cd596519c9eb9fbd866398f6df0caa3.html`
+要求电子版论文为单独 PDF/Word 文件（建议 PDF、≤20MB），第一页为摘要页，
+不放承诺书和编号专用页；支撑材料另行提交，至少包含可运行源程序、数据资料和较大篇幅
+中间结果图表。项目据此把正式 PDF/DOCX 附录控制为“支撑材料清单 + 核心代码摘录”，
+完整 `notebook.ipynb`/脚本保留在支撑材料中，并通过 manifest/audit 追踪。
+
 ## 高教社杯 `cumcm2026` 验收要点
 
 当前官方可见附件是 2026 论文格式规范 PDF；项目内没有官方 2026 DOCX/LaTeX
@@ -133,6 +140,10 @@ PDF 编译失败或代码越界。
   替换为中文表达，避免中文竞赛论文中出现突兀英文衔接词；代码块内容不处理。
 - 后处理会清理最终稿和附录代码中可见的提交痕迹词，例如 `用户`、`推断`、
   `估算`、`待验证`，改为 `题目`、`核定`、`测算`、`需核验` 等正式表达。
+- 后处理会重建附录，附录B只保留核心代码摘录，删除批量
+  `print(...)`/`printf`/`console.log` 等控制台输出语句；完整源程序仍保留在
+  附录A列出的支撑材料中。预检新增
+  `checks.appendix_console_noise`，防止控制台报告式源码污染正式 PDF。
 - 后处理会缩短代码附录中纯装饰性的超长分隔线，避免源码页的横向长文本触发
   `pdf_visual_check.json -> checks.content_margin` 失败。
 - 后处理会把独占一行的加粗短标签（如 `**假设1：...**`）规范为 Markdown 小标题，
@@ -250,6 +261,10 @@ D:\texlive\2026\bin\windows\pdfinfo.exe backend\project\work_dir\<task_id>\res.p
 - `submission_audit_report.json` 默认应为 `PASS` 或 `WARN`；若正式提交要求官方字体，
   运行 `python -m app.tools.submission_audit --work-dir <task_dir> --require-official-fonts`
   后应为 `PASS`。若为 `FAIL`，先按报告里的 remediation 挂载正式字体或本机重导。
+- `paper_preflight_report.json -> checks.appendix_console_noise.passed` 应为 `true`。
+  若失败，先重跑 `prepare_paper_markdown` 重建附录，再重导 DOCX/PDF。
+- 可用 PyMuPDF 或其他 PDF 文本提取工具确认 `res.pdf` 中没有 `print(`、`printf`、
+  `console.log` 等控制台输出痕迹。
 - `tex_export_status.json` 中 `main_uses_structured_sections=true` 时，`latex_project/main.tex`
   应输入 `sections/00_*.tex`、`sections/01_*.tex` 等结构化章节。
 - `tex_export_status.json` 中 `copied_assets` 会列出复制到 `latex_project/` 和

@@ -103,7 +103,9 @@
 ## 附录和支撑材料
 
 - 是否列出支撑材料。
-- 是否包含完整可运行源码。
+- 支撑材料中是否包含完整可运行源码；论文附录B是否只保留核心代码摘录，避免把大量
+  控制台输出语句排进正式 PDF。
+- `paper_preflight_report.json -> checks.appendix_console_noise.passed` 是否为 `true`。
 - 是否避免泄露本机路径、API key、真实身份信息。
 - 论文正文/PDF 中是否没有承诺书、编号专用页、参赛队号、队员姓名、指导教师、学校名称等身份或封面字段。
 - 论文正文、图表题、附录代码可见文本中是否没有 `用户`、`推断`、`估算`、`待验证`
@@ -112,6 +114,7 @@
 - 源码是否和正文结果对应。
 - notebook 或脚本是否能说明主要图表来源。
 - 对确定性题，源码附录中可见标签是否没有继续宣称 Monte Carlo/随机模拟为正式分析。
+- PDF 文本中是否没有 `print(`、`printf`、`console.log`、`logger.debug` 等控制台输出痕迹。
 
 ## PDF 人工翻阅
 
@@ -136,6 +139,8 @@
 - `submission_audit_report.json` 已查看；正式提交前如启用
   `--require-official-fonts`，结果应为 `PASS`。
 - `pdf_visual_check.json` 中摘要首页、无目录、匿名电子稿身份字段、正文页数、文件大小和内容边距检查均通过。
+- `paper_preflight_report.json -> checks.appendix_console_noise.passed=true`，附录没有
+  批量控制台输出污染。
 - `export_status.json -> pdf.font_resolution` 中正式字体没有被 fallback 为
   Liberation/Noto/AR PL 等预览字体；若曾 fallback，已挂载宿主机正式字体或在
   Windows 本机重导并复核。

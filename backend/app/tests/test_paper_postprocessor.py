@@ -439,7 +439,7 @@ class TestAppendCodeAppendix(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work_dir:
             code_path = os.path.join(work_dir, "problem_1.py")
             with open(code_path, "w", encoding="utf-8") as f:
-                f.write("print('hello')\n")
+                f.write("x = 1\nprint('hello')\n")
             with open(os.path.join(work_dir, "result.csv"), "w", encoding="utf-8") as f:
                 f.write("x,y\n1,2\n")
             with open(os.path.join(work_dir, "figure.png"), "wb") as f:
@@ -459,7 +459,8 @@ class TestAppendCodeAppendix(unittest.TestCase):
         self.assertNotIn("test_save.png", updated)
         self.assertIn("## 附录B 源程序代码", updated)
         self.assertIn("### B.1 problem_1.py", updated)
-        self.assertIn("```python\nprint('hello')\n```", updated)
+        self.assertIn("```python\nx = 1\n```", updated)
+        self.assertNotIn("print('hello')", updated)
 
     def test_extracts_notebook_code_when_no_python_files_exist(self):
         with tempfile.TemporaryDirectory() as work_dir:
@@ -478,7 +479,8 @@ class TestAppendCodeAppendix(unittest.TestCase):
         self.assertIn("## 附录A 支撑材料文件列表", updated)
         self.assertIn("| notebook.ipynb | 源程序代码 |", updated)
         self.assertIn("# Cell 1", updated)
-        self.assertIn("x = 1\nprint(x)", updated)
+        self.assertIn("x = 1", updated)
+        self.assertNotIn("print(x)", updated)
 
     def test_code_appendix_fence_is_longer_than_embedded_backticks(self):
         with tempfile.TemporaryDirectory() as work_dir:
@@ -506,13 +508,45 @@ class TestAppendCodeAppendix(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work_dir:
             long_separator = "=" * 80
             with open(os.path.join(work_dir, "problem.py"), "w", encoding="utf-8") as f:
-                f.write(f"# {long_separator}\nprint('ok')\n")
+                f.write(f"# {long_separator}\nx = 1\nprint('ok')\n")
 
             updated, sources = append_code_appendix("正文。", work_dir)
 
         self.assertEqual(sources, ["problem.py"])
-        self.assertIn(f"# {'=' * 48}", updated)
+        self.assertIn("x = 1", updated)
+        self.assertNotIn("print('ok')", updated)
         self.assertNotIn(long_separator, updated)
+
+    def test_preflight_flags_print_heavy_appendix(self):
+        noisy_code = "\n".join(f"print({index})" for index in range(25))
+        markdown = (
+            "# 基于优化模型的生产方案研究\n\n"
+            "## 摘要\n\n"
+            "本文围绕生产优化问题建立线性规划模型，结合资源约束、利润目标和敏感性分析给出可复核的生产方案。"
+            "模型首先对机器时间和人工时间进行约束刻画，随后通过目标函数求解最大利润，并在结果分析中讨论资源变化对利润的影响。"
+            "结果表明，所给方案能够在约束范围内获得较高利润，同时机器时间增加会带来边际收益变化。\n\n"
+            "关键词：线性规划；生产优化；敏感性分析；资源约束\n\n"
+            "# 一、问题重述\n\n正文。\n\n"
+            "# 二、问题分析\n\n正文。\n\n"
+            "# 三、模型假设\n\n正文。\n\n"
+            "# 四、符号说明\n\n正文。\n\n"
+            "# 五、模型的建立与求解\n\n正文。\n\n"
+            "# 六、模型的分析与检验\n\n正文。\n\n"
+            "# 七、模型的评价、改进与推广\n\n正文。\n\n"
+            "## 参考文献\n\n[1] 文献。\n\n"
+            "# 附录\n\n"
+            "## 附录A 支撑材料文件列表\n\n本论文没有支撑材料。\n\n"
+            f"## 附录B 源程序代码\n\n```python\n{noisy_code}\n```\n"
+        )
+
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(),
+            markdown=markdown,
+            code_sources=["problem.py"],
+        )
+
+        self.assertEqual(report["status"], "FAIL")
+        self.assertFalse(report["checks"]["appendix_console_noise"]["passed"])
 
     def test_existing_fenced_code_separator_lines_are_shortened(self):
         markdown = "```python\n" + ("=" * 80) + "\nprint('ok')\n```\n"

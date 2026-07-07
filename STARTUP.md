@@ -204,6 +204,12 @@ DOCX/LaTeX 模板包。当前暂时复用 2025 DOCX reference 和 2025 `gmcmthes
 LaTeX 资源；2026 正式 DOCX/LaTeX 模板发布后，按
 `docs/md/CUMCM2026模板替换指南.md` 替换。
 
+官方 2026 论文格式规范页面：
+`https://www.mcm.edu.cn/html_cn/node/4cd596519c9eb9fbd866398f6df0caa3.html`。
+当前自动化流程按其中的电子版口径执行：参赛论文电子版是单独 PDF/Word 文件
+（建议 PDF，大小不超过 20MB），不要放承诺书和编号专用页，第一页必须为摘要页；
+支撑材料另行压缩提交，至少包含所有可运行源程序、数据资料和较大篇幅中间结果图表。
+
 **已知限制**：
 - `cumcm2026` 当前复用 2025 年 `gmcmthesis` 模板资源目录和 `format2025_reference.docx`
   的 Word 样式作为修订稿口径实现；2026 正式模板文件发布后，需要重新复核并替换
@@ -214,6 +220,13 @@ LaTeX 资源；2026 正式 DOCX/LaTeX 模板发布后，按
   还会阻断 `承诺书`、`编号专用页`、`参赛队号` 等身份/封面字段；不能替代人工排版
   验收。正式提交前仍需人工翻看摘要页、公式密集页、宽表、附录源码、参考文献和最后几页。
 - 主 PDF 导出显式关闭 pandoc raw TeX，避免源码中的 LaTeX 模板字符串泄漏成正文命令。正文应优先使用 Markdown 表格和标准 `$...$`、`\(...\)` 数学公式，不要依赖 `\begin{table}`、`\begin{align}` 等 raw LaTeX 环境。
+- 论文附录会自动重建：附录A列出支撑材料，附录B只保留核心建模/求解/作图代码摘录；
+  完整可运行 notebook/脚本保留在支撑材料中。这样既满足电子版论文单文件、20MB、
+  正文页数和可读性门禁，又能通过 `candidate_manifest.json` 与
+  `submission_audit_report.json` 追踪完整源程序。后处理会删除附录中的批量
+  `print(...)`/`printf`/`console.log` 控制台输出语句，并通过
+  `paper_preflight_report.json -> checks.appendix_console_noise` 阻断 print-heavy
+  正式 PDF。
 - `paper_preflight_report.json` 是规则/正则驱动的格式与证据链门禁，不证明模型、求解和论证一定正确；`PASS` 后仍需人工复核数学内容。
 - 对无外部数据集的确定性参数题，后处理会清理正文/支撑材料中的 Monte Carlo、蒙特卡洛、随机模拟等探索性随机模拟内容，将样本数据 EDA 用语规范为参数核验，并删除可能触发 Pandoc definition-list 误解析的孤立 `: ... DOI ...` 参考行。
 - **字体**：PDF/LaTeX sidecar 优先使用官方格式规定的 Times New Roman/SimSun 等正式字体；精简版 Docker 镜像默认不含这些 Windows/Office 专有字体，会在编译期自动检测（`fc-match` / fontspec `\IfFontExistsTF`）并回退到免费等效字体，不影响能否编译成功，但正式提交前建议人工核对排版观感是否符合要求。两类字体的 fallback 途径不同：
@@ -429,6 +442,31 @@ uv run python -m app.tools.export_cli pdf --input res.md --output res.pdf --prof
 | 定位 | 批量自动化预览，保证能编译 | 正式提交前用真实系统字体复核排版 |
 
 > **明确建议**：Docker 默认 fallback 生成的 `res.pdf`/`latex_project/main.pdf` 只用于自动化预览，不代表最终排版效果；正式提交前，建议用上面的 Windows 本地流程，在已安装 Times New Roman/SimSun/SimHei/KaiTi 等正式字体的机器上重新编译一次 PDF，并人工检查版式、页边距、字号是否符合官方格式规范。
+
+## 标准化最终交付流程
+
+对已完成任务推荐按以下顺序刷新最终交付物：
+
+```powershell
+cd D:\workspace\MathModelAgent
+docker compose up -d backend
+docker compose exec backend fc-match "SimSun"
+docker compose exec backend fc-match "Times New Roman"
+
+docker compose exec backend uv run python -c "from app.tools.paper_postprocessor import prepare_paper_markdown; from app.utils.common_utils import md_2_docx; report=prepare_paper_markdown('/app/project/work_dir/<task_id>', export_profile='cumcm2026', declared_problem_count=<题目正式问题数>); print(report['status']); md_2_docx('<task_id>', export_profile='cumcm2026')"
+
+docker compose exec backend uv run python -m app.tools.export_cli pdf --input project/work_dir/<task_id>/res.md --output project/work_dir/<task_id>/res.pdf --profile cumcm2026 --update-status
+
+docker compose exec backend uv run python -m app.tools.submission_audit --work-dir project/work_dir/<task_id> --require-official-fonts
+```
+
+验收要点：
+
+- `paper_preflight_report.json = PASS`，且 `checks.appendix_console_noise.passed=true`。
+- `pdf_visual_check.json = PASS`。
+- `submission_audit_report.json = PASS`（严格字体门禁）。
+- PDF 文本中不应出现 `print(`、`printf`、`console.log` 等批量控制台输出。
+- `candidate_manifest.json` 登记 `notebook.ipynb`、图片、数据文件等支撑材料。
 
 ### 自动提交审核门禁
 

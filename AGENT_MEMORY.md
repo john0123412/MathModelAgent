@@ -38,6 +38,13 @@
   用 `export_cli pdf` 手动/正式重导时加 `--update-status`，会同步刷新
   `export_status.json`、`pdf_visual_check.json`、`submission_audit_report.json`
   和已有的 manifest，避免审核读取旧字体记录。
+- CUMCM 官方 2026 论文格式规范强调电子版论文为单独 PDF/Word 文件（建议 PDF、
+  不超过 20MB），第一页必须是摘要页，不放承诺书和编号专用页；支撑材料单独压缩，
+  至少包含所有可运行源程序、数据资料和较大篇幅中间结果图表。项目标准流程据此调整为：
+  `res.pdf/res.docx` 论文附录只保留支撑材料清单和核心代码摘录，完整可运行
+  `notebook.ipynb`/脚本保留在支撑材料并由 manifest/audit 登记。后处理会重建旧附录，
+  删除批量 `print(...)`/`printf`/`console.log` 控制台输出语句，`paper_preflight_report`
+  新增 `appendix_console_noise` 门禁。
 - 当前最新真实烟雾任务的主链路曾达到：
   - `task_id = 20260706-161231-080acfb7`
   - `paper_preflight_report.json = PASS`
@@ -200,6 +207,9 @@
   5. `tex_export_status.json`
   6. `candidate_manifest.json`
   7. 必要时再看 `res.md`
+  8. 若 PDF 出现大量 `print(...)`/控制台输出，优先检查
+     `paper_preflight_report.json -> checks.appendix_console_noise`，再重新运行
+     `prepare_paper_markdown` 重建附录并重导 DOCX/PDF。
 - 如果 PDF 失败，优先看：
   `export_status.json -> pdf.stderr`
 - 如果 preflight FAIL，优先看：

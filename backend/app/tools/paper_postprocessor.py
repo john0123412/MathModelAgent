@@ -83,9 +83,19 @@ DETERMINISTIC_NO_SAMPLE_MARKERS = (
     "参数确定不变",
 )
 MAX_CODE_SEPARATOR_CHARS = 48
+MAX_APPENDIX_CODE_LINES = 240
+MAX_APPENDIX_CONSOLE_LINES = 20
 LONG_CODE_SEPARATOR_RE = re.compile(
     r"^(?P<indent>\s*)(?P<prefix>#|//|%|--)?(?P<gap>\s*)"
     r"(?P<char>[=\-_*])(?P=char){59,}\s*$"
+)
+APPENDIX_CONSOLE_LINE_RE = re.compile(
+    r"^\s*(?:print|printf|console\.log|logger\.(?:debug|info|warning|error))\s*\(",
+    re.IGNORECASE,
+)
+APPENDIX_NOISY_LINE_RE = re.compile(
+    r"^\s*(?:print|printf|console\.log|display|logger\.(?:debug|info|warning|error))\s*\(",
+    re.IGNORECASE,
 )
 
 REQUIRED_SECTION_KEYWORDS = {
@@ -899,13 +909,12 @@ def collect_support_materials(work_dir: str) -> list[SupportMaterial]:
 
 
 def append_code_appendix(markdown: str, work_dir: str) -> tuple[str, list[str]]:
-    """在论文末尾追加 CUMCM 附录，已存在规范附录时不重复追加。"""
-    if SUPPORT_MATERIAL_HEADING_RE.search(markdown) and CODE_APPENDIX_HEADING_RE.search(markdown):
-        sources = collect_code_sources(work_dir)
-        return markdown, [source.name for source in sources]
-
+    """Rebuild the CUMCM appendix with support list and concise code excerpts."""
     sources = collect_code_sources(work_dir)
     materials = collect_support_materials(work_dir)
+    appendix_match = APPENDIX_HEADING_RE.search(markdown)
+    if appendix_match:
+        markdown = markdown[: appendix_match.start()].rstrip()
 
     lines = [markdown.rstrip(), "", "# 附录", "", "## 附录A 支撑材料文件列表", ""]
     if materials:
@@ -918,14 +927,24 @@ def append_code_appendix(markdown: str, work_dir: str) -> tuple[str, list[str]]:
 
     lines.extend(["## 附录B 源程序代码", ""])
     if sources:
+        lines.extend(
+            [
+                "完整可运行源程序见附录A列出的支撑材料文件；为保持电子论文正文紧凑，"
+                "本附录仅列核心建模、求解与作图流程摘录，省略批量控制台输出语句。",
+                "",
+            ]
+        )
         for index, source in enumerate(sources, 1):
-            fence = _code_fence(source.code)
+            excerpt = _appendix_code_excerpt(source.code)
+            if not excerpt:
+                continue
+            fence = _code_fence(excerpt)
             lines.extend(
                 [
                     f"### B.{index} {source.name}",
                     "",
                     f"{fence}{source.language}",
-                    _listings_safe_code(source.code).rstrip(),
+                    _listings_safe_code(excerpt).rstrip(),
                     fence,
                     "",
                 ]
@@ -933,6 +952,47 @@ def append_code_appendix(markdown: str, work_dir: str) -> tuple[str, list[str]]:
     else:
         lines.extend(["本论文没有用到程序。", ""])
     return "\n".join(lines).rstrip() + "\n", [source.name for source in sources]
+
+
+def _appendix_code_excerpt(code: str) -> str:
+    """Return a concise paper-facing source excerpt.
+
+    The full runnable source remains in the support-material file list. The
+    PDF appendix keeps the key model/solve/plot workflow while removing
+    verbose console-report lines that otherwise dominate the competition paper.
+    """
+    cleaned: list[str] = []
+    previous_blank = False
+    for raw_line in code.splitlines():
+        line = raw_line.rstrip()
+        if APPENDIX_NOISY_LINE_RE.match(line):
+            continue
+        if LONG_CODE_SEPARATOR_RE.match(line):
+            continue
+        if not line.strip():
+            if previous_blank:
+                continue
+            previous_blank = True
+            cleaned.append("")
+            continue
+        previous_blank = False
+        cleaned.append(line)
+
+    while cleaned and not cleaned[0].strip():
+        cleaned.pop(0)
+    while cleaned and not cleaned[-1].strip():
+        cleaned.pop()
+
+    truncated = len(cleaned) > MAX_APPENDIX_CODE_LINES
+    if truncated:
+        cleaned = cleaned[:MAX_APPENDIX_CODE_LINES]
+        cleaned.extend(
+            [
+                "",
+                "# 后续完整程序见附录A列出的支撑材料文件。",
+            ]
+        )
+    return "\n".join(cleaned)
 
 
 def _code_fence(code: str) -> str:
@@ -1133,6 +1193,28 @@ def _check_submission_anonymity(markdown: str) -> dict:
     text = _without_fenced_code_blocks(markdown)
     matches = sorted(set(match.group(0).strip() for match in FORBIDDEN_SUBMISSION_RE.finditer(text)))
     return {"passed": not matches, "matches": matches}
+
+
+def _appendix_text(markdown: str) -> str:
+    match = CODE_APPENDIX_HEADING_RE.search(markdown)
+    return markdown[match.end() :] if match else ""
+
+
+def _check_appendix_console_noise(markdown: str) -> dict:
+    """Detect print-heavy source appendices that inflate the formal PDF."""
+    appendix = _appendix_text(markdown)
+    noisy_lines = [
+        line.strip()
+        for line in appendix.splitlines()
+        if APPENDIX_CONSOLE_LINE_RE.match(line)
+    ]
+    samples = noisy_lines[:10]
+    return {
+        "passed": len(noisy_lines) <= MAX_APPENDIX_CONSOLE_LINES,
+        "count": len(noisy_lines),
+        "max_allowed": MAX_APPENDIX_CONSOLE_LINES,
+        "samples": samples,
+    }
 
 
 def _find_markdown_tables(markdown: str) -> list[list[str]]:
@@ -1660,6 +1742,9 @@ def build_preflight_report(
         "internal_paths": _with_severity(_check_internal_paths(markdown), "fail"),
         "submission_anonymity": _with_severity(
             _check_submission_anonymity(markdown), "fail"
+        ),
+        "appendix_console_noise": _with_severity(
+            _check_appendix_console_noise(markdown), "fail"
         ),
         "tables": _with_severity(_check_tables(markdown_without_code), "conditional"),
         "extra_problem_labels": _with_severity(extra_problem_labels_check, "conditional"),

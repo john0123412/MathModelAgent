@@ -47,6 +47,15 @@ class TestCheckFontInstalledDispatch(unittest.TestCase):
         ):
             self.assertTrue(font_utils.check_font_installed("Times New Roman"))
 
+    def test_non_windows_accepts_fontconfig_family_alias_list(self):
+        with (
+            mock.patch("platform.system", return_value="Linux"),
+            mock.patch(
+                "app.utils.font_utils._fc_match_family", return_value="SimSun,NSimSun"
+            ),
+        ):
+            self.assertTrue(font_utils.check_font_installed("SimSun"))
+
     def test_non_windows_fc_match_unavailable_returns_none(self):
         with (
             mock.patch("platform.system", return_value="Linux"),

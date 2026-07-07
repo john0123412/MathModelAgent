@@ -1,6 +1,7 @@
 """PDF 导出工具模块，负责将 Markdown 论文转换为 PDF。"""
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -26,6 +27,11 @@ PDF_PAGEBREAK_FILTER = os.path.join(
     os.path.dirname(__file__), "pandoc_filters", "pdf_pagebreak.lua"
 )
 PDF_PAGEBREAK_MARKER = "MMA_PDF_PAGEBREAK"
+PDF_CJK_BREAK_MARKER = "MMA_PDF_CJK_BREAK"
+CJK_BREAK_RUN_RE = re.compile(r"[\u4e00-\u9fff，。！？；：、（）《》“”]{24,}")
+FENCE_START_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+KEYWORDS_LINE_RE = re.compile(r"^\s*(?:\*\*)?\s*(?:关键词|关键字)\s*(?:\*\*)?\s*[：:]?")
+PDF_CJK_BREAK_INTERVAL = 18
 
 
 def _insert_abstract_pagebreak(markdown: str) -> tuple[str, bool]:
@@ -36,7 +42,7 @@ def _insert_abstract_pagebreak(markdown: str) -> tuple[str, bool]:
     lines = markdown.splitlines(keepends=True)
     keyword_index: int | None = None
     for index, line in enumerate(lines):
-        if line.lstrip().startswith(("关键词", "关键字")):
+        if KEYWORDS_LINE_RE.match(line):
             keyword_index = index
             break
     if keyword_index is None:
@@ -57,12 +63,61 @@ def _insert_abstract_pagebreak(markdown: str) -> tuple[str, bool]:
     return "".join(lines), True
 
 
+def _insert_cjk_pdf_break_opportunities(markdown: str) -> tuple[str, bool]:
+    """Add PDF-only break opportunities to long CJK runs without touching code blocks."""
+    changed = False
+    lines: list[str] = []
+    in_fence = False
+    fence_marker = ""
+
+    def break_run(match: re.Match[str]) -> str:
+        nonlocal changed
+        text = match.group(0)
+        chunks = [
+            text[index : index + PDF_CJK_BREAK_INTERVAL]
+            for index in range(0, len(text), PDF_CJK_BREAK_INTERVAL)
+        ]
+        if len(chunks) <= 1:
+            return text
+        changed = True
+        return f" {PDF_CJK_BREAK_MARKER} ".join(chunks)
+
+    for line in markdown.splitlines(keepends=True):
+        fence_match = FENCE_START_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker[0]
+            elif marker.startswith(fence_marker):
+                in_fence = False
+                fence_marker = ""
+            lines.append(line)
+            continue
+
+        stripped = line.lstrip()
+        if (
+            in_fence
+            or stripped.startswith(("#", "|", "!["))
+            or re.match(r"^\s*[-*+]\s", line)
+        ):
+            lines.append(line)
+            continue
+
+        lines.append(CJK_BREAK_RUN_RE.sub(break_run, line))
+
+    return "".join(lines), changed
+
+
 def _prepare_pdf_markdown_source(md_path: str, work_dir: str) -> tuple[str, bool]:
     """Create a temporary PDF input when layout-only Markdown tweaks are needed."""
     with open(md_path, encoding="utf-8") as f:
         markdown = f.read()
-    prepared_markdown, inserted = _insert_abstract_pagebreak(markdown)
-    if not inserted:
+    prepared_markdown, inserted_pagebreak = _insert_abstract_pagebreak(markdown)
+    prepared_markdown, inserted_cjk_breaks = _insert_cjk_pdf_break_opportunities(
+        prepared_markdown
+    )
+    if not inserted_pagebreak and not inserted_cjk_breaks:
         return md_path, False
 
     os.makedirs(work_dir, exist_ok=True)

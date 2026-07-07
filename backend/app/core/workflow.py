@@ -27,6 +27,7 @@ from app.tools.candidate_exporter import write_candidate_manifest
 from app.tools.export_profiles import normalize_export_profile
 from app.tools.paper_postprocessor import prepare_paper_markdown
 from app.tools.pdf_visual_checker import check_pdf_visual
+from app.tools.submission_audit import write_submission_audit_report
 from app.core.flows import Flows
 from app.core.llm.llm_factory import LLMFactory
 
@@ -510,10 +511,18 @@ class MathModelWorkFlow(WorkFlow):
 
         user_output.save_result()
         try:
+            declared_problem_count = len(
+                [
+                    key
+                    for key in self.questions
+                    if key.startswith("ques") and key != "ques_count"
+                ]
+            )
             preflight_report = prepare_paper_markdown(
                 self.work_dir,
                 "res.md",
                 export_profile=normalize_export_profile(export_profile).value,
+                declared_problem_count=declared_problem_count or None,
             )
             if preflight_report.get("status") == "PASS":
                 await redis_manager.publish_message(
@@ -653,6 +662,31 @@ class MathModelWorkFlow(WorkFlow):
                 self.task_id,
                 SystemMessage(
                     content=f"LaTeX 项目导出异常: {e}，其余结果不受影响", type="warning"
+                ),
+            )
+
+        ################################################ generate submission audit report
+        try:
+            audit_report = write_submission_audit_report(self.work_dir)
+            if audit_report.get("status") == "PASS":
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(content="提交产物自动审核通过"),
+                )
+            else:
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(
+                        content="提交产物自动审核存在风险，请查看 submission_audit_report.json",
+                        type="warning",
+                    ),
+                )
+        except Exception as e:
+            logger.error(f"submission_audit_report 生成失败: {e}")
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(
+                    content=f"submission_audit_report 生成失败: {e}", type="warning"
                 ),
             )
 

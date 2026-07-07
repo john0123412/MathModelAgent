@@ -2,6 +2,7 @@
 
 import json as _json
 from anthropic import AsyncAnthropic
+from app.config.setting import settings
 from app.core.llm.providers.base import BaseProvider
 from app.core.llm.types import StandardResponse, ToolCall, Usage
 
@@ -20,7 +21,11 @@ class AnthropicProvider(BaseProvider):
         max_tokens: int | None = None,
         top_p: float | None = None,
     ) -> StandardResponse:
-        client = AsyncAnthropic(api_key=api_key, base_url=base_url)
+        client = AsyncAnthropic(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS,
+        )
 
         system_prompt, anthropic_messages = self._convert_messages(messages)
 

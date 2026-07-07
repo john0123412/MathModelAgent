@@ -27,6 +27,7 @@ LATEX_INCLUDEGRAPHICS_RE = re.compile(
     r"|\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}"
 )
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".pdf", ".eps", ".bmp", ".webp")
+LATEX_SAFE_ASSET_BASENAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 _MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 % =============================================================================
@@ -258,7 +259,24 @@ def _copy_template_assets(template_dir: str | None, latex_project_dir: str) -> l
 def _clean_asset_path(path: str) -> str:
     path = path.strip().strip("<>").strip()
     path = path.split("#", 1)[0].split("?", 1)[0].strip()
+    path = _unescape_latex_asset_path(path)
     return path.replace("\\", "/")
+
+
+def _unescape_latex_asset_path(path: str) -> str:
+    """Undo pandoc/LaTeX escaping for local file names before filesystem lookup."""
+    replacements = {
+        r"\%": "%",
+        r"\#": "#",
+        r"\&": "&",
+        r"\_": "_",
+        r"\$": "$",
+        r"\{": "{",
+        r"\}": "}",
+    }
+    for escaped, literal in replacements.items():
+        path = path.replace(escaped, literal)
+    return path
 
 
 def _is_local_image_path(path: str) -> bool:
@@ -315,6 +333,45 @@ def _copy_file_once(src: str, dst: str) -> bool:
     return True
 
 
+def _latex_safe_asset_basename(reference: str, index: int, used: set[str]) -> str:
+    basename = os.path.basename(reference.replace("\\", "/"))
+    if LATEX_SAFE_ASSET_BASENAME_RE.match(basename):
+        return basename
+
+    _, ext = os.path.splitext(basename)
+    if ext.lower() not in IMAGE_EXTENSIONS:
+        ext = ".png"
+    candidate = f"figure_{index:02d}{ext.lower()}"
+    while candidate in used:
+        index += 1
+        candidate = f"figure_{index:02d}{ext.lower()}"
+    return candidate
+
+
+def _rewrite_latex_asset_references(tex_paths: list[str], rewrites: dict[str, str]) -> None:
+    if not rewrites:
+        return
+
+    for tex_path in tex_paths:
+        try:
+            with open(tex_path, encoding="utf-8") as f:
+                tex = f.read()
+        except OSError:
+            continue
+
+        def replace_includegraphics(match: re.Match[str]) -> str:
+            raw_path = match.group(1) or match.group(2) or ""
+            replacement = rewrites.get(_clean_asset_path(raw_path))
+            if not replacement:
+                return match.group(0)
+            return match.group(0).replace(raw_path, replacement)
+
+        updated = LATEX_INCLUDEGRAPHICS_RE.sub(replace_includegraphics, tex)
+        if updated != tex:
+            with open(tex_path, "w", encoding="utf-8") as f:
+                f.write(updated)
+
+
 def _copy_referenced_assets(
     work_dir: str,
     latex_project_dir: str,
@@ -324,9 +381,11 @@ def _copy_referenced_assets(
     """Copy local figures referenced by Markdown/LaTeX into latex_project."""
     copied: set[str] = set()
     missing: list[str] = []
+    rewrites: dict[str, str] = {}
+    used_safe_names: set[str] = set()
     figures_dir = os.path.join(latex_project_dir, "figures")
 
-    for reference in _extract_referenced_assets(markdown, tex_paths):
+    for index, reference in enumerate(_extract_referenced_assets(markdown, tex_paths), 1):
         src = _asset_source_path(work_dir, reference)
         if not src or not os.path.exists(src):
             missing.append(reference)
@@ -338,14 +397,23 @@ def _copy_referenced_assets(
         if not reference_parts or any(part == ".." for part in reference_parts):
             reference_parts = [os.path.basename(reference)]
 
-        candidate_targets = [
-            os.path.join(latex_project_dir, *reference_parts),
-            os.path.join(figures_dir, os.path.basename(reference)),
-        ]
+        safe_basename = _latex_safe_asset_basename(reference, index, used_safe_names)
+        used_safe_names.add(safe_basename)
+        if safe_basename == os.path.basename(reference):
+            candidate_targets = [
+                os.path.join(latex_project_dir, *reference_parts),
+                os.path.join(figures_dir, os.path.basename(reference)),
+            ]
+        else:
+            safe_reference = f"figures/{safe_basename}"
+            rewrites[reference] = safe_reference
+            candidate_targets = [os.path.join(latex_project_dir, safe_reference)]
+
         for dst in candidate_targets:
             if _copy_file_once(src, dst):
                 copied.add(os.path.relpath(dst, latex_project_dir).replace(os.sep, "/"))
 
+    _rewrite_latex_asset_references(tex_paths, rewrites)
     return sorted(copied), sorted(missing)
 
 

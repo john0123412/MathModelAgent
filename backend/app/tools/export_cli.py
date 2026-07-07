@@ -37,7 +37,10 @@ import shutil
 import sys
 
 from app.schemas.enums import ExportProfile
+from app.tools.candidate_exporter import write_candidate_manifest
 from app.tools.pdf_exporter import export_markdown_to_pdf
+from app.tools.pdf_visual_checker import check_pdf_visual
+from app.tools.submission_audit import write_submission_audit_report
 from app.tools.tex_project_exporter import export_markdown_to_latex_project
 from app.utils.font_utils import check_font_installed
 
@@ -105,6 +108,45 @@ def _check_dependency(name: str, hint: str) -> bool:
     else:
         print(f"  [缺失] {name}（{hint}）")
     return path is not None
+
+
+def _load_existing_json(path: str) -> dict:
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _refresh_task_status(
+    work_dir: str,
+    pdf_path: str,
+    profile: str,
+    pdf_result: dict,
+) -> None:
+    """Refresh task reports after a manual/formal PDF re-export."""
+    visual_result = check_pdf_visual(pdf_path, work_dir) if pdf_result["success"] else None
+    export_status_path = os.path.join(work_dir, "export_status.json")
+    export_status = _load_existing_json(export_status_path)
+    export_status.update(
+        {
+            "export_profile": profile,
+            "pdf": pdf_result,
+            "pdf_visual_check": visual_result,
+        }
+    )
+    with open(export_status_path, "w", encoding="utf-8") as f:
+        json.dump(export_status, f, ensure_ascii=False, indent=2)
+
+    write_submission_audit_report(work_dir)
+    manifest_path = os.path.join(work_dir, "candidate_manifest.json")
+    if os.path.exists(manifest_path):
+        manifest = _load_existing_json(manifest_path)
+        task_id = manifest.get("task_id") or os.path.basename(os.path.abspath(work_dir))
+        write_candidate_manifest(work_dir, str(task_id))
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -182,6 +224,14 @@ def cmd_pdf(args: argparse.Namespace) -> int:
         print(f"[字体提示] {warning}", file=sys.stderr)
 
     if result["success"]:
+        if args.update_status:
+            _refresh_task_status(
+                os.path.abspath(work_dir),
+                os.path.abspath(args.output),
+                args.profile,
+                result,
+            )
+            print("已刷新 export_status.json、pdf_visual_check.json、submission_audit_report.json。")
         print(f"PDF 生成成功: {result['pdf_path']}")
         return 0
 
@@ -269,6 +319,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="本地手动导出模式：优先使用系统已安装的官方字体（Times New Roman/SimSun/...），"
         "只有检测到确实缺失时才回退到开源等效字体，并把检测结果打印出来；"
         "不加此参数时使用与 Docker/Linux 自动化流程一致的静默 fallback 策略。",
+    )
+    pdf_parser.add_argument(
+        "--update-status",
+        action="store_true",
+        help="PDF 生成成功后刷新 export_status.json、pdf_visual_check.json、submission_audit_report.json；"
+        "若 candidate_manifest.json 已存在，也同步刷新 manifest。",
     )
     add_common_font_args(pdf_parser)
     pdf_parser.set_defaults(func=cmd_pdf)

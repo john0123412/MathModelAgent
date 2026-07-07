@@ -1,6 +1,7 @@
 """OpenAI Responses API Provider。"""
 
 from openai import AsyncOpenAI
+from app.config.setting import settings
 from app.core.llm.providers.base import BaseProvider
 from app.core.llm.types import StandardResponse, ToolCall, Usage
 
@@ -19,7 +20,11 @@ class OpenAIResponsesProvider(BaseProvider):
         max_tokens: int | None = None,
         top_p: float | None = None,
     ) -> StandardResponse:
-        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS,
+        )
 
         input_items = self._messages_to_input(messages)
 

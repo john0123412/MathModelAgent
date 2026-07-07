@@ -3,3 +3,9 @@ function Para(el)
     return pandoc.RawBlock("latex", "\\clearpage")
   end
 end
+
+function Str(el)
+  if el.text == "MMA_PDF_CJK_BREAK" then
+    return pandoc.RawInline("latex", "\\hspace{0pt}")
+  end
+end

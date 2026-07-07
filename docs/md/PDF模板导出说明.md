@@ -42,7 +42,9 @@ Docker 后端默认负责完成建模主流程，并生成：
   并保留 `sections/imported_body.tex` 作为兼容审计文件；编译失败只记录到
   `tex_export_status.json`，不阻断主交付链路；导出器会复制正文引用的本地图片到
   `latex_project/` / `latex_project/figures/`，并记录 `copied_assets` /
-  `missing_assets`）
+  `missing_assets`；若图片文件名包含 `%`、中文、`±` 等 LaTeX 高风险字符，
+  sidecar 内部会改用 `figures/figure_XX.ext` 安全文件名并重写 `sections/*.tex`
+  的 `\includegraphics` 引用，不改变 `res.md`、`res.pdf`、`res.docx`）
 
 正式提交前，PDF 推荐在 Windows 本机用官方字体重新生成一份。推荐路径是：
 
@@ -58,24 +60,41 @@ Windows 本机工具读取 res.md -> Pandoc + XeLaTeX 用真实系统字体重�
 官方站和知网提交系统；如果新增 Word/DOCX 或 LaTeX 模板，按
 `docs/md/CUMCM2026模板替换指南.md` 替换。
 
-最近一次真实链路烟雾任务 `20260705-095041-36750d99` 使用
+最近一次真实链路烟雾任务 `20260706-161231-080acfb7` 使用 `mimo-v2.5` 和
 `export_profile=cumcm2026` 重新导出并通过主交付验收：
 
 - `paper_preflight_report.json`：`PASS`
-- `pdf_visual_check.json`：`PASS`，A4、非空、文本可提取，且 `text_margin.overflows=[]`
+- `pdf_visual_check.json`：`PASS`，A4、非空、文本可提取、20MB 文件大小、摘要首页、
+  无目录、正文 30 页以内、匿名电子稿身份字段、物理边缘越界和 CUMCM 2.5cm 内容边距检查均通过
 - `res.md`、`res.pdf`、`res.docx`、`res.json`、`candidate_manifest.json` 均生成
 - `tex_export_status.json`：`compile_success=true`，`missing_assets=[]`
 - `latex_project/main.pdf` 已生成且非空
 - 真实产物包含 PNG 图片、CSV 表格数据和 `notebook.ipynb` 源码附录
+- 本次复核确认 `pdf_visual_check.json -> checks.abstract_first_page` 通过，第一页只包含
+  标题、摘要和关键词，不再混入正文“问题重述”。
 - Docker 中官方 Windows 字体缺失时，`SimSun/SimHei/Times New Roman` 会 fallback 到
   `Noto Serif CJK SC`、`Noto Sans CJK SC`、`Liberation Serif`；CUMCM sidecar 中
   `KaiTi` / `STXinwei` / `LiSu` 会优先 fallback 到 `AR PL KaitiM GB`，若仍缺失则
-  fallback 到 Noto CJK 字体。正式提交前仍建议在 Windows 本机用真实字体重新导出。
+  fallback 到 Noto CJK 字体。正式提交前仍建议挂载宿主机合法安装的正式字体，或在
+  Windows 本机用真实字体重新导出。
+- Docker 不能把开源字体“转换”为专有正式字体。自动化路径是设置根目录 `.env`：
+  `MMA_OFFICIAL_FONTS_DIR=C:\Windows\Fonts`，Compose 会把该目录只读挂载到
+  `/usr/local/share/fonts/mma-extra`，后端入口自动刷新 `fc-cache`。随后
+  `fc-match "SimSun"`、`fc-match "Times New Roman"` 命中正式字体时，
+  Docker PDF 会直接使用正式字体，不再触发对应 fallback。
+- 任务完成后会生成 `submission_audit_report.json/md`；默认模式下 Docker fallback
+  字体记为 `WARN`，正式提交前可运行
+  `uv run python -m app.tools.submission_audit --work-dir project\work_dir\<task_id> --require-official-fonts`
+  作为严格门禁，若 PDF 仍有 fallback/未知字体来源则返回 `FAIL`。
 
 `cumcm2026` 主 PDF 导出现在显式关闭 pandoc raw TeX，并支持 `\( ... \)` 内联数学；
 附录代码会防止源码中的 `\end{lstlisting}` 提前结束 LaTeX 代码环境，避免 notebook
 里嵌套的 LaTeX 模板字符串把 `\begin{table}[H]` 等内容泄漏成正文 LaTeX，从而造成
 PDF 编译失败或代码越界。
+
+`cumcm2026` 主 PDF 页边距当前使用 `left=3.17cm,right=3.17cm,top=3cm,bottom=2.8cm`。
+底边距高于规范最低 2.5cm，是为了给实际字体字形 bbox 留出安全余量，避免正文末行
+侵入 CUMCM 2.5cm 内容边距保护区。
 
 需要注意的边界：
 
@@ -86,12 +105,38 @@ PDF 编译失败或代码越界。
 - `latex_project/` 是候选 sidecar，不是主交付链路；导出器会尽量自动编译，
   但若失败只写入 `tex_export_status.json`，不影响 `res.md`/`res.pdf`/`res.docx`
   主交付。若要把它作为正式可编译工程交付，需要单独复核 `main.pdf` 和编译日志。
-- `pdf_visual_check.json` 是低成本自动检查，不替代人工翻阅 PDF。
+- `pdf_visual_check.json` 是低成本自动检查；它会检查 A4、非空、文本可提取、
+  20MB 文件大小、摘要首页、无目录、正文 30 页以内、物理边缘越界和 CUMCM
+  2.5cm 内容边距风险（允许少量字形 bbox 容差），并阻断 `承诺书`、`编号专用页`、
+  `参赛队号` 等匿名电子稿不应出现的身份/封面字段，但仍不替代人工翻阅 PDF。
 - raw TeX 已在主 PDF 导出中关闭，正文不要依赖 `\begin{table}`、`\begin{align}`
   等 raw LaTeX 环境；标准 Markdown 表格与 `$...$`、`\(...\)` 数学公式仍可用。
 - `paper_preflight_report.json` 只说明格式门禁和基本证据链通过，不证明数学模型和论文论证正确。
   预检会额外检查正文引用编号是否都有文末参考文献条目、Markdown 表格是否有
-  `表n` 标题、以及两问任务中是否把扩展灵敏度分析误标为可见的 `问题3`。
+  `表n` 标题、以及两问任务中是否把扩展灵敏度分析误标为可见的 `问题3` 或
+  `问题三` 段落。工作流会把原题拆出的正式题目数传入后处理，避免 Writer 自行编出
+  的额外问题影响判断。
+- 后处理会在参考文献条目之间保留空行，避免 Pandoc 导出 PDF/DOCX 时把多条文献
+  合并为同一段；若模型生成空参考文献段且正文没有有效引用，后处理会删除空参考文献段，
+  预检不再因为“无引用且无文献”单独失败，但人工复核仍需确认需要引用的背景或方法是否有真实来源。
+- 后处理会删除孤立的 `: ... DOI ...` 定义式参考行，避免 Pandoc 将前一整段正文
+  误解析成 LaTeX description label，导致 PDF 正文无法正常换行。
+- 无外部数据集的题目不应为了 EDA 随机生成模拟样本或模拟数据集；这类题目的“数据预处理”
+  应聚焦题目参数、单位、约束和可行域核验。只有真实存在外部数据集时，才做缺失值、异常值、
+  分布可视化等数据驱动 EDA。若正文已经说明题目参数是确定性常量、无随机样本数据，
+  后处理会把 `描述性统计` 这类样本数据 EDA 用语规范为 `参数核验`，并清理正文、
+  图片引用和支撑材料表中的 Monte Carlo/蒙特卡洛/随机模拟内容；代码附录中同类标签会
+  降级为参数扰动表述，避免确定性题正式稿混入探索性随机模拟口径。
+- 后处理会清洗 Markdown 图片 alt 文本，避免 Pandoc 生成的 PDF/DOCX 图题直接带
+  `.png`、下划线或空 alt 等文件名痕迹；只调整图题文本，不改变图片路径。
+- 后处理会把正文中的常见英文过渡词（如 `Overall`、`However`、`In addition`）
+  替换为中文表达，避免中文竞赛论文中出现突兀英文衔接词；代码块内容不处理。
+- 后处理会清理最终稿和附录代码中可见的提交痕迹词，例如 `用户`、`推断`、
+  `估算`、`待验证`，改为 `题目`、`核定`、`测算`、`需核验` 等正式表达。
+- 后处理会缩短代码附录中纯装饰性的超长分隔线，避免源码页的横向长文本触发
+  `pdf_visual_check.json -> checks.content_margin` 失败。
+- 后处理会把独占一行的加粗短标签（如 `**假设1：...**`）规范为 Markdown 小标题，
+  避免后续段落被 Pandoc 误当成不可换行的 definition-list 标签。
 
 注意：当前模板 PDF 不是从 `res.docx` 转换而来，而是从 `res.md` 直接生成。
 这样可以稳定控制论文模板参数，例如 `ctexart`、中文字体、A4 纸张、页边距、
@@ -126,6 +171,9 @@ Docker 后端镜像现在默认已安装 Pandoc / TeX Live（含 `fonts-liberati
 - A4 纸张。
 - 第一页直接为题目、摘要、关键词，摘要页独占第一页；正文从第二页开始。
   该分页是 PDF-only 预处理，不写回 `res.md`，也不影响 DOCX 或 LaTeX sidecar。
+  分页识别支持裸 `关键词：...` 和加粗内联 `**关键词**：...`。
+- PDF-only 预处理还会给连续中文长句插入内部断行标记，再由 Lua filter 转为
+  LaTeX 断点；该处理不回写 `res.md`，也不影响 DOCX 或 LaTeX sidecar。
 - 不自动生成封面或目录页。
 - 无页眉，页码使用页脚 plain 样式。
 - 文档类为 `ctexart`。
@@ -192,12 +240,23 @@ D:\texlive\2026\bin\windows\pdfinfo.exe backend\project\work_dir\<task_id>\res.p
 - `Page size` 应为 A4，通常显示为 `595.28 x 841.89 pts`。
 - `Creator` 应显示 `LaTeX via pandoc` 或类似信息。
 - `candidate_manifest.json` 中 `files.res_pdf` 应为 `res.pdf`。
-- `pdf_visual_check.json` 应为 `PASS`，尤其是 `checks.text_margin.passed=true`。
+- `pdf_visual_check.json` 应为 `PASS`，尤其是
+  `checks.abstract_first_page.passed=true`、
+  `checks.no_table_of_contents.passed=true`、
+  `checks.submission_anonymity.passed=true`、
+  `checks.body_page_limit.passed=true`、
+  `checks.content_margin.passed=true`、
+  `checks.text_margin.passed=true`。
+- `submission_audit_report.json` 默认应为 `PASS` 或 `WARN`；若正式提交要求官方字体，
+  运行 `python -m app.tools.submission_audit --work-dir <task_dir> --require-official-fonts`
+  后应为 `PASS`。若为 `FAIL`，先按报告里的 remediation 挂载正式字体或本机重导。
 - `tex_export_status.json` 中 `main_uses_structured_sections=true` 时，`latex_project/main.tex`
   应输入 `sections/00_*.tex`、`sections/01_*.tex` 等结构化章节。
 - `tex_export_status.json` 中 `copied_assets` 会列出复制到 `latex_project/` 和
   `latex_project/figures/` 的本地图片；`missing_assets` 应为空。若不为空，应先修正
-  `res.md` / `sections/*.tex` 中不存在的图片引用。
+  `res.md` / `sections/*.tex` 中不存在的图片引用。若原始图片名含 LaTeX 高风险字符，
+  `copied_assets` 中可能出现 `figures/figure_XX.ext`，这是 sidecar 为保证可编译
+  生成的安全副本。
 - `tex_export_status.json` 中 `compile_attempted=true` 时，重点看 `compile_success`、
   `compile_reason`、`compile_failure_summary`。当前自动编译优先尝试 `latexmk -xelatex`，
   失败后会 fallback 到连续两次 `xelatex`；如果 `compile_success=false`，该失败仍是
@@ -256,8 +315,12 @@ python backend\scripts\export_pdf_local.py <task_id>
 
 ```powershell
 cd backend
-uv run python -m app.tools.export_cli pdf --input project\work_dir\<task_id>\res.md --output project\work_dir\<task_id>\res.pdf --profile cumcm2025 --local
+uv run python -m app.tools.export_cli pdf --input project\work_dir\<task_id>\res.md --output project\work_dir\<task_id>\res.pdf --profile cumcm2025 --local --update-status
 ```
+
+`--update-status` 会同步刷新 `export_status.json`、`pdf_visual_check.json`、
+`submission_audit_report.json` 和已有的 `candidate_manifest.json`，避免正式字体
+重导后审核仍引用旧的 Docker fallback 记录。
 
 ### 已经有 DOCX，为什么还用 Markdown 生成 PDF
 

@@ -11,31 +11,80 @@
   - `candidate_manifest.json`
   - `paper_preflight_report.json`
   - `pdf_visual_check.json`
+  - `submission_audit_report.json`
 - `latex_project/` 是候选 LaTeX sidecar，不是主交付链路。
 - LaTeX sidecar 当前已修复 CUMCM 图片路径、新版 pandoc `\pandocbounded`
   图片宏、notebook `# Cell n` 原始代码段拆分问题；导出时会扫描 Markdown/LaTeX
   中引用的本地图片，将可找到的图片复制到 `latex_project/` 和
   `latex_project/figures/`，并在 `tex_export_status.json` 记录
-  `copied_assets` / `missing_assets`。自动编译时若 `latexmk` 失败，会 fallback
-  到连续两次 `xelatex`，并记录 `compile_reason` / `compile_failure_summary`。
+  `copied_assets` / `missing_assets`；若图片文件名包含 `%`、中文、`±` 等
+  LaTeX 高风险字符，sidecar 会复制为 `figures/figure_XX.ext` 并重写
+  `sections/*.tex` 内的 `\includegraphics` 引用，不改 `res.md` 和主 PDF/DOCX。
+  自动编译时若 `latexmk` 失败，会 fallback 到连续两次 `xelatex`，并记录
+  `compile_reason` / `compile_failure_summary`。
 - CUMCM sidecar 模板字体 fallback 已覆盖 `KaiTi` / `STXinwei` / `LiSu`；Docker
   中缺少 Windows 字体或 `AR PL KaitiM GB` 时，会继续 fallback 到 Noto CJK 字体，
   优先保证候选 LaTeX 工程可编译。
+- Docker 正式字体自动化方案：Compose 支持通过根目录 `.env` 的
+  `MMA_OFFICIAL_FONTS_DIR=C:\Windows\Fonts` 只读挂载宿主机已合法安装的字体到
+  `/usr/local/share/fonts/mma-extra`，后端入口自动 `fc-cache`。这不是把开源字体
+  转换为专有字体，而是在 Docker 内复用宿主机正式字体；`font_utils` 已支持
+  `fc-match` 返回 `SimSun,NSimSun` 这类字体族列表时正确命中。
+- 任务完成时会自动生成 `submission_audit_report.json/md`，汇总主交付文件、
+  preflight、PDF 视觉检查和 `export_status.json -> pdf.font_resolution`。
+  默认模式下 Docker fallback 字体记为 `WARN`；正式提交前可运行
+  `uv run python -m app.tools.submission_audit --work-dir project\work_dir\<task_id> --require-official-fonts`
+  作为严格门禁，fallback 或未知字体来源会 `FAIL`。
+  用 `export_cli pdf` 手动/正式重导时加 `--update-status`，会同步刷新
+  `export_status.json`、`pdf_visual_check.json`、`submission_audit_report.json`
+  和已有的 manifest，避免审核读取旧字体记录。
 - 当前最新真实烟雾任务的主链路曾达到：
-  - `task_id = 20260705-151224-0659f137`
+  - `task_id = 20260706-161231-080acfb7`
   - `paper_preflight_report.json = PASS`
   - `export_status.json -> pdf.success = true`
   - `pdf_visual_check = PASS`
   - `tex_export_status.json -> compile_success = true`
   - `latex_project/main.pdf` 已生成
-  - 该任务中途因外部模型接口 `Connection error` 失败过一次，随后通过
-    `/modeling/<task_id>/resume` 从 checkpoint/变量快照恢复并完成。
+  - 该任务使用 `mimo-v2.5` 真实接口完成轻量线性规划题，最优结果为
+    `A=40, B=20, profit=2200`，机器时间增加 10 小时后利润约 `2366.67`。
 - `cumcm2026` 是基于 2026 修订稿规范实现的暂定模板，不是官方最终 DOCX/LaTeX 模板包。
-- 主 PDF 导出会在摘要/关键词后做 PDF-only 分页，保证摘要页独占第一页、
-  正文从第二页开始；该分页不写回 `res.md`，也不影响 DOCX 或 LaTeX sidecar。
-- 论文后处理会做三类内容一致性兜底：移除没有参考文献条目支撑的裸 `[n]`
-  引用、为 Markdown 表格自动补 `表n` 标题、在正式题目数不足时把可见
-  `问题3_...` 扩展分析标签规范为 `灵敏度分析_...`（图片路径保持原文件名）。
+- 主 PDF 导出会在摘要/关键词后做 PDF-only 分页，支持裸 `关键词：...` 与
+  `**关键词**：...`，保证摘要页独占第一页、正文从第二页开始；该分页不写回
+  `res.md`，也不影响 DOCX 或 LaTeX sidecar。
+- `cumcm2026` 主 PDF 当前使用 `left=3.17cm,right=3.17cm,top=3cm,bottom=2.8cm`；
+  底边距高于 2.5cm 是为了给实际字体字形 bbox 留安全余量，避免正文末行触发
+  CUMCM 2.5cm 内容边距检查失败。
+- 论文后处理会做内容一致性兜底：移除没有参考文献条目支撑的裸 `[n]`
+  引用、为 Markdown 表格自动补 `表n` 标题、清洗 Markdown 图片 alt 文本避免
+  PDF/DOCX 图题带 `.png`/下划线等文件名痕迹、把常见英文过渡词
+  `Overall`/`However` 等替换为中文表达、在正式题目数不足时把可见 `问题3_...`
+  扩展分析标签和 `问题三：...` 扩展段落规范为 `灵敏度分析...`（图片路径保持原文件名）。
+  工作流会把原题拆分出的 `quesN` 数量传给后处理，避免 Writer 自行编出的额外问题
+  污染题目数判断。后处理还会清理最终稿和附录代码中可见的 `用户`、`推断`、
+  `估算`、`待验证` 等提交痕迹，改为 `题目`、`核定`、`测算`、`需核验` 等正式表达。
+  代码附录中的纯装饰性超长分隔线会缩短到安全长度，避免 PDF 内容边距检查
+  因源码页超宽文本误报失败。
+  独占一行的加粗短标签（如 `**假设1：...**`）会规范为 Markdown 小标题，
+  避免 Pandoc 把后续整段误解析成 LaTeX description label 导致正文不可换行。
+  孤立的 `: ... DOI ...` 定义式参考行会被删除，避免同类 description list 误解析。
+  预检还会阻断电子论文中出现 `承诺书`、`编号专用页`、`参赛队号`、`队员姓名`
+  等身份/封面字段，避免违反高教社杯匿名电子稿口径。
+  若正文已经说明题目参数是确定性常量、无随机样本数据，后处理会把
+  `描述性统计` 这类样本数据 EDA 用语规范为 `参数核验`，并清理正文/支撑材料中的
+  Monte Carlo、蒙特卡洛、随机模拟等探索性随机模拟内容；代码附录中的同类标签会
+  降级为参数扰动表述。
+- 参考文献条目会以空行分隔，避免 Pandoc PDF/DOCX 导出时把多条参考文献合并成
+  同一段；若模型生成空参考文献段且正文无有效引用，后处理会删除空参考文献段，
+  预检不再因为“无引用且无文献”单独失败。
+- 代码手 EDA 提示已区分“无外部数据集”和“数据驱动题”：当当前数据集文件列表为空时，
+  不得随机生成模拟样本或创建模拟数据集，只做题目给定参数、单位、约束和可行域核验。
+- Docker 前端不再依赖浏览器直连宿主机 `8000` 端口：`frontend/.env.docker`
+  使用 `VITE_API_BASE_URL=/api`、`VITE_WS_URL=ws://localhost:5173/ws`，由
+  Vite dev server 代理到 Compose 内部 `backend:8000`；后端 Docker 场景的
+  `SERVER_HOST` 也指向 `http://localhost:5173/api`，下载链接走同一代理入口。
+- LLM provider 单次请求超时由 `LLM_REQUEST_TIMEOUT_SECONDS` 控制，默认 90 秒；
+  用于兼容较慢的 OpenAI-compatible/Responses/Anthropic 端点，避免建模手或写作手
+  在正常长响应时过早 `Request timed out`。
 - 真实提交前仍需人工复核论文内容和 PDF 排版。
 
 ## 接手时禁止全盘扫描
@@ -97,19 +146,25 @@
   - 主 PDF 禁 raw TeX，支持 `$...$` 和 `\(...\)`。
   - PDF-only 预处理会在关键词后插入内部分页标记，再由
     `pandoc_filters/pdf_pagebreak.lua` 转为 LaTeX `\clearpage`。
+  - PDF-only 预处理会给连续中文长句插入内部断行标记，再由同一 Lua filter 转为
+    LaTeX 断点；不回写 `res.md`，不影响 DOCX 或 LaTeX sidecar。
 - `backend/app/tools/tex_project_exporter.py`
   - LaTeX sidecar 导出。
   - `latex_project/` 是候选产物。
   - 负责复制 Markdown/LaTeX 引用的本地图片并记录 `copied_assets` /
     `missing_assets`。
+  - 会把 LaTeX 高风险图片文件名复制为安全文件名并重写 sidecar 内部引用。
 - `backend/app/tools/paper_postprocessor.py`
   - 参考文献、附录、支撑材料、预检、claim trace。
   - 负责 `paper_preflight_report.json/md`。
-  - 检查正文引用编号是否都有文末参考文献条目、表格是否有编号标题、扩展分析是否
-    被误标为不存在的“问题3”。
+  - 检查正文引用编号是否都有文末参考文献条目、表格是否有编号标题、图片图题是否
+    避免文件名痕迹、常见英文过渡词是否已转为中文、扩展分析是否被误标为不存在的“问题3”。
 - `backend/app/tools/pdf_visual_checker.py`
   - PDF 后验视觉检查。
-  - 检查 A4、非空、文本可提取、基础边距风险。
+  - 检查 A4、非空、文本可提取、20MB 文件大小、摘要首页、无目录、
+    正文 30 页以内、物理边缘越界和 CUMCM 2.5cm 内容边距风险
+    （允许少量字形 bbox 容差），并扫描全文页的 A4 尺寸与承诺书/编号页/
+    参赛队号等身份字段。
 - `backend/app/templates/export_profiles/`
   - DOCX/LaTeX 模板资源。
   - 当前 `cumcm2026` 暂时复用 2025 资源。
@@ -120,8 +175,16 @@
 2. `paper_preflight_report.json = PASS` 不代表数学模型、求解结果、论文论证正确。
 3. `cumcm2026` 暂时复用 2025 DOCX reference 和 2025 LaTeX 模板资源；官方 2026 模板发布后按指南替换。
 4. 主 PDF 禁 raw TeX；正文应使用 Markdown 表格和标准 `$...$`、`\(...\)` 数学公式。
-5. `pdf_visual_check.json = PASS` 只是低成本自动检查，不替代人工翻阅 PDF。
-6. Docker 字体会 fallback 到开源字体，正式提交前建议用 Windows 官方字体复核。
+5. `pdf_visual_check.json = PASS` 会覆盖 A4、摘要首页、无目录、正文页数、
+   文件大小和 2.5cm 内容边距等低成本格式风险，但仍不替代人工翻阅 PDF。
+6. Docker 字体未挂载正式字体时会 fallback 到开源字体；正式提交前建议设置
+   `MMA_OFFICIAL_FONTS_DIR=C:\Windows\Fonts` 重导，或用 Windows 本机官方字体复核。
+   `submission_audit_report.json` 严格字体门禁可确认 PDF 是否仍在 fallback。
+   后端 Dockerfile 通过带超时和重试的 `pip install uv==0.11.14` 安装 uv，
+   不再依赖 `ghcr.io/astral-sh/uv:latest` 多阶段镜像，降低 GHCR
+   token/metadata 网络失败和 PyPI 大 wheel 弱网 read timeout 导致的构建中断风险。
+   当前 Docker 前端通过 `5173/api` / `5173/ws` 代理访问后端，即使 Docker
+   Desktop 宿主机 `8000` 端口发布异常，Web UI 也仍可通过前端入口访问后端。
 7. `candidate_manifest.json` 登记的是候选产物和证据链，不保证论文内容正确。
 8. 历史任务目录可能保存旧导出器状态，诊断时要区分“当前代码行为”和“历史产物状态”。
 
@@ -144,8 +207,11 @@
 - 如果参考文献或表格细节异常，优先看：
   `checks.references.missing_inline`、`checks.tables.uncaptioned_tables`、
   `checks.extra_problem_labels.issues`。
+- 如果轻量题目没有外部数据集但论文出现“模拟数据集”“随机生成样本”等内容，
+  优先检查代码手 EDA 输出和 `flows.py`/`prompts/coder.py` 的无数据 EDA 边界提示。
 - 如果 PDF 视觉检查失败，优先看：
   `pdf_visual_check.json -> checks`
+  尤其是 `submission_anonymity`、`a4_size`、`content_margin`、`abstract_first_page`。
 - 如果 sidecar 失败，先确认是否影响主交付；通常不阻断。
 - 如果 sidecar 报图片缺失，先看 `tex_export_status.json -> missing_assets`，再确认
   `res.md` 或 `sections/*.tex` 中的图片引用是否存在于任务 work_dir。
@@ -157,6 +223,7 @@
 cd backend
 uv run ruff check app
 uv run python -m unittest app/tests/test_export_profiles.py app/tests/test_pdf_template_command.py app/tests/test_tex_project_exporter.py app/tests/test_paper_postprocessor.py app/tests/test_user_output_and_tasks.py
+uv run python -m unittest app.tests.test_font_utils app.tests.test_submission_audit
 uv run python scripts/smoke_pdf_export.py
 ```
 

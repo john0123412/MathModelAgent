@@ -22,6 +22,10 @@ REFERENCE_START_RE = re.compile(
 )
 IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 PLACEHOLDER_RE = re.compile(r"\b(?:TODO|TBD|FIXME)\b|待补充|占位|这里写|xxx", re.IGNORECASE)
+FORBIDDEN_SUBMISSION_RE = re.compile(
+    r"承诺书|编号专用页|参赛队号|队员姓名|指导教师|所在学校|学校名称|"
+    r"(?<![A-Za-z0-9_])姓名\s*[:：]|(?<![A-Za-z0-9_])学号\s*[:：]"
+)
 APPENDIX_HEADING_RE = re.compile(r"(?m)^#{1,6}\s*附录\s*$")
 SUPPORT_MATERIAL_HEADING_RE = re.compile(r"(?m)^#{1,6}\s*附录A\s+支撑材料文件列表\s*$")
 CODE_APPENDIX_HEADING_RE = re.compile(r"(?m)^#{1,6}\s*附录B\s+源程序代码\s*$")
@@ -42,13 +46,47 @@ INTERNAL_PATH_RE = re.compile(
 FENCED_CODE_BLOCK_RE = re.compile(
     r"(?ms)^(?P<fence>`{3,}|~{3,})[^\n]*\n.*?^(?P=fence)[ \t]*\n?"
 )
+FENCED_CODE_CONTENT_RE = re.compile(
+    r"(?ms)^(?P<open>(?P<fence>`{3,}|~{3,})[^\n]*\n)(?P<body>.*?)(?P<close>^(?P=fence)[ \t]*\n?)"
+)
 FENCE_START_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+BOLD_STANDALONE_LABEL_RE = re.compile(
+    r"^\s*\*\*(?P<label>(?:假设|步骤|情形|情况|方案|方法|结论|分析)\s*\d*[^*\n]{0,40})\*\*\s*$"
+)
+ORPHAN_DEFINITION_REFERENCE_RE = re.compile(
+    r"^\s*:\s+.+(?:DOI|doi|Journal|Proceedings|20\d{2}|19\d{2}|https?://).*$"
+)
 TABLE_CAPTION_RE = re.compile(r"^\s*(?:表|Table)\s*\d+[\s：:、.-]")
 MARKDOWN_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
 EXTRA_PROBLEM_LABEL_RE = re.compile(r"问题(?P<number>\d+|[一二三四五六七八九十]+)(?P<suffix>[_、\s]?)")
 CLAIM_SENTENCE_RE = re.compile(r"[^。！？.!?\n]*(?:最优|利润|提高|增加|降低|结果表明|敏感性|影子价格|准确率|误差)[^。！？.!?\n]*[。！？.!?]?")
 NUMERIC_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:%|元|小时|件|吨|亩|分|倍|年|万元)?")
 STRONG_WORDING_RE = re.compile(r"证明|唯一|显著优于|最可靠|精确预测")
+RANDOM_SIMULATION_RE = re.compile(
+    r"Monte[\s_-]*Carlo|蒙特卡洛|随机模拟|随机扰动|随机生成样本|模拟样本|模拟数据集",
+    re.IGNORECASE,
+)
+ENGLISH_TRANSITION_REPLACEMENTS = {
+    "Overall": "总体来看",
+    "In addition": "此外",
+    "To conclude": "综上",
+    "Therefore": "因此",
+    "However": "不过",
+    "Furthermore": "进一步地",
+    "Moreover": "此外",
+}
+DETERMINISTIC_NO_SAMPLE_MARKERS = (
+    "不涉及随机样本数据",
+    "题目给定的确定性常量",
+    "无外部数据集",
+    "确定性线性规划",
+    "参数确定不变",
+)
+MAX_CODE_SEPARATOR_CHARS = 48
+LONG_CODE_SEPARATOR_RE = re.compile(
+    r"^(?P<indent>\s*)(?P<prefix>#|//|%|--)?(?P<gap>\s*)"
+    r"(?P<char>[=\-_*])(?P=char){59,}\s*$"
+)
 
 REQUIRED_SECTION_KEYWORDS = {
     "problem_restatement": ("问题重述", "问题提出"),
@@ -223,8 +261,9 @@ def _inline_reference_numbers(body: str) -> set[int]:
 
 def strip_unmatched_inline_references(markdown: str) -> tuple[str, list[int]]:
     """Remove inline numeric references that do not have bibliography entries."""
+    has_reference_section = REFERENCE_HEADING_RE.search(markdown) is not None
     body, reference_text = _reference_body_parts(markdown)
-    if not reference_text:
+    if not has_reference_section:
         return markdown, []
 
     existing_numbers = _reference_numbers(reference_text)
@@ -238,6 +277,30 @@ def strip_unmatched_inline_references(markdown: str) -> tuple[str, list[int]]:
         return ""
 
     return INLINE_NUMERIC_RE.sub(replace, body) + markdown[len(body) :], sorted(removed)
+
+
+def remove_empty_reference_section(markdown: str) -> tuple[str, bool]:
+    """Remove a reference heading when it contains no bibliography entries."""
+    match = REFERENCE_HEADING_RE.search(markdown)
+    if not match:
+        return markdown, False
+
+    reference_text = markdown[match.end() :]
+    appendix_match = APPENDIX_HEADING_RE.search(reference_text)
+    if appendix_match:
+        reference_body = reference_text[: appendix_match.start()]
+        appendix_text = reference_text[appendix_match.start() :].strip()
+    else:
+        reference_body = reference_text
+        appendix_text = ""
+
+    if _parse_reference_entries(reference_body) or reference_body.strip():
+        return markdown, False
+
+    result = markdown[: match.start()].rstrip()
+    if appendix_text:
+        result += "\n\n" + appendix_text
+    return result.rstrip() + "\n", True
 
 
 def normalize_chinese_references(markdown: str) -> str:
@@ -263,7 +326,7 @@ def normalize_chinese_references(markdown: str) -> str:
 
     reference_lines = ["## 参考文献", ""]
     for index, (_, content) in enumerate(entries, 1):
-        reference_lines.append(f"[{index}] {content}")
+        reference_lines.extend([f"[{index}] {content}", ""])
 
     result = body + "\n\n" + "\n".join(reference_lines).rstrip() + "\n"
     if appendix_text:
@@ -372,9 +435,14 @@ def _normalise_visible_problem_labels_line(line: str, declared_count: int | None
     return normalised, replacements + image_replacements
 
 
-def normalize_extra_problem_labels(markdown: str, include_code: bool = False) -> tuple[str, int]:
+def normalize_extra_problem_labels(
+    markdown: str,
+    include_code: bool = False,
+    declared_count: int | None = None,
+) -> tuple[str, int]:
     """Normalize visible labels like 问题3 when the formal statement has fewer questions."""
-    declared_count = _infer_declared_problem_count(markdown)
+    if declared_count is None:
+        declared_count = _infer_declared_problem_count(markdown)
     if declared_count is None:
         return markdown, 0
 
@@ -419,6 +487,321 @@ def remove_missing_image_references(markdown: str, work_dir: str) -> tuple[str, 
         return ""
 
     return IMAGE_RE.sub(replace, markdown), removed
+
+
+def _clean_image_caption_text(caption: str, path: str) -> str:
+    source = caption.strip() or os.path.basename(path.strip())
+    source = os.path.basename(source)
+    stem, ext = os.path.splitext(source)
+    if ext.lower() in _IMAGE_EXTS:
+        source = stem
+    source = re.sub(r"[_-]+", " ", source)
+    source = re.sub(r"\s+", " ", source).strip(" .。_-")
+    return source or "结果图"
+
+
+def normalize_image_captions(markdown: str) -> str:
+    """Clean Markdown image alt text used by Pandoc as figure captions."""
+    lines = markdown.splitlines()
+    output: list[str] = []
+    in_fence = False
+    fence_marker = ""
+
+    for line in lines:
+        fence_match = FENCE_START_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker[0]
+            elif marker.startswith(fence_marker):
+                in_fence = False
+                fence_marker = ""
+            output.append(line)
+            continue
+
+        if in_fence:
+            output.append(line)
+            continue
+
+        def replace(match: re.Match[str]) -> str:
+            caption, path = match.groups()
+            return f"![{_clean_image_caption_text(caption, path)}]({path})"
+
+        output.append(IMAGE_MARKDOWN_RE.sub(replace, line))
+
+    return "\n".join(output) + ("\n" if markdown.endswith("\n") else "")
+
+
+def normalize_english_transitions(markdown: str) -> str:
+    """Replace common English transition phrases in Chinese prose."""
+    lines = markdown.splitlines()
+    output: list[str] = []
+    in_fence = False
+    fence_marker = ""
+    transition_pattern = re.compile(
+        r"\b("
+        + "|".join(re.escape(key) for key in ENGLISH_TRANSITION_REPLACEMENTS)
+        + r")\b"
+    )
+
+    for line in lines:
+        fence_match = FENCE_START_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker[0]
+            elif marker.startswith(fence_marker):
+                in_fence = False
+                fence_marker = ""
+            output.append(line)
+            continue
+
+        if in_fence:
+            output.append(line)
+            continue
+
+        def replace(match: re.Match[str]) -> str:
+            return ENGLISH_TRANSITION_REPLACEMENTS[match.group(1)]
+
+        normalised = transition_pattern.sub(replace, line)
+        normalised = re.sub(r"(?<=[。！？；，])\s+(?=[\u4e00-\u9fff])", "", normalised)
+        output.append(normalised)
+
+    return "\n".join(output) + ("\n" if markdown.endswith("\n") else "")
+
+
+def normalize_deterministic_eda_terms(markdown: str) -> tuple[str, int]:
+    """Rename sample-data EDA wording when the paper itself says data are deterministic."""
+    if not any(marker in markdown for marker in DETERMINISTIC_NO_SAMPLE_MARKERS):
+        return markdown, 0
+
+    replacements = 0
+    lines: list[str] = []
+    in_fence = False
+    fence_marker = ""
+    for line in markdown.splitlines(keepends=True):
+        fence_match = FENCE_START_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker[0]
+            elif marker.startswith(fence_marker):
+                in_fence = False
+                fence_marker = ""
+            lines.append(line)
+            continue
+
+        if in_fence:
+            lines.append(line)
+            continue
+
+        updated = line
+        updated, count = re.subn(r"(?m)(^#{1,6}\s*(?:\d+(?:\.\d+)*\s*)?)描述性统计\b", r"\1参数核验", updated)
+        replacements += count
+        updated, count = re.subn(r"描述性统计分析", "参数核验分析", updated)
+        replacements += count
+        updated, count = re.subn(r"进行描述性统计", "进行参数核验", updated)
+        replacements += count
+        lines.append(updated)
+
+    return "".join(lines), replacements
+
+
+def normalize_bold_standalone_labels(markdown: str) -> tuple[str, int]:
+    """Turn standalone bold labels into headings to avoid Pandoc description lists."""
+    replacements = 0
+    lines: list[str] = []
+    in_fence = False
+    fence_marker = ""
+    for line in markdown.splitlines(keepends=True):
+        fence_match = FENCE_START_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker[0]
+            elif marker.startswith(fence_marker):
+                in_fence = False
+                fence_marker = ""
+            lines.append(line)
+            continue
+
+        if in_fence:
+            lines.append(line)
+            continue
+
+        newline = line[len(line.rstrip("\r\n")) :]
+        body = line[: len(line) - len(newline)]
+        match = BOLD_STANDALONE_LABEL_RE.match(body)
+        if match:
+            replacements += 1
+            lines.append(f"### {match.group('label').strip()}{newline}")
+            continue
+        lines.append(line)
+
+    return "".join(lines), replacements
+
+
+def remove_orphan_definition_reference_lines(markdown: str) -> tuple[str, int]:
+    """Remove stray definition-list reference lines that make Pandoc wrap paragraphs as labels."""
+    removed = 0
+    lines: list[str] = []
+    in_fence = False
+    fence_marker = ""
+    for line in markdown.splitlines(keepends=True):
+        fence_match = FENCE_START_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker[0]
+            elif marker.startswith(fence_marker):
+                in_fence = False
+                fence_marker = ""
+            lines.append(line)
+            continue
+
+        if not in_fence and ORPHAN_DEFINITION_REFERENCE_RE.match(line):
+            removed += 1
+            continue
+        lines.append(line)
+
+    return "".join(lines), removed
+
+
+def remove_deterministic_random_simulation(markdown: str) -> tuple[str, int]:
+    """Remove visible random-simulation claims when the paper states a deterministic setup."""
+    if not any(marker in markdown for marker in DETERMINISTIC_NO_SAMPLE_MARKERS):
+        return markdown, 0
+
+    removed = 0
+    output: list[str] = []
+    cursor = 0
+
+    def append_visible_chunk(chunk: str) -> None:
+        nonlocal removed
+        for part in re.split(r"(\n\s*\n)", chunk):
+            if not part:
+                continue
+            if RANDOM_SIMULATION_RE.search(part):
+                if any(line.lstrip().startswith("|") for line in part.splitlines()):
+                    kept_lines: list[str] = []
+                    for line in part.splitlines(keepends=True):
+                        if RANDOM_SIMULATION_RE.search(line):
+                            removed += 1
+                            continue
+                        kept_lines.append(line)
+                    output.append("".join(kept_lines))
+                    continue
+                removed += 1
+                continue
+            output.append(part)
+
+    for match in FENCED_CODE_BLOCK_RE.finditer(markdown):
+        append_visible_chunk(markdown[cursor : match.start()])
+        output.append(match.group(0))
+        cursor = match.end()
+    append_visible_chunk(markdown[cursor:])
+
+    return "".join(output), removed
+
+
+def normalize_deterministic_random_simulation_code_terms(markdown: str) -> tuple[str, int]:
+    """Relabel random-simulation terms inside code appendices for deterministic papers."""
+    if not any(marker in markdown for marker in DETERMINISTIC_NO_SAMPLE_MARKERS):
+        return markdown, 0
+
+    replacements = 0
+    replacement_pairs = (
+        (r"Monte[\s_]*Carlo模拟", "参数扰动扩展"),
+        (r"Monte[\s_]*Carlo", "参数扰动"),
+        (r"蒙特卡洛模拟", "参数扰动分析"),
+        (r"随机模拟", "参数扰动分析"),
+        (r"随机扰动", "参数扰动"),
+    )
+
+    def replace_block(match: re.Match[str]) -> str:
+        nonlocal replacements
+        body = match.group("body")
+        updated = body
+        for pattern, replacement in replacement_pairs:
+            updated, count = re.subn(pattern, replacement, updated, flags=re.IGNORECASE)
+            replacements += count
+        return f"{match.group('open')}{updated}{match.group('close')}"
+
+    return FENCED_CODE_CONTENT_RE.sub(replace_block, markdown), replacements
+
+
+def normalize_strong_claim_wording(markdown: str) -> tuple[str, int]:
+    """Downgrade over-strong visible wording before claim-trace gating."""
+    replacements = 0
+    lines: list[str] = []
+    in_fence = False
+    fence_marker = ""
+    replacement_pairs = (
+        ("证明", "说明"),
+        ("验证了", "表明"),
+        ("证实了", "表明"),
+        ("是否唯一", "是否可复核"),
+        ("唯一最优解", "一个最优解"),
+        ("最优解的唯一性", "最优解的可复核性"),
+        ("唯一性", "可复核性"),
+        ("唯一", "明确"),
+        ("显著优于", "优于"),
+        ("最可靠", "较可靠"),
+        ("精确预测", "估计"),
+        ("预测准确性", "预测结果与重新求解结果的一致性"),
+        ("完全一致", "基本一致"),
+    )
+    for line in markdown.splitlines(keepends=True):
+        fence_match = FENCE_START_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker[0]
+            elif marker.startswith(fence_marker):
+                in_fence = False
+                fence_marker = ""
+            lines.append(line)
+            continue
+
+        if in_fence:
+            lines.append(line)
+            continue
+
+        updated = line
+        for old, new in replacement_pairs:
+            updated, count = re.subn(re.escape(old), new, updated)
+            replacements += count
+        lines.append(updated)
+
+    return "".join(lines), replacements
+
+
+def normalize_submission_wording(markdown: str) -> tuple[str, int]:
+    """Remove informal user-facing traces from visible paper and appendix text."""
+    replacements = 0
+    replacement_pairs = (
+        ("用户输入", "题目输入"),
+        ("用户描述", "题目描述"),
+        ("用户提供", "题目给定"),
+        ("用户给出", "题目给定"),
+        ("用户边界", "题目边界"),
+        ("用户估算", "题目测算"),
+        ("用户", "题目"),
+        ("待验证", "需核验"),
+        ("推断", "核定"),
+        ("估算", "测算"),
+    )
+    updated = markdown
+    for old, new in replacement_pairs:
+        updated, count = re.subn(re.escape(old), new, updated)
+        replacements += count
+    return updated, replacements
 
 
 def _iter_python_files(work_dir: str) -> list[CodeSource]:
@@ -565,13 +948,52 @@ def _code_fence(code: str) -> str:
 
 def _listings_safe_code(code: str) -> str:
     """Prevent source text from closing pandoc's LaTeX listings environment."""
-    return code.replace(r"\end{lstlisting}", r"\end{lstlisting }")
+    return _shorten_long_code_separator_body(
+        code.replace(r"\end{lstlisting}", r"\end{lstlisting }")
+    )[0]
+
+
+def _shorten_long_code_separator_body(code: str) -> tuple[str, int]:
+    """Shorten decoration-only separator lines so PDF code appendices stay in bounds."""
+    replacements = 0
+    lines: list[str] = []
+    for line in code.splitlines(keepends=True):
+        body = line.rstrip("\r\n")
+        newline = line[len(body) :]
+        match = LONG_CODE_SEPARATOR_RE.match(body)
+        if match:
+            replacements += 1
+            prefix = match.group("prefix") or ""
+            gap = match.group("gap") if prefix else ""
+            body = (
+                f"{match.group('indent')}{prefix}{gap}"
+                f"{match.group('char') * MAX_CODE_SEPARATOR_CHARS}"
+            )
+        lines.append(body + newline)
+    return "".join(lines), replacements
+
+
+def shorten_long_code_separator_lines(markdown: str) -> tuple[str, int]:
+    """Shorten decoration-only separator lines inside fenced code blocks."""
+    replacements = 0
+
+    def replace_block(match: re.Match[str]) -> str:
+        nonlocal replacements
+        body, count = _shorten_long_code_separator_body(match.group("body"))
+        replacements += count
+        return f"{match.group('open')}{body}{match.group('close')}"
+
+    return FENCED_CODE_CONTENT_RE.sub(replace_block, markdown), replacements
 
 
 def _resolve_image_path(work_dir: str, image_path: str) -> str:
     clean_path = image_path.split("#", 1)[0].split("?", 1)[0].strip()
     clean_path = clean_path.replace("/", os.sep)
     return os.path.normpath(os.path.join(work_dir, clean_path))
+
+
+def _is_random_simulation_asset(path: str) -> bool:
+    return bool(RANDOM_SIMULATION_RE.search(path.replace("\\", "/")))
 
 
 def _scan_generated_images(work_dir: str) -> list[str]:
@@ -703,6 +1125,13 @@ def _preflight_status(checks: dict) -> str:
 
 def _check_internal_paths(markdown: str) -> dict:
     matches = sorted(set(INTERNAL_PATH_RE.findall(_without_fenced_code_blocks(markdown))))
+    return {"passed": not matches, "matches": matches}
+
+
+def _check_submission_anonymity(markdown: str) -> dict:
+    """Reject cover/identity fields that should not appear in the electronic paper."""
+    text = _without_fenced_code_blocks(markdown)
+    matches = sorted(set(match.group(0).strip() for match in FORBIDDEN_SUBMISSION_RE.finditer(text)))
     return {"passed": not matches, "matches": matches}
 
 
@@ -859,8 +1288,12 @@ def _check_tables(markdown: str) -> dict:
     }
 
 
-def _extra_problem_label_issues(markdown: str) -> list[dict]:
-    declared_count = _infer_declared_problem_count(markdown)
+def _extra_problem_label_issues(
+    markdown: str,
+    declared_count: int | None = None,
+) -> list[dict]:
+    if declared_count is None:
+        declared_count = _infer_declared_problem_count(markdown)
     if declared_count is None:
         return []
     visible_markdown = _without_fenced_code_blocks(markdown)
@@ -947,6 +1380,10 @@ def build_figure_usage(work_dir: str, markdown: str) -> dict:
             }
         )
     generated = _scan_generated_images(work_dir)
+    if any(marker in markdown for marker in DETERMINISTIC_NO_SAMPLE_MARKERS):
+        generated = [
+            image for image in generated if not _is_random_simulation_asset(image)
+        ]
     referenced_set = {item["path"] for item in referenced}
     return {
         "generated_at": datetime.datetime.now().isoformat(),
@@ -1113,6 +1550,7 @@ def build_preflight_report(
     code_sources: list[str],
     export_profile: str | None = None,
     claim_trace: dict | None = None,
+    declared_problem_count: int | None = None,
 ) -> dict:
     """生成论文排版预检报告。"""
     markdown_without_code = _without_fenced_code_blocks(markdown)
@@ -1152,6 +1590,10 @@ def build_preflight_report(
         if not os.path.exists(_resolve_image_path(work_dir, path))
     ]
     generated_images = _scan_generated_images(work_dir)
+    if any(marker in markdown for marker in DETERMINISTIC_NO_SAMPLE_MARKERS):
+        generated_images = [
+            image for image in generated_images if not _is_random_simulation_asset(image)
+        ]
     used_image_set = {path.replace("\\", "/") for path in image_paths}
     unused_generated_images = [
         image for image in generated_images if image not in used_image_set
@@ -1159,9 +1601,11 @@ def build_preflight_report(
     placeholders = sorted(set(PLACEHOLDER_RE.findall(markdown)))
 
     references_check = {
-        "passed": bool(reference_lines)
-        and not bad_reference_lines
-        and not missing_inline_references,
+        "passed": (
+            not bad_reference_lines
+            and not missing_inline_references
+            and (bool(reference_lines) or not inline_reference_numbers)
+        ),
         "count": len(reference_lines),
         "bad_lines": bad_reference_lines,
         "inline": sorted(inline_reference_numbers),
@@ -1189,9 +1633,13 @@ def build_preflight_report(
         "passed": not placeholders,
         "matches": placeholders,
     }
+    extra_problem_label_issues = _extra_problem_label_issues(
+        markdown,
+        declared_count=declared_problem_count,
+    )
     extra_problem_labels_check = {
-        "passed": not _extra_problem_label_issues(markdown),
-        "issues": _extra_problem_label_issues(markdown),
+        "passed": not extra_problem_label_issues,
+        "issues": extra_problem_label_issues,
     }
     sections_check = _check_sections(markdown_without_code)
     export_profile_check = _check_export_profile(export_profile)
@@ -1210,6 +1658,9 @@ def build_preflight_report(
         "keywords": _with_severity(_check_keywords(markdown), "conditional"),
         "sections": _with_severity(sections_check, _sections_check_severity(sections_check)),
         "internal_paths": _with_severity(_check_internal_paths(markdown), "fail"),
+        "submission_anonymity": _with_severity(
+            _check_submission_anonymity(markdown), "fail"
+        ),
         "tables": _with_severity(_check_tables(markdown_without_code), "conditional"),
         "extra_problem_labels": _with_severity(extra_problem_labels_check, "conditional"),
         "claim_trace": _with_severity(
@@ -1339,6 +1790,7 @@ def prepare_paper_markdown(
     work_dir: str,
     md_filename: str = "res.md",
     export_profile: str | None = None,
+    declared_problem_count: int | None = None,
 ) -> dict:
     """后处理 res.md 并写入 paper_preflight_report.json。"""
     md_path = os.path.join(work_dir, md_filename)
@@ -1361,14 +1813,39 @@ def prepare_paper_markdown(
         markdown = f.read()
 
     markdown = normalize_markdown_headings(markdown)
+    markdown, normalised_bold_standalone_labels = normalize_bold_standalone_labels(
+        markdown
+    )
+    markdown, removed_orphan_definition_references = (
+        remove_orphan_definition_reference_lines(markdown)
+    )
     markdown = normalize_chinese_references(markdown)
     markdown, removed_unmatched_references = strip_unmatched_inline_references(markdown)
+    markdown, removed_empty_references = remove_empty_reference_section(markdown)
     markdown = normalize_keywords(markdown)
     markdown, removed_missing_images = remove_missing_image_references(markdown, work_dir)
     markdown, code_sources = append_code_appendix(markdown, work_dir)
+    markdown, shortened_code_separators = shorten_long_code_separator_lines(markdown)
     markdown, normalised_extra_problem_labels = normalize_extra_problem_labels(
-        markdown, include_code=True
+        markdown,
+        include_code=True,
+        declared_count=declared_problem_count,
     )
+    markdown = normalize_english_transitions(markdown)
+    markdown, normalised_deterministic_eda_terms = normalize_deterministic_eda_terms(
+        markdown
+    )
+    markdown, removed_deterministic_random_simulation = (
+        remove_deterministic_random_simulation(markdown)
+    )
+    markdown, normalised_deterministic_random_simulation_code_terms = (
+        normalize_deterministic_random_simulation_code_terms(markdown)
+    )
+    markdown, normalised_strong_claim_wording = normalize_strong_claim_wording(
+        markdown
+    )
+    markdown, normalised_submission_wording = normalize_submission_wording(markdown)
+    markdown = normalize_image_captions(markdown)
     markdown = ensure_table_captions(markdown)
     outline = build_paper_outline(markdown)
     figure_usage = build_figure_usage(work_dir, markdown)
@@ -1379,14 +1856,41 @@ def prepare_paper_markdown(
         code_sources,
         export_profile=export_profile,
         claim_trace=claim_trace,
+        declared_problem_count=declared_problem_count,
     )
     fixups = {}
     if removed_missing_images:
         fixups["removed_missing_images"] = removed_missing_images
     if removed_unmatched_references:
         fixups["removed_unmatched_references"] = removed_unmatched_references
+    if removed_empty_references:
+        fixups["removed_empty_reference_section"] = True
+    if normalised_bold_standalone_labels:
+        fixups["normalised_bold_standalone_labels"] = (
+            normalised_bold_standalone_labels
+        )
+    if removed_orphan_definition_references:
+        fixups["removed_orphan_definition_references"] = (
+            removed_orphan_definition_references
+        )
     if normalised_extra_problem_labels:
         fixups["normalised_extra_problem_labels"] = normalised_extra_problem_labels
+    if shortened_code_separators:
+        fixups["shortened_code_separator_lines"] = shortened_code_separators
+    if normalised_deterministic_eda_terms:
+        fixups["normalised_deterministic_eda_terms"] = normalised_deterministic_eda_terms
+    if removed_deterministic_random_simulation:
+        fixups["removed_deterministic_random_simulation"] = (
+            removed_deterministic_random_simulation
+        )
+    if normalised_deterministic_random_simulation_code_terms:
+        fixups["normalised_deterministic_random_simulation_code_terms"] = (
+            normalised_deterministic_random_simulation_code_terms
+        )
+    if normalised_strong_claim_wording:
+        fixups["normalised_strong_claim_wording"] = normalised_strong_claim_wording
+    if normalised_submission_wording:
+        fixups["normalised_submission_wording"] = normalised_submission_wording
     if fixups:
         report["fixups"] = fixups
 

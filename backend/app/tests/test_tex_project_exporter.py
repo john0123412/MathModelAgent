@@ -55,6 +55,43 @@ class TestTexProjectExporterMissingInputs(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(work_dir, "latex_project")))
 
 
+class TestTexProjectExporterAssetHelpers(unittest.TestCase):
+    """验证本地图片资源引用解析与复制。"""
+
+    def test_latex_escaped_percent_image_path_is_unescaped_for_lookup(self):
+        self.assertEqual(
+            tex_project_exporter._clean_asset_path(r"灵敏度分析_±20\%范围.png"),
+            "灵敏度分析_±20%范围.png",
+        )
+
+    def test_latex_escaped_percent_image_is_copied_without_missing_asset(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            image_name = "灵敏度分析_±20%范围.png"
+            with open(os.path.join(work_dir, image_name), "wb") as f:
+                f.write(b"png")
+
+            latex_project_dir = os.path.join(work_dir, "latex_project")
+            sections_dir = os.path.join(latex_project_dir, "sections")
+            os.makedirs(sections_dir)
+            tex_path = os.path.join(sections_dir, "body.tex")
+            with open(tex_path, "w", encoding="utf-8") as f:
+                f.write(r"\includegraphics{灵敏度分析_±20\%范围.png}")
+
+            copied, missing = tex_project_exporter._copy_referenced_assets(
+                work_dir, latex_project_dir, "", [tex_path]
+            )
+            with open(tex_path, encoding="utf-8") as f:
+                rewritten_tex = f.read()
+
+            self.assertEqual(missing, [])
+            self.assertIn("figures/figure_01.png", copied)
+            self.assertIn(r"\includegraphics{figures/figure_01.png}", rewritten_tex)
+            self.assertNotIn(r"\%范围", rewritten_tex)
+            self.assertTrue(
+                os.path.exists(os.path.join(latex_project_dir, "figures", "figure_01.png"))
+            )
+
+
 @unittest.skipUnless(shutil.which("pandoc"), "本机未安装 pandoc，跳过真实转换用例")
 class TestTexProjectExporterHappyPath(unittest.TestCase):
     """在 pandoc 存在的正常条件下验证 latex_project/main.tex 被创建。"""

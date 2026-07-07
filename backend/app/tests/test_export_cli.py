@@ -1,4 +1,7 @@
 import io
+import json
+import os
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from unittest import mock
@@ -34,3 +37,45 @@ class TestExportCliCheck(unittest.TestCase):
         output = stdout.getvalue()
         self.assertIn("=== 环境结论 ===", output)
         self.assertIn("缺 pandoc/xelatex，不能导出", output)
+
+
+class TestExportCliPdf(unittest.TestCase):
+    def test_pdf_update_status_refreshes_reports(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            output_path = os.path.join(work_dir, "res.pdf")
+            with open(os.path.join(work_dir, "candidate_manifest.json"), "w", encoding="utf-8") as f:
+                json.dump({"task_id": "task-1"}, f)
+            args = mock.Mock(
+                input=os.path.join(work_dir, "res.md"),
+                output=output_path,
+                work_dir=work_dir,
+                profile="cumcm2026",
+                local=False,
+                update_status=True,
+                font_config=None,
+                mainfont=None,
+                monofont=None,
+                sansfont=None,
+                cjk_mainfont=None,
+                cjk_sansfont=None,
+                cjk_monofont=None,
+            )
+
+            pdf_result = {"success": True, "pdf_path": output_path, "font_resolution": []}
+            with (
+                mock.patch("app.tools.export_cli.shutil.which", return_value="tool"),
+                mock.patch("app.tools.export_cli.export_markdown_to_pdf", return_value=pdf_result),
+                mock.patch("app.tools.export_cli.check_pdf_visual", return_value={"status": "PASS"}),
+                mock.patch("app.tools.export_cli.write_submission_audit_report") as audit_mock,
+                mock.patch("app.tools.export_cli.write_candidate_manifest") as manifest_mock,
+            ):
+                exit_code = export_cli.cmd_pdf(args)
+
+            self.assertEqual(exit_code, 0)
+            with open(os.path.join(work_dir, "export_status.json"), encoding="utf-8") as f:
+                status = json.load(f)
+            self.assertEqual(status["export_profile"], "cumcm2026")
+            self.assertEqual(status["pdf"], pdf_result)
+            self.assertEqual(status["pdf_visual_check"], {"status": "PASS"})
+            audit_mock.assert_called_once_with(work_dir)
+            manifest_mock.assert_called_once_with(work_dir, "task-1")

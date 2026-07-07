@@ -192,7 +192,7 @@ class UserOutput:
             # 确保引用格式以句号结尾
             if content and not content.rstrip().endswith("."):
                 content = content.rstrip() + "."
-            text += f"\n[{footnote['number']}] {content}"
+            text += f"\n\n[{footnote['number']}] {content}"
         return text
 
     def get_result_to_save(self) -> str:

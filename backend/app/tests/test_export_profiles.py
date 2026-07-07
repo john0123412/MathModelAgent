@@ -19,7 +19,10 @@ class TestExportProfiles(unittest.TestCase):
         config = get_export_profile_config(ExportProfile.CUMCM2026)
         self.assertEqual(config.key, ExportProfile.CUMCM2026)
         self.assertEqual(config.latex_template_key, "zh/cumcm2026-gmcmthesis")
-        self.assertIn("geometry:left=3.17cm,right=3.17cm,top=3cm,bottom=2.5cm", config.pdf_variables)
+        self.assertIn("geometry:left=3.17cm,right=3.17cm,top=3cm,bottom=2.8cm", config.pdf_variables)
+        self.assertTrue(
+            any(r"\emergencystretch=3em" in variable for variable in config.pdf_variables)
+        )
         self.assertNotIn("--toc", config.pdf_extra_args)
         self.assertNotIn("--number-sections", config.pdf_extra_args)
 

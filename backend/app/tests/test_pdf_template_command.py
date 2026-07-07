@@ -100,7 +100,7 @@ class TestPdfTemplateCommand(unittest.TestCase):
         self.assertNotIn("--number-sections", command)
         self.assertNotIn("--toc", command)
         self.assertIn("documentclass=ctexart", command)
-        self.assertIn("geometry:left=3.17cm,right=3.17cm,top=3cm,bottom=2.5cm", command)
+        self.assertIn("geometry:left=3.17cm,right=3.17cm,top=3cm,bottom=2.8cm", command)
 
     def test_pdf_input_inserts_pagebreak_after_keywords_without_touching_res_md(self):
         with tempfile.TemporaryDirectory() as work_dir:
@@ -112,7 +112,11 @@ class TestPdfTemplateCommand(unittest.TestCase):
                 "摘要正文。\n\n"
                 "关键词：线性规划；生产优化\n\n"
                 "# 一、问题重述\n\n"
-                "正文。"
+                "生产资源分配优化是制造业管理中的经典问题，旨在有限资源约束下确定最优生产方案以实现利润最大化。"
+                "随着市场竞争加剧，企业对资源配置效率的要求日益提高。\n\n"
+                "```python\n"
+                "print('生产资源分配优化是制造业管理中的经典问题')\n"
+                "```\n"
             )
             with open(md_path, "w", encoding="utf-8") as f:
                 f.write(original_markdown)
@@ -137,11 +141,57 @@ class TestPdfTemplateCommand(unittest.TestCase):
             with open(md_path, encoding="utf-8") as f:
                 self.assertEqual(f.read(), original_markdown)
             self.assertIn("MMA_PDF_PAGEBREAK", captured["pdf_markdown"])
+            self.assertIn("MMA_PDF_CJK_BREAK", captured["pdf_markdown"])
+            self.assertIn(
+                "print('生产资源分配优化是制造业管理中的经典问题')",
+                captured["pdf_markdown"],
+            )
+            self.assertNotRegex(
+                captured["pdf_markdown"],
+                r"print\('.*MMA_PDF_CJK_BREAK.*'\)",
+            )
             self.assertLess(
                 captured["pdf_markdown"].index("MMA_PDF_PAGEBREAK"),
                 captured["pdf_markdown"].index("# 一、问题重述"),
             )
             self.assertIn("--lua-filter", captured["command"])
+
+    def test_pdf_input_inserts_pagebreak_after_bold_inline_keywords(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            md_path = os.path.join(work_dir, "res.md")
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            original_markdown = (
+                "# 题目\n\n"
+                "## 摘要\n\n"
+                "摘要正文。\n\n"
+                "**关键词**：线性规划；生产优化\n\n"
+                "# 一、问题重述\n\n"
+                "正文。\n"
+            )
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write(original_markdown)
+
+            captured = {}
+
+            def fake_run(command, **kwargs):
+                with open(command[1], encoding="utf-8") as f:
+                    captured["pdf_markdown"] = f.read()
+                return mock.Mock(returncode=1, stderr="expected test failure")
+
+            with (
+                mock.patch("shutil.which", return_value="tool"),
+                mock.patch("subprocess.run", side_effect=fake_run),
+                mock.patch("app.utils.font_utils.check_font_installed", return_value=True),
+            ):
+                export_markdown_to_pdf(
+                    md_path, pdf_path, work_dir, export_profile=ExportProfile.CUMCM2026
+                )
+
+            self.assertIn("MMA_PDF_PAGEBREAK", captured["pdf_markdown"])
+            self.assertLess(
+                captured["pdf_markdown"].index("MMA_PDF_PAGEBREAK"),
+                captured["pdf_markdown"].index("# 一、问题重述"),
+            )
 
     def test_pdf_command_huashubei_profile_uses_confirmed_margin_baseline(self):
         """huashubei profile 先按国赛基线 2.5cm 接入，等待官方规范发布后复核。"""

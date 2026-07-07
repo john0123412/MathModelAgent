@@ -10,6 +10,7 @@ FROM python:3.12-slim AS builder
 # 字体不受此选项影响，容器内始终 fallback 到 fonts-noto-cjk/
 # texlive-lang-chinese 提供的开源等效字体（无法"补装"官方中文字体）。
 ARG INSTALL_MS_FONTS=false
+ARG UV_VERSION=0.11.14
 
 # 安装中文字体（确保 matplotlib 图表中文正常显示）
 # 以及 pandoc + LaTeX 工具链（md -> docx/pdf 转换、xelatex 编译 LaTeX sidecar/gmcmthesis 模板）
@@ -52,8 +53,16 @@ RUN if [ "$INSTALL_MS_FONTS" = "true" ]; then \
         echo "跳过 Microsoft Core Fonts 安装（INSTALL_MS_FONTS=$INSTALL_MS_FONTS）：英文字体 fallback 到 fonts-liberation，中文字体不受此选项影响，始终 fallback 到 fonts-noto-cjk/texlive-lang-chinese"; \
     fi
 
-# 安装 uv（推荐直接用官方 distroless 镜像复制二进制文件，速度快且干净）
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# 安装 uv。避免使用 ghcr.io/astral-sh/uv:latest 作为额外构建阶段：
+# 在网络不稳定环境中，GHCR token 获取失败会导致即使 Python 基础镜像已有缓存也
+# 无法构建。固定 PyPI 版本也避免 latest 漂移；pip 下载使用较长超时和重试，
+# 降低大 wheel 在弱网下中途 read timeout 的概率。
+RUN python -m pip install \
+    --disable-pip-version-check \
+    --no-cache-dir \
+    --retries 8 \
+    --timeout 120 \
+    "uv==${UV_VERSION}"
 
 WORKDIR /app
 
@@ -67,6 +76,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # 再复制项目代码
 COPY . .
 
+# 运行时刷新可选挂载字体目录的 fontconfig 缓存。这样 Windows 用户可以把
+# C:\Windows\Fonts 只读挂进容器，让 Docker PDF 优先命中 Times New
+# Roman/SimSun/SimHei/KaiTi 等本机合法安装的正式字体，而不是退回开源字体。
+COPY docker-entrypoint.sh /usr/local/bin/mma-backend-entrypoint
+RUN chmod +x /usr/local/bin/mma-backend-entrypoint
+
 # 安装项目本身
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked
@@ -74,4 +89,5 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 EXPOSE 8000
 
 # 直接使用 uvicorn，因为依赖已安装到系统 Python
+ENTRYPOINT ["mma-backend-entrypoint"]
 CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--ws-ping-interval", "60", "--ws-ping-timeout", "120"]

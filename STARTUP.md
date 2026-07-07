@@ -33,10 +33,17 @@ docker compose down -v      # 停止并删除数据卷（⚠️ 清空 Redis 数
 ### 启动后检查
 
 ```powershell
-curl.exe http://127.0.0.1:8000/docs
 curl.exe http://127.0.0.1:5173/
+curl.exe http://127.0.0.1:5173/api/docs
 docker compose logs backend --tail=200
 ```
+
+Docker 前端通过 Vite dev server 代理访问后端：浏览器请求
+`http://localhost:5173/api/*` 会被转发到 Compose 内部的 `backend:8000`，
+WebSocket 请求 `ws://localhost:5173/ws/task/<task_id>` 会被转发到后端
+`/task/<task_id>`。如果 Docker Desktop 能正常发布后端端口，也可以直接访问
+`http://127.0.0.1:8000/docs`；若宿主机端口发布异常，以 `5173/api/docs`
+作为 Docker 验证入口。
 
 后端 Docker 内验证：
 
@@ -51,9 +58,16 @@ docker compose exec backend uv run python -m ruff check app
 - `backend/.env.dev` 已配置好 API Key
 - Docker Desktop 正在运行
 
+### 构建说明
+
+后端镜像在 Python 基础镜像内通过带超时和重试的 `pip install uv==0.11.14`
+安装 uv，不再从 `ghcr.io/astral-sh/uv:latest` 复制二进制文件。这样可以避免
+网络不稳定时 GHCR token/metadata 获取失败导致 Docker 构建在依赖同步前中断，
+也降低 PyPI 下载 uv 大 wheel 中途 read timeout 的概率。
+
 ### 架构
 - **backend**（:8000）→ 支持 checkpoint/resume
-- **frontend**（:5173）→ 连接 :8000
+- **frontend**（:5173）→ 通过 `/api` 和 `/ws` 代理连接 Compose 内部 backend:8000
 - **redis**（内部网络）
 
 ### Restart 策略
@@ -104,12 +118,19 @@ pnpm run dev
 | 服务 | Docker Compose | 本地开发 |
 |------|----------------|----------|
 | Frontend | 5173 | 5173 |
-| Backend | 8000 | 8003 |
+| Backend | 内部 8000；前端代理入口 5173/api；宿主直连 8000 取决于 Docker Desktop 端口发布状态 | 8003 |
 | Redis | 内部网络 | 6379 |
 
 ---
 
 ## 功能说明
+
+### 无外部数据题目的 EDA 边界
+
+当任务工作目录没有 `.csv` / `.xlsx` 等外部数据集时，代码手不应为了 EDA 随机生成样本
+或创建“模拟数据集.csv”。这类题目只做题目给定参数表、单位一致性、约束可行性、
+边界点或可行域核验；只有确实存在外部数据集时，才执行缺失值、异常值、分布可视化等
+数据驱动 EDA。
 
 ### 断点续传（Checkpoint/Resume）
 
@@ -167,7 +188,11 @@ curl.exe -X POST http://127.0.0.1:8000/modeling `
 
 **`cumcm2026` 相对 `cumcm2025` 的差异**：
 1. **PDF**：不生成目录，也不使用 `--number-sections`。当前 Markdown 模板已经带有 `一、`、`1.1` 等手写编号，关闭 pandoc 自动编号可以避免导出后出现 `2 一、问题重述`、`2.1 1.1 问题背景` 之类的重复编号。
-   PDF 导出会在摘要/关键词后做 PDF-only 分页，保证摘要页独占第一页、正文从第二页开始；该分页不写回 `res.md`，也不影响 DOCX 或 LaTeX sidecar。
+   PDF 导出会在摘要/关键词后做 PDF-only 分页，支持裸 `关键词：...` 和加粗内联
+   `**关键词**：...`，保证摘要页独占第一页、正文从第二页开始；该分页不写回
+   `res.md`，也不影响 DOCX 或 LaTeX sidecar。
+   PDF-only 预处理还会给连续中文长句插入内部断行标记，由 Lua filter 转为 LaTeX 断点，避免 Pandoc/XeLaTeX 在特定中文段落上生成超出页边距的不可断长行。
+   主 PDF 页边距为 `left=3.17cm,right=3.17cm,top=3cm,bottom=2.8cm`。底边距大于规范最低 2.5cm，是为了给实际字体字形 bbox 留出安全余量，避免正文末行侵入 CUMCM 2.5cm 内容边距保护区。
 2. **LaTeX sidecar**：沿用 gmcmthesis 资源目录，但模板键为 `zh/cumcm2026-gmcmthesis`，电子版从摘要页开始；`latex_project/main.tex` 默认输入结构化 `sections/*.tex`，同时保留 `sections/imported_body.tex` 作为兼容审计文件。
 
 > 当前若目标赛事是高教社杯全国大学生数学建模竞赛，应优先使用 `export_profile=cumcm2026`；不要使用 `huashubei`，后者是华数杯 profile。
@@ -184,9 +209,13 @@ LaTeX 资源；2026 正式 DOCX/LaTeX 模板发布后，按
   的 Word 样式作为修订稿口径实现；2026 正式模板文件发布后，需要重新复核并替换
   LaTeX 模板与 DOCX reference-doc。
 - LaTeX sidecar 编译产物（`latex_project/`）属于候选导出，提交前仍需人工核对（`candidate_manifest.json` 中会标注 `known_risks`）。主交付链路是 `res.md`、`res.docx`、`res.pdf` 和 `res.json`。
-- PDF 视觉检查是低成本后验检查，只覆盖 A4、非空、文本可提取和基础边距风险；不能替代人工排版验收。正式提交前仍需人工翻看摘要页、公式密集页、宽表、附录源码、参考文献和最后几页。
+- PDF 视觉检查是低成本后验检查，会覆盖 A4、非空、文本可提取、20MB 文件大小、
+  摘要首页、无目录、正文 30 页以内、物理边缘越界和 CUMCM 2.5cm 内容边距风险；
+  还会阻断 `承诺书`、`编号专用页`、`参赛队号` 等身份/封面字段；不能替代人工排版
+  验收。正式提交前仍需人工翻看摘要页、公式密集页、宽表、附录源码、参考文献和最后几页。
 - 主 PDF 导出显式关闭 pandoc raw TeX，避免源码中的 LaTeX 模板字符串泄漏成正文命令。正文应优先使用 Markdown 表格和标准 `$...$`、`\(...\)` 数学公式，不要依赖 `\begin{table}`、`\begin{align}` 等 raw LaTeX 环境。
 - `paper_preflight_report.json` 是规则/正则驱动的格式与证据链门禁，不证明模型、求解和论证一定正确；`PASS` 后仍需人工复核数学内容。
+- 对无外部数据集的确定性参数题，后处理会清理正文/支撑材料中的 Monte Carlo、蒙特卡洛、随机模拟等探索性随机模拟内容，将样本数据 EDA 用语规范为参数核验，并删除可能触发 Pandoc definition-list 误解析的孤立 `: ... DOI ...` 参考行。
 - **字体**：PDF/LaTeX sidecar 优先使用官方格式规定的 Times New Roman/SimSun 等正式字体；精简版 Docker 镜像默认不含这些 Windows/Office 专有字体，会在编译期自动检测（`fc-match` / fontspec `\IfFontExistsTF`）并回退到免费等效字体，不影响能否编译成功，但正式提交前建议人工核对排版观感是否符合要求。两类字体的 fallback 途径不同：
   - **英文/Latin 字体**（Times New Roman → Liberation Serif、Courier New → Liberation Mono、Arial → Liberation Sans）：可通过构建时开启 `INSTALL_MS_FONTS=true` 装真正的 Microsoft Core Fonts（`ttf-mscorefonts-installer`），从而不必 fallback：
     ```bash
@@ -194,6 +223,28 @@ LaTeX 资源；2026 正式 DOCX/LaTeX 模板发布后，按
     ```
     该选项默认关闭，因为它需要接受 Microsoft 的字体许可协议（EULA）并在构建时从外部镜像下载字体二进制文件，不适合作为默认公开镜像行为，仅建议在你自己私有构建、且已知晓并接受该许可与网络依赖时开启。
   - **中文字体**（SimSun/SimHei/KaiTi/STXinwei/LiSu）：**`INSTALL_MS_FONTS` 对此无效**——`ttf-mscorefonts-installer` 只包含 Times New Roman/Arial/Courier New 等英文字体，不含任何中文 Windows 字体。这些中文字体本身没有可合法分发的开源渠道（不像 Liberation 之于 Times New Roman那样有官方免费克隆），因此容器内始终 fallback 到 `fonts-noto-cjk`/`texlive-lang-chinese` 提供的 Noto Serif/Sans CJK SC、AR PL KaitiM GB，没有"装包补全"的选项。如需真正的 SimSun/SimHei/KaiTi 排版效果，只能在已合法安装这些字体的宿主机（如 Windows 本地开发环境）上编译，或自行挂载你合法持有的字体文件到容器内。
+
+**Docker 使用宿主机正式字体（推荐自动化方案）**：
+
+Docker 不能把开源字体“转换”为 Times New Roman/SimSun 这类专有字体；正确做法是
+只读挂载你本机已经合法安装的字体目录。Compose 已内置可选挂载点，Windows 上在仓库根目录
+创建或编辑 `.env`：
+
+```env
+MMA_OFFICIAL_FONTS_DIR=C:\Windows\Fonts
+```
+
+然后重建/重启后端：
+
+```powershell
+docker compose up --build -d backend
+docker compose exec backend fc-match "SimSun"
+docker compose exec backend fc-match "Times New Roman"
+```
+
+后端入口会自动对挂载目录运行 `fc-cache`。若 `fc-match` 命中 `SimSun`/
+`Times New Roman`，后续 Docker PDF 会优先使用这些正式字体；未设置该变量时，
+默认挂载 `backend/fonts`，仍按可用字体自动 fallback。
 
 ### 人工建模确认门禁
 
@@ -221,6 +272,13 @@ curl.exe -X POST http://127.0.0.1:8000/modeling/<task_id>/approve-modeling `
 
 确认接口会把 `modeling_decision.json` 标记为 `approved`，再复用现有 checkpoint/resume 链路从 Coder 阶段继续执行，不会重跑 Coordinator 或 Modeler。
 
+### LLM 请求超时
+
+OpenAI-compatible、Responses 和 Anthropic provider 会使用
+`LLM_REQUEST_TIMEOUT_SECONDS` 控制单次请求超时，默认 `90` 秒。部分兼容端点或较慢模型
+在建模手/写作手阶段响应时间可能超过 SDK 默认值；如连续出现 `Request timed out`，
+可在 `backend/.env.dev` 中临时调大该值后重启后端。
+
 ### 结构化 LaTeX Sidecar
 
 LaTeX sidecar 现在生成两类正文文件：
@@ -238,6 +296,9 @@ LaTeX sidecar 现在生成两类正文文件：
 `latex_project/` 和 `latex_project/figures/`，并把缺失引用写入
 `tex_export_status.json -> missing_assets`。这样候选 LaTeX 工程脱离任务根目录后也
 能尽量独立编译；如果图片确实不存在，主交付链路不受影响，但 sidecar 风险会被记录。
+若原始图片文件名包含 `%`、中文、`±` 等 LaTeX 高风险字符，sidecar 会复制为
+`figures/figure_XX.ext` 安全文件名并重写 `sections/*.tex` 的
+`\includegraphics` 引用；这只影响 `latex_project/`，不改 `res.md`、主 PDF 或 DOCX。
 
 `latex_project/main.tex` 默认输入结构化章节文件，`tex_export_status.json` 会记录：
 
@@ -287,10 +348,13 @@ uv run python -m app.tools.export_cli check
 
 ```powershell
 cd backend
-uv run python -m app.tools.export_cli pdf --input path\to\res.md --output path\to\res.pdf --profile cumcm2025 --local
+uv run python -m app.tools.export_cli pdf --input path\to\res.md --output path\to\res.pdf --profile cumcm2025 --local --update-status
 ```
 
 - `--local` 是关键参数：不加它会走跟 Docker 一样的策略（也能跑，但检测到 Times New Roman 缺失时不会给你打印本机安装状态提示，只写日志）；加了以后会明确报告每个字体是否命中本机已安装的版本，并且——只要你没有用下面的 `--mainfont` 等参数手动指定——官方字体检测到确实已经装了才会使用，检测不到就按开源字体回退并打印原因，不会不声不响换成别的字体。
+- `--update-status` 会在 PDF 重导成功后刷新 `export_status.json`、`pdf_visual_check.json`
+  和 `submission_audit_report.json`；若 `candidate_manifest.json` 已存在，也会同步刷新，
+  避免正式字体重导后审核报告仍引用旧的 Docker fallback 记录。
 - `--profile` 可选 `default` / `cumcm2025` / `cumcm2026` / `huashubei`，与 Docker 端行为一致。高教社杯/国赛建议用 `cumcm2026`。
 
 仓库内提供了一个最小样例，可直接用来检查 Windows 本地导出链路：
@@ -366,6 +430,27 @@ uv run python -m app.tools.export_cli pdf --input res.md --output res.pdf --prof
 
 > **明确建议**：Docker 默认 fallback 生成的 `res.pdf`/`latex_project/main.pdf` 只用于自动化预览，不代表最终排版效果；正式提交前，建议用上面的 Windows 本地流程，在已安装 Times New Roman/SimSun/SimHei/KaiTi 等正式字体的机器上重新编译一次 PDF，并人工检查版式、页边距、字号是否符合官方格式规范。
 
+### 自动提交审核门禁
+
+任务完成时会自动生成：
+
+- `submission_audit_report.json`
+- `submission_audit_report.md`
+
+该报告汇总主交付文件、`paper_preflight_report.json`、`pdf_visual_check.json`
+和 `export_status.json -> pdf.font_resolution`。默认自动流程中，如果 PDF 使用
+Docker fallback 字体，报告为 `WARN` 而不是阻断任务；正式提交前可以启用严格字体门禁：
+
+```powershell
+cd backend
+uv run python -m app.tools.submission_audit --work-dir project\work_dir\<task_id> --require-official-fonts
+```
+
+严格模式下，只要 PDF 仍使用 Liberation/Noto/AR PL 等 fallback 或字体来源未知，
+报告就是 `FAIL` 并返回非零退出码。解决方式是先按上文挂载
+`MMA_OFFICIAL_FONTS_DIR=C:\Windows\Fonts` 后在 Docker 重导，或在 Windows 本机用
+`export_cli pdf --local --update-status` 重导，再重新运行审核命令。
+
 **如果本机缺少 Pandoc 或 XeLaTeX**：`export_cli` 的 `check`/`pdf`/`latex` 子命令都会在真正调用前先检测，缺失时打印类似下面的信息并以非零退出码结束，不会跑到一半才报错：
 
 ```
@@ -396,6 +481,8 @@ B 需要 1 小时机器时间、2 小时人工时间，利润 30 元；
 - `paper_preflight_report.json = PASS`
 - `export_status.json -> pdf.success = true`
 - `pdf_visual_check.json = PASS`
+- `pdf_visual_check.json -> checks.abstract_first_page/body_page_limit/content_margin/no_table_of_contents/submission_anonymity`
+  均应通过
 - `tex_export_status.json -> compile_success = true`
 - `latex_project/main.pdf` 存在且非空
 - `paper_preflight_report.json -> checks.references.missing_inline = []`
@@ -451,7 +538,7 @@ curl.exe -X POST http://127.0.0.1:8000/modeling `
 - 任务正常完成，`res.md`/`res.docx`/`res.pdf`（如已装 pandoc）正常生成
 - `export_status.json` 中 `export_profile` 应为 `cumcm2026`，PDF 命令不应包含 `--toc` 或 `--number-sections`
 - `paper_preflight_report.json` 应包含 `status`/`conclusion`、`export_profile`、`claim_trace` 等检查项
-- 如果本机装了 pandoc + latexmk/xelatex，`latex_project/main.tex` 应包含 `CUMCM 2026 LaTeX sidecar`，且 `latex_project/gmcmthesis.cls`、`latex_project/figures/logo2025.png` 等模板资源已被复制；正文引用的本地图片应出现在 `tex_export_status.json -> copied_assets`，不存在的图片会出现在 `missing_assets`
+- 如果本机装了 pandoc + latexmk/xelatex，`latex_project/main.tex` 应包含 `CUMCM 2026 LaTeX sidecar`，且 `latex_project/gmcmthesis.cls`、`latex_project/figures/logo2025.png` 等模板资源已被复制；正文引用的本地图片应出现在 `tex_export_status.json -> copied_assets`，不存在的图片会出现在 `missing_assets`；含 LaTeX 高风险字符的图片名允许以 `figures/figure_XX.ext` 安全副本形式出现
 - 换回 `export_profile=default`（或不传该字段）重新提交一次，确认输出与之前完全一致（回归验证）
 
 ---

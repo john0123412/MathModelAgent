@@ -85,6 +85,21 @@ def _fc_match_family(font_name: str) -> str | None:
     return proc.stdout.strip()
 
 
+def _split_fontconfig_families(family_output: str) -> set[str]:
+    """Split fontconfig family output into comparable family names.
+
+    `fc-match --format=%{family}` can return comma-separated families for
+    collection fonts, for example `SimSun,NSimSun`. Treat each family as an
+    installed alias so mounted Windows `.ttc` files are detected correctly.
+    """
+    families: set[str] = set()
+    for part in re.split(r"[,，]", family_output):
+        part = part.strip()
+        if part:
+            families.add(part)
+    return families
+
+
 def _windows_installed_font_families() -> set[str] | None:
     """枚举 Windows 注册表中已安装字体的字体族名集合。
 
@@ -167,7 +182,7 @@ def check_font_installed(font_name: str) -> bool | None:
     matched = _fc_match_family(font_name)
     if matched is None:
         return None
-    return matched.lower() == font_name.strip().lower()
+    return _is_family_in_set(font_name, _split_fontconfig_families(matched))
 
 
 def resolve_font(preferred: str) -> str:

@@ -92,7 +92,7 @@ def write_candidate_manifest(work_dir: str, task_id: str) -> str:
     export_status.json/modeling_decision.json/modeling_decision.md/
     paper_preflight_report.json/paper_preflight_report.md/
     paper_outline.json/figure_usage.json/claim_trace.json/claim_trace.md/
-    pdf_visual_check.json/图片），不存在的文件字段为 None，图片列表为空数组。
+    pdf_visual_check.json/submission_audit_report.json/图片），不存在的文件字段为 None，图片列表为空数组。
     claims 字段来自 claim_trace.json，不存在或不可读时保持空数组；本函数只记录
     已生成的可追踪结论，不自行从正文猜造额外内容。
 
@@ -134,6 +134,12 @@ def write_candidate_manifest(work_dir: str, task_id: str) -> str:
             "claim_trace": _existing_or_none(work_dir, "claim_trace.json"),
             "claim_trace_md": _existing_or_none(work_dir, "claim_trace.md"),
             "pdf_visual_check": _existing_or_none(work_dir, "pdf_visual_check.json"),
+            "submission_audit_report": _existing_or_none(
+                work_dir, "submission_audit_report.json"
+            ),
+            "submission_audit_report_md": _existing_or_none(
+                work_dir, "submission_audit_report.md"
+            ),
             "latex_main": _existing_or_none(work_dir, "latex_project/main.tex"),
             "latex_project": _existing_or_none(work_dir, "latex_project"),
             "tex_export_status": _existing_or_none(work_dir, "tex_export_status.json"),
@@ -142,6 +148,7 @@ def write_candidate_manifest(work_dir: str, task_id: str) -> str:
         "claims": _load_claims(work_dir),
         "known_risks": [
             "External candidate output must be revalidated before final submission.",
+            "submission_audit_report.json is an automated gate; WARN/FAIL items must be resolved or accepted before final submission.",
             "LaTeX project is a candidate sidecar export and must be verified before final submission.",
         ],
     }

@@ -45,6 +45,12 @@ PDF_CODE_BLOCK_STYLE = (
     r"basicstyle=\ttfamily\small"
     r"}"
 )
+PDF_PARAGRAPH_BREAK_STYLE = (
+    r"header-includes=\sloppy"
+    r"\emergencystretch=3em"
+    r'\XeTeXlinebreaklocale "zh"'
+    r"\XeTeXlinebreakskip=0pt plus 1pt"
+)
 
 HUASHUBEI_PAGE_MARGIN = "2.5cm"
 HUASHUBEI_GEOMETRY = (
@@ -137,7 +143,8 @@ CUMCM2026_PROFILE = ExportProfileConfig(
     label="高教社杯/CUMCM 2026 模板",
     description=(
         "对齐高教社杯全国大学生数学建模竞赛（CUMCM）论文格式规范（2026 年修订稿）："
-        "电子版从摘要页开始，不生成目录；正文页边距满足至少 2.5cm。"
+        "电子版从摘要页开始，不生成目录；正文页边距满足至少 2.5cm，"
+        "主 PDF 底边距使用 2.8cm 保守留白以避免字形 bbox 侵入保护区。"
     ),
     pdf_variables=[
         "documentclass=ctexart",
@@ -149,7 +156,8 @@ CUMCM2026_PROFILE = ExportProfileConfig(
         "pagestyle=plain",
         PDF_HEADING_STYLE,
         PDF_CODE_BLOCK_STYLE,
-        "geometry:left=3.17cm,right=3.17cm,top=3cm,bottom=2.5cm",
+        PDF_PARAGRAPH_BREAK_STYLE,
+        "geometry:left=3.17cm,right=3.17cm,top=3cm,bottom=2.8cm",
         "fontsize=12pt",
     ],
     pdf_extra_args=[],

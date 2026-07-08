@@ -92,6 +92,18 @@
 - LLM provider 单次请求超时由 `LLM_REQUEST_TIMEOUT_SECONDS` 控制，默认 90 秒；
   用于兼容较慢的 OpenAI-compatible/Responses/Anthropic 端点，避免建模手或写作手
   在正常长响应时过早 `Request timed out`。
+- 2026-07-08 代码审计后已修正 README/README_EN/STARTUP 的事实口径：后续判断项目状态
+  应以代码实现和本记忆为准，不要把旧 README 中的 RAG、通用 HIL、四层容错、Daytona、
+  LiteLLM、完全 SKILLS 驱动等描述当作已完成事实。
+- 当前已知未闭环能力：`/track` 空实现；`download_all_url` 只返回 `all.zip` 路径但
+  后端不生成压缩包；`/save-api-config` 只改内存不持久化；`HUMAN_MODEL_GATE_ENABLED`
+  只有后端 Modeler 门禁，前端审批入口未闭环；`RAG_ENABLED`/`HIL_ENABLED`/
+  Fallback/Evaluator 主要是配置或占位，尚未接入主工作流；Daytona、LiteLLM runtime、
+  视觉模型、R/MATLAB 执行链路未接入当前代码。
+- 2026-07-08 本地验证：后端完整单测 `python -m unittest discover -s app\tests -p 'test_*.py'`
+  通过 `155 tests`，`ruff check app` 通过；本机前端构建未运行，原因是项目规则禁止
+  agent 主动调用 Windows 本机前端 Node 工具链；Docker Desktop 当时未启动，未完成
+  Docker 运行态复验。
 - 真实提交前仍需人工复核论文内容和 PDF 排版。
 
 ## 接手时禁止全盘扫描

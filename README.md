@@ -4,7 +4,7 @@
 </p>
 <h4 align="center">
     专为数学建模设计的 Agent<br>
-    自动完成数学建模，生成一份完整的可以直接提交的论文。
+    自动完成数学建模、代码执行和论文候选稿生成；正式提交前仍需人工复核模型与排版。
 </h4>
 
 <h5 align="center">简体中文 | <a href="README_EN.md">English</a></h5>
@@ -24,17 +24,24 @@
 - 🔍 自动分析问题，数学建模，编写代码，纠正错误，撰写论文
 - 💻 Code Interpreter
     - local Interpreter: 基于 jupyter , 代码保存为 notebook 方便再编辑
-    - 云端 code interpreter: [E2B](https://e2b.dev/) 和 [daytona](https://app.daytona.io/)
-- 📝 生成一份编排好格式的论文
+    - 云端 code interpreter: [E2B](https://e2b.dev/)（配置 `E2B_API_KEY` 后启用；Daytona 尚未接入当前代码）
+- 📝 生成 Markdown / DOCX / PDF / LaTeX sidecar 候选论文与审计报告
 - 🤝 multi-agents: 建模手，代码手，论文手等
 - 🔄 multi-llms: 每个 agent 设置不同的、合适的模型
-- 🤖 支持所有模型: [litellm](https://docs.litellm.ai/docs/providers)
+- 🤖 内置 OpenAI Chat Completions、OpenAI Responses、Anthropic；OpenAI-compatible 网关可通过 `base_url` 配置。当前未集成 LiteLLM 运行时
 - 💰 成本低：workflow agentless，不依赖 agent 框架
 - 🧩 自定义模板：prompt inject 为每个 subtask 单独设置需求
-- 🌐 Web Search: Agent 自主搜索互联网获取真实数据（Tavily API）
-- 📚 RAG 知识库: 从本地知识库检索建模方法、代码模板、论文写作参考（ChromaDB + Rerank）
-- 🤝 HIL 人机协作: 关键节点暂停等待用户审批，支持 6 种决策动作（confirm / edit / regenerate / ask / skip / abort）
-- 🛡️ 四层容错: 有限重试 → Fallback Hand Off → Evaluator Shadow Mode → Feedback Rerun
+- 🌐 文献与网页检索：Writer 的 `search_papers` 聚合 OpenAlex、Semantic Scholar、Crossref、arXiv；Tavily 仅在 `SEARCH_ENABLED=true` 且 `TAVILY_API_KEY` 存在时作为网页资料补充
+- 📚 RAG 知识库：配置项已预留，但主工作流尚未接入 ChromaDB/Rerank 检索
+- 🤝 HIL 人机协作：当前只实现 `HUMAN_MODEL_GATE_ENABLED` 的建模方案确认门禁；通用 6 种动作尚未接入前端/工作流
+- 🛡️ 容错与续传：已实现基础重试、错误反思、断点续传和变量快照；Fallback Hand Off / Evaluator Shadow Mode / Feedback Rerun 尚未形成完整闭环
+
+## 当前代码实现状态（2026-07-08 审计）
+
+- 已实现：FastAPI/Vue WebUI 主流程、本地 Jupyter interpreter、可选 E2B、OpenAI/Responses/Anthropic provider、断点续传、变量快照、实时消息注入、`search_papers` 多源文献检索、CUMCM2026 Markdown/DOCX/PDF/LaTeX sidecar 导出和提交审计。
+- 部分实现：`HUMAN_MODEL_GATE_ENABLED` 后端建模门禁存在，但前端确认入口未闭环；`/save-api-config` 只修改内存配置，不持久化 `.env`；`download_all_url` 返回 `all.zip` 路径，但当前没有生成该压缩包的后端逻辑。
+- 未接入主流程：`/track` 路由为空实现；RAG、通用 HIL 6 种动作、Fallback Hand Off、Evaluator Shadow Mode、Feedback Rerun、Daytona、LiteLLM runtime、视觉模型、R/MATLAB 执行链路。
+- 最近验证：后端完整单测 `155 tests` 通过，`ruff check app` 通过；本机前端构建未运行（Windows 本机 Node 工具链有已知风险）；Docker Desktop 当时未启动，未完成 Docker 运行态复验。
 
 
 
@@ -46,32 +53,32 @@
 
 https://mathmodel.top/home
 
-## SKILLS
+## SKILLS 资源（实验性，非 WebUI 主流程）
 
-项目蒸馏成完全由 SKILLS 驱动
-不再做 Harness 层
+本仓库同时包含 FastAPI/Vue WebUI 主应用和 `skills/` 目录下的实验性技能资源。
+当前 WebUI 主流程仍由 `backend/app/core/workflow.py` 编排，并非完全由 SKILLS 驱动；Typst 模板/技能资源不等同于 WebUI 默认导出链路。
 
 ### Intro
 
-MathModelAgent SKILL —— 直接在 Harness 中驱动的数学建模自动化方案.
+以下内容描述 `skills/` 目录中的实验性技能资产，使用时需要和 WebUI/Docker 主流程分开看。
 
 **💰 开源免费，接入任意模型**
-完全开源免费，可接入任何模型。
+项目开源免费；当前 WebUI 运行时代码内置 OpenAI Chat Completions、OpenAI Responses、Anthropic 和 OpenAI-compatible 配置，不等同于“任意模型已全部适配”。
 
 **🧠 端到端自动化**
-从问题分析、建模、编码、绘图到论文排版和验收，一条 `/1start-mathmodel` 命令全自动完成，中间阶段自动串联，无需人工干预。
+skills 侧目标是从问题分析、建模、编码、绘图到论文排版和验收串联执行；WebUI 主流程已实现建模、代码执行、写作、导出和审计，但正式提交仍需人工复核。
 
-**📄 17 套 Typst 论文模板**
-内置中英文主流赛事模板（国赛、华数杯、华为杯、MCM/ICM 等），自动匹配赛事类型，生成排版精良、可直接提交的 PDF 论文。
+**📄 Typst 论文模板资源**
+`skills/` 侧包含 Typst 模板资源和赛事模板探索；WebUI 默认导出链路当前是 Markdown / DOCX / PDF / LaTeX sidecar，不使用 Typst 作为主导出引擎。
 
-**📐 内置建模知识库**
-包含完整的建模规范、模型选择决策树（AHP、TOPSIS、ARIMA、GA 等）、常见易错模式和 MCM/ICM 评分标准，每个阶段自动参考，降低模型幻觉。
+**📐 建模知识资源**
+skills 侧可沉淀建模规范、模型选择、易错模式和评分标准；WebUI 主工作流目前未接入 RAG/ChromaDB/Rerank 知识库检索。
 
-**✅ 9 步自动验收**
-文本泄漏检测 → 数值一致性校验 → Typst 编译 → PDF 可视化检查，确保论文零低级错误。
+**✅ 验收与审计**
+WebUI 主流程当前使用 `paper_preflight_report`、`pdf_visual_check`、`submission_audit_report` 等审计文件；Typst 侧 9 步验收属于 skills 资源目标，不代表 WebUI 已默认执行 Typst 编译。
 
 **🔧 可组合、可扩展**
-每个阶段是独立 Skill，可单独调用（如只跑分析、只写论文）；模板和知识库可自由扩展；支持 Typst 生态排版。
+skills 资源可继续探索单阶段调用、模板扩展和 Typst 生态排版；WebUI 主应用的贡献仍需要按后端/前端/导出链路分别评估。
 
 skills 中包含一个科研绘图模板skill,可以绘制一些炫酷的科研图表
 
@@ -105,7 +112,7 @@ codex: $start-mathmodel 完成这个数学建模任务
 
 ### What Can You Contribute?
 
-项目以后只会做 SKLLS 层的迭代和优化，不会再做其他部分。
+本仓库同时包含 WebUI 后端、前端、导出链路和 skills 资源。贡献前请区分目标：WebUI 主流程改动应修改 `backend/`、`frontend/` 或导出模板；skills 资源改动应修改 `skills/`。
 
 如果你希望寻找 Agent 开发岗位，你可以研究该项目 Agent 设计并贡献，我会尽量合并.
 
@@ -132,32 +139,24 @@ Harness SKILL 的优化需要大量黑盒测试和调优.
 
 
 
-## 🚀 后期计划
+## 🚀 当前代码状态与后续计划
 
-- [x] 添加并完成 webui、cli
-- [x] 完善的教程、文档
-- [ ] 提供 web 服务
-- [ ] 英文支持（美赛）
-- [ ] 集成 latex 模板
-- [ ] 接入视觉模型
-- [x] 添加正确文献引用
-- [x] 更多测试案例
-- [x] docker 部署
-- [ ] human in loop ( HIL ): 关键节点暂停等待用户审批，支持 6 种决策动作（confirm/edit/regenerate/ask/skip/abort）
-  <!-- TODO: 数据模型已实现，但工作流集成不完整 -->
-- [ ] feedback: 评估器评分 + 反馈注入重跑，先 Writer 后 Coder
-  <!-- TODO: 核心逻辑未实现，仅有 Agent 基类中的 TODO 注释 -->
-- [x] codeinterpreter 接入云端 如 e2b 等供应商..
-- [ ] 多语言: R 语言, matlab
-- [ ] 绘图 napki,draw.io,plantuml,svg, mermaid.js
-- [ ] 添加 benchmark
-- [x] web search tool: Tavily API 搜索网页资料，作为论文文献/背景资料补充源
-  <!-- NOTE: 学术文献检索已升级为 OpenAlex + Semantic Scholar + Crossref + arXiv 聚合；Tavily 用于网页、官方报告和数据来源补充。 -->
-- [ ] RAG 知识库: ChromaDB + Rerank 检索建模方法、代码模板、论文写作参考
-  <!-- TODO: 仅配置项存在，核心检索逻辑未实现 -->
-- [ ] A2A hand off: Fallback 自动切换备用模型 + 有限重试 + Evaluator Shadow Mode
-  <!-- TODO: 配置项和核心逻辑均未实现，仅有基础重试机制 -->
-- [ ] chat / agent mode
+- [x] WebUI 主流程：上传题目、建模、代码执行、写作、任务列表、继续任务。
+- [x] Docker 部署配置：镜像内安装 pandoc、XeLaTeX/TeX Live、字体 fallback、uv。
+- [x] 文献检索：OpenAlex、Semantic Scholar、Crossref、arXiv 聚合；Tavily 作为可选网页补充。
+- [x] 断点续传：`checkpoint.json`、变量快照、notebook 重放和增量恢复。
+- [x] 导出链路：Markdown、DOCX、PDF、LaTeX sidecar、manifest、preflight、PDF 视觉检查、submission audit。
+- [x] 云端代码解释器：E2B 可通过 `E2B_API_KEY` 启用；无 key 时使用本地 Jupyter。
+- [ ] Web 服务运营化：线上托管、账号、配额、隔离和运维策略仍需独立确认。
+- [ ] 英文支持（MCM/ICM）：英文 README 存在，但 MCM/ICM 交付模板和验收口径未形成完整闭环。
+- [ ] 通用 HIL：当前只有建模方案门禁的后端能力，6 种动作和前端审批流未闭环。
+- [ ] Feedback Rerun：评估器评分、反馈注入和 Writer/Coder 重跑未实现。
+- [ ] 下载全部文件：`download_all_url` 暴露了 `all.zip` 路径，但后端尚未生成压缩包。
+- [ ] Token/成本追踪：`/track` 路由当前为空实现。
+- [ ] API 配置持久化：`/save-api-config` 当前只改运行时内存，不写回 `.env`。
+- [ ] RAG 知识库：`RAG_ENABLED` 等配置项存在，ChromaDB/Rerank 主流程检索尚未接入。
+- [ ] A2A/Fallback/Evaluator：基础重试存在，备用模型 handoff、shadow evaluator 和 feedback rerun 尚未闭环。
+- [ ] Daytona、视觉模型、R/MATLAB、绘图工具链、benchmark、chat/agent mode。
 
 ## 视频demo
 
@@ -322,7 +321,16 @@ pnpm run dev
 运行的结果和产生在`backend/project/work_dir/xxx/*`目录下
 - notebook.ipynb: 保存运行过程中产生的代码
 - res.md: 保存最后运行产生的结果为 markdown 格式
+- res.json: 保存结构化结果数据
+- res.docx: Word 候选论文
+- res.pdf: PDF 候选论文
 - modeler_plan.md / modeler_plan.json: 建模手生成的结构化建模方案，便于在代码手执行前检查建模思路
+- candidate_manifest.json: 候选交付文件清单
+- paper_preflight_report.json: 论文文本预检报告
+- pdf_visual_check.json: PDF 视觉检查报告
+- submission_audit_report.json / submission_audit_report.md: 提交前审计报告
+
+当前后端尚未自动生成 `all.zip`，`download_all_url` 返回的压缩包下载链路仍需补齐；需要整体打包时请先在任务目录内人工核对上述文件。
 
 上传带有多个附件的赛题时，建议在 WebUI 第一页一次多选所有题面、数据、图片、压缩包等附件；如果附件来自一个目录且文件很多，可以先压缩为 zip 后上传。第二页仍建议粘贴主题面正文，避免模型先在附件中定位题目而降低稳定性。
 
@@ -333,18 +341,19 @@ Prompt Inject : [prompt](./backend/app/config/md_template.toml)
 网络不畅时的配置过程示例：[网络环境极差时的MathModelAgent配置过程](docs/md/网络环境极差时的MathModelAgent配置过程.md)
 
 
-## ⚙️ 新功能配置
+## ⚙️ 功能配置与实现边界
 
-MathModelAgent 支持以下可选功能，默认已关闭，开启后未配置外部依赖时自动降级跳过。详见 [升级说明](./升级说明.md)。
+下表按当前代码实现状态描述配置项。部分开关已经存在但尚未接入主工作流，不能仅凭 `.env` 开关判断功能已完成。详见 [升级说明](./升级说明.md)。
 
 | 功能 | 配置开关 | 说明 |
 |------|----------|------|
 | 文献搜索 | `OPENALEX_EMAIL` / `OPENALEX_API_KEY` 可选 | Writer 检索学术论文引用；无 OpenAlex 邮箱时仍会使用 Semantic Scholar / Crossref / arXiv |
 | Web Search | `SEARCH_ENABLED` + `TAVILY_API_KEY` | Tavily 网页搜索，用于补充官方报告、数据来源和背景资料，不替代学术数据库 |
-| RAG 知识库 | `RAG_ENABLED` | 从本地知识库检索建模方法和代码模板（ChromaDB + Rerank） |
-| HIL 人机协作 | `HIL_ENABLED` | 关键节点暂停等待用户审批，支持 6 种决策动作 |
-| Fallback Hand Off | `FALLBACK_*` 系列 | 主模型故障自动切换备用模型 |
-| Evaluator + Feedback | `EVALUATOR_*` 系列 | 输出质量评估 + 反馈重跑 |
+| 建模方案确认门禁 | `HUMAN_MODEL_GATE_ENABLED` | 后端可在 Modeler 阶段等待人工确认；前端审批入口尚未闭环 |
+| RAG 知识库 | `RAG_ENABLED` | 配置项存在；当前主工作流尚未接入 ChromaDB/Rerank 检索 |
+| 通用 HIL 人机协作 | `HIL_ENABLED` | 配置项存在；confirm/edit/regenerate/ask/skip/abort 6 种动作尚未接入前端/工作流 |
+| Fallback Hand Off | `FALLBACK_*` 系列 | 尚未接入主工作流；当前只有基础重试和错误反思 |
+| Evaluator + Feedback | `EVALUATOR_*` 系列 | 尚未接入主工作流；输出评估和反馈重跑未闭环 |
 
 文献搜索说明：
 
@@ -354,6 +363,13 @@ MathModelAgent 支持以下可选功能，默认已关闭，开启后未配置�
 - 如果只需要网页资料，工具会使用 `source_types=["web"]`，此时不会请求学术源。
 
 快速启用 Tavily：注册 [Tavily](https://tavily.com) 获取 API Key，在 `backend/.env.dev` 中设置 `TAVILY_API_KEY=tvly-xxx` 和 `SEARCH_ENABLED=true`。
+
+已知未闭环接口：
+
+- `/track` 当前为空实现，不能作为 token/成本统计依据。
+- `/download_all_url` 当前返回 `all.zip` 静态路径，但后端没有生成该压缩包。
+- `/save-api-config` 当前只修改进程内配置，不会持久化到 `.env.dev`。
+- `/approve-modeling` 后端接口存在，但前端尚未提供完整审批操作入口。
 
 ## 🤝 贡献和开发
 

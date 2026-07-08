@@ -125,6 +125,17 @@ pnpm run dev
 
 ## 功能说明
 
+### 当前代码实现边界
+
+以下边界基于 2026-07-08 本地代码审计，不能只按 README 旧描述或 `.env` 开关判断功能已完成：
+
+- `/track` 路由当前为空实现，不能作为 token/成本统计依据。
+- `/download_all_url` 当前返回 `/static/<task_id>/all.zip`，但后端没有生成 `all.zip` 的逻辑。
+- `/save-api-config` 只修改当前进程内的 `settings`，不会持久化写回 `.env.dev`。
+- `HUMAN_MODEL_GATE_ENABLED` 只覆盖 Modeler 阶段的后端建模方案确认门禁；`/approve-modeling` 后端接口存在，但前端审批入口尚未闭环。
+- `RAG_ENABLED`、`HIL_ENABLED`、Fallback/Evaluator 相关配置项存在或有占位，但尚未接入主工作流。
+- 当前代码没有接入 Daytona，也没有集成 LiteLLM runtime；运行时 provider 以 OpenAI Chat Completions、OpenAI Responses、Anthropic 和 OpenAI-compatible `base_url` 为主。
+
 ### 无外部数据题目的 EDA 边界
 
 当任务工作目录没有 `.csv` / `.xlsx` 等外部数据集时，代码手不应为了 EDA 随机生成样本

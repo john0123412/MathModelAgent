@@ -13,6 +13,9 @@
   - `pdf_visual_check.json`
   - `submission_audit_report.json`
 - `latex_project/` 是候选 LaTeX sidecar，不是主交付链路。
+- `GET /download_all_url` 会按需生成任务目录下的 `all.zip`，用于下载当前任务工作区文件；
+  打包时会排除已有 `all.zip`、临时文件和常见缓存目录，并设置单文件/总大小上限，避免
+  意外打包过大目录。
 - LaTeX sidecar 当前已修复 CUMCM 图片路径、新版 pandoc `\pandocbounded`
   图片宏、notebook `# Cell n` 原始代码段拆分问题；导出时会扫描 Markdown/LaTeX
   中引用的本地图片，将可找到的图片复制到 `latex_project/` 和

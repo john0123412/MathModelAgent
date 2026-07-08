@@ -11,10 +11,27 @@ from app.utils.common_utils import (
 )
 import os
 import subprocess
+import tempfile
+import zipfile
 from icecream import ic  # type: ignore[import-unresolved]
 from fastapi import HTTPException
 
 router = APIRouter()
+
+ARCHIVE_FILENAME = "all.zip"
+MAX_ARCHIVE_FILE_SIZE_BYTES = 50 * 1024 * 1024
+MAX_ARCHIVE_TOTAL_SIZE_BYTES = 200 * 1024 * 1024
+EXCLUDED_ARCHIVE_DIRS = {
+    ".git",
+    ".ipynb_checkpoints",
+    "__pycache__",
+}
+EXCLUDED_ARCHIVE_SUFFIXES = (
+    ".tmp",
+    ".temp",
+    ".part",
+    ".lock",
+)
 
 
 def _require_safe_task_id(task_id: str) -> str:
@@ -29,6 +46,85 @@ def _require_safe_filename(filename: str) -> str:
         return ensure_safe_filename(filename)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="非法文件名") from exc
+
+
+def _should_skip_archive_file(filename: str) -> bool:
+    lowered = filename.lower()
+    return lowered == ARCHIVE_FILENAME or lowered.endswith(EXCLUDED_ARCHIVE_SUFFIXES)
+
+
+def _collect_archive_files(work_dir: str) -> list[tuple[str, str, int]]:
+    """收集可安全打包的文件，返回 (绝对路径, zip 内相对路径, 文件大小)。"""
+    root = os.path.abspath(work_dir)
+    real_root = os.path.realpath(root)
+    collected: list[tuple[str, str, int]] = []
+    total_size = 0
+
+    for current_dir, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(
+            dirname
+            for dirname in dirnames
+            if dirname not in EXCLUDED_ARCHIVE_DIRS and not dirname.startswith(".")
+        )
+        dirnames[:] = [
+            dirname
+            for dirname in dirnames
+            if not os.path.islink(os.path.join(current_dir, dirname))
+        ]
+        for filename in sorted(filenames):
+            if _should_skip_archive_file(filename):
+                continue
+            file_path = os.path.abspath(os.path.join(current_dir, filename))
+            if os.path.commonpath([root, file_path]) != root:
+                continue
+            if os.path.islink(file_path):
+                continue
+            real_file_path = os.path.realpath(file_path)
+            if os.path.commonpath([real_root, real_file_path]) != real_root:
+                continue
+            if not os.path.isfile(file_path):
+                continue
+
+            file_size = os.path.getsize(file_path)
+            if file_size > MAX_ARCHIVE_FILE_SIZE_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"文件过大，无法打包: {filename}",
+                )
+            total_size += file_size
+            if total_size > MAX_ARCHIVE_TOTAL_SIZE_BYTES:
+                raise HTTPException(status_code=413, detail="任务文件总大小超过打包上限")
+
+            archive_name = os.path.relpath(file_path, root).replace(os.sep, "/")
+            collected.append((file_path, archive_name, file_size))
+
+    return collected
+
+
+def _create_task_archive(work_dir: str) -> str:
+    archive_path = os.path.join(work_dir, ARCHIVE_FILENAME)
+    files = _collect_archive_files(work_dir)
+    temp_fd, temp_archive_path = tempfile.mkstemp(
+        prefix=f"{ARCHIVE_FILENAME}.",
+        suffix=".tmp",
+        dir=work_dir,
+    )
+    os.close(temp_fd)
+
+    try:
+        with zipfile.ZipFile(
+            temp_archive_path,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as archive:
+            for file_path, archive_name, _file_size in files:
+                archive.write(file_path, archive_name)
+        os.replace(temp_archive_path, archive_path)
+    except Exception:
+        if os.path.exists(temp_archive_path):
+            os.remove(temp_archive_path)
+        raise
+    return archive_path
 
 
 @router.get("/download_url")
@@ -46,7 +142,14 @@ async def get_download_url(task_id: str, filename: str):
 @router.get("/download_all_url")
 async def get_download_all_url(task_id: str):
     safe_task_id = _require_safe_task_id(task_id)
-    return {"download_url": f"{settings.SERVER_HOST}/static/{safe_task_id}/all.zip"}
+    try:
+        work_dir = get_work_dir(safe_task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="任务不存在") from exc
+    _create_task_archive(work_dir)
+    return {
+        "download_url": f"{settings.SERVER_HOST}/static/{safe_task_id}/{ARCHIVE_FILENAME}"
+    }
 
 
 @router.get("/files")

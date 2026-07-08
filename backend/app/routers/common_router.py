@@ -12,6 +12,7 @@ from app.utils.common_utils import WORK_DIR_ROOT, ensure_safe_task_id, get_confi
 from app.schemas.enums import CompTemplate
 from app.services.redis_manager import redis_manager
 from app.services.task_status import read_task_status
+from app.services.token_usage import read_token_usage
 from app.utils.log_util import logger
 
 router = APIRouter()
@@ -115,9 +116,14 @@ async def get_task_messages(task_id: str):
 
 @router.get("/track")
 async def track(task_id: str):
-    # 获取任务的token使用情况
-
-    pass
+    """获取任务的 token 使用聚合统计。"""
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        return read_token_usage(safe_task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="任务不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/status")

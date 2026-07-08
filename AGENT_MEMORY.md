@@ -92,6 +92,11 @@
 - LLM provider 单次请求超时由 `LLM_REQUEST_TIMEOUT_SECONDS` 控制，默认 90 秒；
   用于兼容较慢的 OpenAI-compatible/Responses/Anthropic 端点，避免建模手或写作手
   在正常长响应时过早 `Request timed out`。
+- LLM 成功调用后会在任务目录写入 `token_usage.json`，只保存按 agent 聚合的
+  `chat_count`、`prompt_tokens`、`completion_tokens`、`total_tokens` 和模型名，
+  不保存 prompt、completion、tool args、API key 或 base_url；`GET /track`
+  读取该文件返回聚合统计。统计写入是 best-effort，失败不会让已成功的 LLM 调用重试；
+  当前只保证单进程内加锁累加，多 worker/多进程场景不作为强一致账单依据。
 - 真实提交前仍需人工复核论文内容和 PDF 排版。
 
 ## 接手时禁止全盘扫描

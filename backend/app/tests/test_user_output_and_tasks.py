@@ -181,6 +181,36 @@ class TestTaskFinalization(unittest.TestCase):
 
         self.assertTrue(audit_called)
 
+    def test_audit_refresh_failure_does_not_skip_candidate_manifest(self):
+        import app.routers.modeling_router as modeling_router
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            task_id = "task-1"
+            task_dir = os.path.join(temp_dir, task_id)
+            os.makedirs(task_dir, exist_ok=True)
+            with open(os.path.join(task_dir, "res.md"), "w", encoding="utf-8") as f:
+                f.write("# demo")
+
+            def fake_md_2_docx(_task_id, export_profile=None):
+                with open(os.path.join(task_dir, "res.docx"), "wb") as f:
+                    f.write(b"docx")
+
+            with (
+                mock.patch.object(modeling_router, "get_work_dir", return_value=task_dir),
+                mock.patch.object(modeling_router, "md_2_docx", side_effect=fake_md_2_docx),
+                mock.patch.object(
+                    modeling_router,
+                    "write_submission_audit_report",
+                    side_effect=RuntimeError("audit failed"),
+                ),
+            ):
+                modeling_router._finalize_docx_and_manifest(task_id)
+
+            with open(os.path.join(task_dir, "candidate_manifest.json"), encoding="utf-8") as f:
+                manifest = json.load(f)
+
+        self.assertEqual(manifest["files"]["res_docx"], "res.docx")
+
 
 class TestModelingExportProfileDefaults(unittest.TestCase):
     """验证新建建模任务默认使用高教社杯/国赛 2026 profile。"""

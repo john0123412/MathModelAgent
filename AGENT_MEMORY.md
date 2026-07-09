@@ -58,7 +58,7 @@
   `docker compose up --build -d`、前端入口 `http://127.0.0.1:5173/`、后端
   docs 代理 `http://127.0.0.1:5173/api/docs`、容器内后端单测与
   `ruff check app` 均可运行通过。完整真实建模 smoke 暂被外部 LLM provider
-  阻塞，最新任务 `20260709-013744-28a20cdb` 在 Coordinator 阶段连续重试后失败：
+  阻塞，最新任务 `20260709-014347-c9ed2ddd` 在 Coordinator 阶段连续重试后失败：
   `403 GROUP_DISABLED` / `API Key 所属分组已停用`；任务目录仅生成
   `task_status.json` 和字体文件，无 `res.md`、`res.json`、`res.docx`、
   `candidate_manifest.json` 或 checkpoint。恢复有效 key 后需重跑项目规则中的

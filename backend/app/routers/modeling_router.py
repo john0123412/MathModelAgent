@@ -83,6 +83,13 @@ class SaveApiConfigRequest(BaseModel):
     openalex_email: str
 
 
+class SaveApiConfigResponse(BaseModel):
+    success: bool
+    message: str
+    scope: str
+    persisted: bool
+
+
 def _require_safe_task_id(task_id: str) -> str:
     """验证 URL 中的任务 ID，非法时返回 400。"""
     try:
@@ -106,10 +113,10 @@ def _resolve_example_dir(source: str) -> str:
     return example_dir
 
 
-@router.post("/save-api-config")
+@router.post("/save-api-config", response_model=SaveApiConfigResponse)
 async def save_api_config(request: SaveApiConfigRequest):
     """
-    保存验证成功的 API 配置到 settings
+    保存验证成功的 API 配置到当前进程 settings，不写入 .env.dev。
     """
     try:
         # 更新各个模块的设置：仅当字段非空时才覆盖，空字段保留 .env.dev 中
@@ -165,7 +172,12 @@ async def save_api_config(request: SaveApiConfigRequest):
         if request.openalex_email:
             settings.OPENALEX_EMAIL = request.openalex_email
 
-        return {"success": True, "message": "配置保存成功"}
+        return {
+            "success": True,
+            "message": "配置已保存到当前后端进程，重启后需重新配置或写入 .env.dev",
+            "scope": "runtime",
+            "persisted": False,
+        }
     except Exception as e:
         logger.error(f"保存配置失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"保存配置失败: {str(e)}")

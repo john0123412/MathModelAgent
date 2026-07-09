@@ -18,6 +18,7 @@
 <script setup lang="ts">
 import { getServiceStatus } from "@/apis/commonApi";
 import { useToast } from "@/components/ui/toast/use-toast";
+import { getSafeErrorMessage } from "@/utils/safeError";
 import { onMounted, onUnmounted, ref } from "vue";
 
 // ---- Types ----
@@ -94,7 +95,7 @@ const checkStatus = async () => {
 			}
 		}
 	} catch (error) {
-		console.error("Failed to check service status:", error);
+		console.error("Failed to check service status:", getSafeErrorMessage(error));
 		toast({
 			title: "状态检查失败",
 			description: "无法获取服务状态，请检查网络连接",

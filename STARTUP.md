@@ -148,6 +148,14 @@ pnpm run dev
 - 续传重放使用 `replay_code()`，只执行代码，不写入 notebook，不向前端重复推送代码单元格
 - 重建完成后继续执行未完成阶段
 
+### 建模方案人工确认
+
+设置 `HUMAN_MODEL_GATE_ENABLED=true` 后，Modeler 阶段完成时会生成
+`modeling_decision.md/json`，任务状态变为 `waiting_review` 并等待人工确认。
+前端任务页会显示“确认建模方案并继续”按钮；点击后调用
+`POST /modeling/{task_id}/approve-modeling`，后端标记方案已确认并从 Coder 阶段续跑。
+如需先查看方案，可打开文件面板下载 `modeler_plan.md` 或 `modeling_decision.md`。
+
 ### 实时消息干预
 
 **原理**：

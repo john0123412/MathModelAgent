@@ -1,5 +1,11 @@
 <script setup lang="ts">
-import { getWriterSeque, listTasks, resumeTask } from "@/apis/commonApi";
+import {
+	approveModeling,
+	getWriterSeque,
+	listTasks,
+	resumeTask,
+	type TaskInfo,
+} from "@/apis/commonApi";
 import CoderEditor from "@/components/AgentEditor/CoderEditor.vue";
 import ModelerEditor from "@/components/AgentEditor/ModelerEditor.vue";
 import WriterEditor from "@/components/AgentEditor/WriterEditor.vue";
@@ -56,13 +62,27 @@ const isStopping = ref(false);
 /** 任务是否处于可续传的中断状态 */
 const isInterrupted = ref(false);
 
+/** 任务是否正在等待人工确认建模方案 */
+const isWaitingModelingReview = ref(false);
+
 /** 是否正在请求续传 */
 const isResuming = ref(false);
+
+/** 是否正在请求审批建模方案 */
+const isApprovingModeling = ref(false);
 
 /** 更新运行时长 */
 const updateDuration = () => {
 	currentTime.value = Date.now();
 	runningDuration.value = formatDuration(currentTime.value - startTime.value);
+};
+
+const getSafeErrorMessage = (error: unknown) => {
+	if (error && typeof error === "object" && "response" in error) {
+		const response = (error as { response?: { status?: number } }).response;
+		return `status=${response?.status ?? "unknown"}`;
+	}
+	return error instanceof Error ? error.message : "unknown error";
 };
 
 /** 处理停止运行 */
@@ -72,14 +92,19 @@ async function handleStop() {
 	isStopping.value = false;
 }
 
-/** 检查当前任务是否处于中断状态，用于展示"继续任务"按钮 */
-async function checkInterruptedStatus() {
+const applyTaskStatus = (task: TaskInfo | undefined) => {
+	isInterrupted.value = task?.status === "interrupted";
+	isWaitingModelingReview.value = task?.status === "waiting_review";
+};
+
+/** 检查当前任务状态，用于展示续传/审批按钮 */
+async function refreshTaskStatus() {
 	try {
 		const res = await listTasks();
 		const task = res.data.find((t) => t.task_id === props.task_id);
-		isInterrupted.value = task?.status === "interrupted";
+		applyTaskStatus(task);
 	} catch (error) {
-		console.error("获取任务状态失败:", error);
+		console.error("获取任务状态失败:", getSafeErrorMessage(error));
 	}
 }
 
@@ -88,13 +113,29 @@ async function handleResume() {
 	isResuming.value = true;
 	try {
 		await resumeTask(props.task_id);
-		isInterrupted.value = false;
+		await refreshTaskStatus();
 		await taskStore.loadTaskMessages(props.task_id);
 		taskStore.connectWebSocket(props.task_id);
 	} catch (error) {
-		console.error("续传任务失败:", error);
+		console.error("续传任务失败:", getSafeErrorMessage(error));
 	} finally {
 		isResuming.value = false;
+	}
+}
+
+/** 确认建模方案：调用 approve-modeling 接口后从 Coder 阶段继续 */
+async function handleApproveModeling() {
+	isApprovingModeling.value = true;
+	try {
+		await approveModeling(props.task_id);
+		isWaitingModelingReview.value = false;
+		await taskStore.loadTaskMessages(props.task_id);
+		taskStore.connectWebSocket(props.task_id);
+		await refreshTaskStatus();
+	} catch (error) {
+		console.error("确认建模方案失败:", getSafeErrorMessage(error));
+	} finally {
+		isApprovingModeling.value = false;
 	}
 }
 
@@ -105,7 +146,7 @@ onMounted(async () => {
 	taskStore.connectWebSocket(props.task_id);
 	const res = await getWriterSeque();
 	writerSequence.value = Array.isArray(res.data) ? res.data : [];
-	await checkInterruptedStatus();
+	await refreshTaskStatus();
 
 	// 开始计时
 	timer = setInterval(updateDuration, 1000);
@@ -171,6 +212,20 @@ onBeforeUnmount(() => {
               <!--  TODO: 其他选项 -->
 
               <div class="flex justify-end gap-2 items-center">
+                <span
+                  v-if="isWaitingModelingReview"
+                  class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1"
+                >
+                  建模方案待确认
+                </span>
+                <Button
+                  v-if="isWaitingModelingReview"
+                  variant="default"
+                  :disabled="isApprovingModeling"
+                  @click="handleApproveModeling"
+                >
+                  {{ isApprovingModeling ? "确认中..." : "确认建模方案并继续" }}
+                </Button>
                 <Button
                   v-if="isInterrupted"
                   variant="default"
@@ -180,7 +235,7 @@ onBeforeUnmount(() => {
                   {{ isResuming ? "续传中..." : "继续任务" }}
                 </Button>
                 <Button
-                  v-if="taskStore.isRunning"
+                  v-if="taskStore.isRunning && !isWaitingModelingReview"
                   variant="destructive"
                   :disabled="isStopping"
                   @click="handleStop"

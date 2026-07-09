@@ -101,16 +101,20 @@ def _audit_reports(work_dir: str) -> list[dict[str, Any]]:
             )
         )
     else:
-        passed = preflight.get("status") == "PASS" or preflight.get("success") is True
+        preflight_status = preflight.get("status")
+        passed = preflight_status == "PASS" or preflight.get("success") is True
+        conditional = preflight_status == "CONDITIONAL_PASS"
         issues.append(
             _issue(
                 "paper_preflight",
                 passed,
-                "error",
+                "warning" if conditional else "error",
                 "paper_preflight_report.json = PASS。"
                 if passed
+                else "paper_preflight_report.json = CONDITIONAL_PASS，存在需人工复核的条件项。"
+                if conditional
                 else "paper_preflight_report.json 未通过。",
-                {"status": preflight.get("status"), "success": preflight.get("success")},
+                {"status": preflight_status, "success": preflight.get("success")},
             )
         )
 

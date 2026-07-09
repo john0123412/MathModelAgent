@@ -2,6 +2,7 @@
 
 from app.models.user_output import UserOutput
 from app.tools.base_interpreter import BaseCodeInterpreter
+from app.tools.paper_postprocessor import build_result_fact_summary
 from app.core.agents.modeler_agent import ModelerToCoder
 
 
@@ -123,23 +124,24 @@ class Flows:
             str: 生成的writer_prompt
         """
         code_output = code_interpreter.get_code_output(key)
+        result_fact_summary = build_result_fact_summary(code_interpreter.work_dir)
 
         questions_quesx_keys = self.get_questions_quesx_keys()
         bgc = self.questions["background"]
         quesx_writer_prompt = {
             key: f"""
-                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output},按照如下模板撰写：{config_template[key]}
+                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output},{result_fact_summary},按照如下模板撰写：{config_template[key]}
                 """
             for key in questions_quesx_keys
         }
 
         writer_prompt = {
             "eda": f"""
-                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output},按照如下模板撰写：{config_template["eda"]}
+                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output},{result_fact_summary},按照如下模板撰写：{config_template["eda"]}
                 """,
             **quesx_writer_prompt,
             "sensitivity_analysis": f"""
-                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output},按照如下模板撰写：{config_template["sensitivity_analysis"]}
+                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output},{result_fact_summary},按照如下模板撰写：{config_template["sensitivity_analysis"]}
                     注意：敏感性分析不是新增题目问题。若题目重述只列出两问，不要在正文、图题或表题中称其为“问题三/问题3”；如图片路径历史上含“问题3_”，括号中的路径保持不变，方括号中的图题和正文表述改写为“灵敏度分析_...”或“扩展分析_...”。
                 """,
         }

@@ -54,6 +54,15 @@
   - `latex_project/main.pdf` 已生成
   - 该任务使用 `mimo-v2.5` 真实接口完成轻量线性规划题，最优结果为
     `A=40, B=20, profit=2200`，机器时间增加 10 小时后利润约 `2366.67`。
+- 2026-07-09 针对当前多 PR 风险修复分支重建 Docker 后，基础服务烟雾验证通过：
+  `docker compose up --build -d`、前端入口 `http://127.0.0.1:5173/`、后端
+  docs 代理 `http://127.0.0.1:5173/api/docs`、容器内后端单测与
+  `ruff check app` 均可运行通过。完整真实建模 smoke 暂被外部 LLM provider
+  阻塞，最新任务 `20260709-013744-28a20cdb` 在 Coordinator 阶段连续重试后失败：
+  `403 GROUP_DISABLED` / `API Key 所属分组已停用`；任务目录仅生成
+  `task_status.json` 和字体文件，无 `res.md`、`res.json`、`res.docx`、
+  `candidate_manifest.json` 或 checkpoint。恢复有效 key 后需重跑项目规则中的
+  轻量线性规划题，验收 `/tasks` 为 `completed` 且主交付文件存在。
 - `cumcm2026` 是基于 2026 修订稿规范实现的暂定模板，不是官方最终 DOCX/LaTeX 模板包。
 - 主 PDF 导出会在摘要/关键词后做 PDF-only 分页，支持裸 `关键词：...` 与
   `**关键词**：...`，保证摘要页独占第一页、正文从第二页开始；该分页不写回

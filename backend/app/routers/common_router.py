@@ -12,6 +12,7 @@ from app.utils.common_utils import WORK_DIR_ROOT, ensure_safe_task_id, get_confi
 from app.schemas.enums import CompTemplate
 from app.services.redis_manager import redis_manager
 from app.services.task_status import read_task_status
+from app.services.token_usage import read_token_usage
 from app.utils.log_util import logger
 
 router = APIRouter()
@@ -84,6 +85,44 @@ def _file_has_content(path: str) -> bool:
     return os.path.isfile(path) and os.path.getsize(path) > 0
 
 
+def _feature_guardrail_warnings() -> list[dict[str, str]]:
+    """返回配置存在但主工作流尚未接入的功能警告。"""
+    warnings: list[dict[str, str]] = []
+    if settings.RAG_ENABLED:
+        warnings.append(
+            {
+                "feature": "RAG_ENABLED",
+                "status": "config_only",
+                "message": "RAG 配置已启用，但 ChromaDB/Rerank 检索尚未接入主工作流。",
+            }
+        )
+    if settings.HIL_ENABLED:
+        warnings.append(
+            {
+                "feature": "HIL_ENABLED",
+                "status": "config_only",
+                "message": "通用 HIL 配置尚未接入主工作流；当前可用的是 HUMAN_MODEL_GATE_ENABLED 建模方案门禁。",
+            }
+        )
+    if getattr(settings, "FALLBACK_ENABLED", False):
+        warnings.append(
+            {
+                "feature": "FALLBACK_ENABLED",
+                "status": "config_only",
+                "message": "Fallback Hand Off 尚未接入主工作流；当前只有基础重试和错误反思。",
+            }
+        )
+    if getattr(settings, "EVALUATOR_ENABLED", False):
+        warnings.append(
+            {
+                "feature": "EVALUATOR_ENABLED",
+                "status": "config_only",
+                "message": "Evaluator/Feedback Rerun 尚未接入主工作流。",
+            }
+        )
+    return warnings
+
+
 @router.get("/")
 async def root():
     return {"message": "Hello World"}
@@ -115,16 +154,25 @@ async def get_task_messages(task_id: str):
 
 @router.get("/track")
 async def track(task_id: str):
-    # 获取任务的token使用情况
-
-    pass
+    """获取任务的 token 使用聚合统计。"""
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        return read_token_usage(safe_task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="任务不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/status")
 async def get_service_status():
     """获取后端和 Redis 的运行状态。"""
     status = {
-        "backend": {"status": "running", "message": "Backend service is running"},
+        "backend": {
+            "status": "running",
+            "message": "Backend service is running",
+            "feature_warnings": _feature_guardrail_warnings(),
+        },
         "redis": {"status": "unknown", "message": "Redis connection status unknown"}
     }
 

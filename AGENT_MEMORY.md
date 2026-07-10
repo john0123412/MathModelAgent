@@ -13,6 +13,9 @@
   - `pdf_visual_check.json`
   - `submission_audit_report.json`
 - `latex_project/` 是候选 LaTeX sidecar，不是主交付链路。
+- `GET /download_all_url` 会按需生成任务目录下的 `all.zip`，用于下载当前任务工作区文件；
+  打包时会排除已有 `all.zip`、临时文件和常见缓存目录，并设置单文件/总大小上限，避免
+  意外打包过大目录。
 - LaTeX sidecar 当前已修复 CUMCM 图片路径、新版 pandoc `\pandocbounded`
   图片宏、notebook `# Cell n` 原始代码段拆分问题；导出时会扫描 Markdown/LaTeX
   中引用的本地图片，将可找到的图片复制到 `latex_project/` 和
@@ -61,6 +64,15 @@
   - `submission_audit_report.json` 经 DOCX 后收尾刷新后为 `PASS`
   - 该任务使用 `mimo-v2.5` 真实接口完成轻量线性规划题，最优结果为
     `A=40, B=20, profit=2200`，机器时间增加 10 小时后利润约 `2366.67`。
+- 2026-07-09 针对当前多 PR 风险修复分支重建 Docker 后，基础服务烟雾验证通过：
+  `docker compose up --build -d`、前端入口 `http://127.0.0.1:5173/`、后端
+  docs 代理 `http://127.0.0.1:5173/api/docs`、容器内后端单测与
+  `ruff check app` 均可运行通过。完整真实建模 smoke 暂被外部 LLM provider
+  阻塞，最新任务 `20260709-014347-c9ed2ddd` 在 Coordinator 阶段连续重试后失败：
+  `403 GROUP_DISABLED` / `API Key 所属分组已停用`；任务目录仅生成
+  `task_status.json` 和字体文件，无 `res.md`、`res.json`、`res.docx`、
+  `candidate_manifest.json` 或 checkpoint。恢复有效 key 后需重跑项目规则中的
+  轻量线性规划题，验收 `/tasks` 为 `completed` 且主交付文件存在。
 - 2026-07-09 使用用户提供的新 `xiaomimimo` Responses provider key 后，模型验证
   `mimo-v2.5` + `https://api.xiaomimimo.com/v1` 成功，并完成一次真实轻量任务
   `20260709-091916-1ff165da`。随后在修复分支 `codex/refresh-audit-after-docx`
@@ -98,6 +110,7 @@
   同标签句子中的数值与 CSV 不一致，预检硬门禁 `FAIL`。没有可识别结果 CSV 时
   不阻断；符号表中的 LaTeX 下标数字（如 `\lambda_1`）不作为结果数值参与冲突判断。
   因此该检查只能拦截已结构化事实的明显冲突，不替代完整数学复核。
+  不阻断，因此该检查只能拦截已结构化事实的明显冲突，不替代完整数学复核。
   `flows.get_writer_prompt` 会把同一批结构化结果事实注入写作手提示，要求正文关键
   数值优先使用结果 CSV，减少 Writer 在摘要/求解/敏感性段落中复述错误数字。
   若正文已经说明题目参数是确定性常量、无随机样本数据，后处理会把
@@ -116,6 +129,18 @@
 - LLM provider 单次请求超时由 `LLM_REQUEST_TIMEOUT_SECONDS` 控制，默认 90 秒；
   用于兼容较慢的 OpenAI-compatible/Responses/Anthropic 端点，避免建模手或写作手
   在正常长响应时过早 `Request timed out`。
+- `/status` 的 `backend.feature_warnings` 会报告配置存在但尚未接入主工作流的能力，
+  例如 `RAG_ENABLED`、通用 `HIL_ENABLED`、`FALLBACK_ENABLED`、`EVALUATOR_ENABLED`；
+  这些 warning 不阻断服务启动，只用于避免把配置开关误判为已完成功能。
+- `/save-api-config` 只把验证后的模型配置应用到当前后端进程的 `settings`，
+  不写回 `.env.dev`，响应中会明确 `scope=runtime`、`persisted=false`；
+  空字段不会覆盖 `.env.dev` 已加载的默认值，且响应不回显 API key。前端 Pinia
+  store 仍会在浏览器本地持久化用户填写的 API key，这是浏览器侧行为，不代表后端落盘。
+- LLM 成功调用后会在任务目录写入 `token_usage.json`，只保存按 agent 聚合的
+  `chat_count`、`prompt_tokens`、`completion_tokens`、`total_tokens` 和模型名，
+  不保存 prompt、completion、tool args、API key 或 base_url；`GET /track`
+  读取该文件返回聚合统计。统计写入是 best-effort，失败不会让已成功的 LLM 调用重试；
+  当前只保证单进程内加锁累加，多 worker/多进程场景不作为强一致账单依据。
 - Anthropic provider 对 `api.anthropic.com` 官方地址继续使用 Anthropic SDK
   `api_key` 认证；对非官方 Anthropic 兼容网关改用 Bearer `auth_token`，
   以兼容 `ANTHROPIC_AUTH_TOKEN` 风格服务。2026-07-09 用户提供的 CloudBase
@@ -142,6 +167,7 @@
   `tex_export_status.compile_success=true`、`res.docx`、`candidate_manifest.json`
   均生成；`submission_audit_report=WARN`，唯一 WARN 是 Docker 环境字体 fallback，
   按项目规则不视为主流程失败。
+   该 smoke 只证明 provider/导出链路可用；preflight/audit 仍不等同于数学正确性证明。
 - 真实提交前仍需人工复核论文内容和 PDF 排版。
 
 ## 接手时禁止全盘扫描

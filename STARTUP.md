@@ -507,6 +507,9 @@ docker compose exec backend uv run python -m app.tools.submission_audit --work-d
 - 若 `paper_preflight_report.json = CONDITIONAL_PASS`，`submission_audit_report.json`
   会降级为 `WARN`，表示主交付已生成但仍有条件项需要人工接受或修正；正式提交前优先修到
   `PASS`。
+- `paper_preflight_report.json -> checks.images.unused_generated = []`。已登记在附录A
+  支撑材料表中的 `图片文件` 不算 unused；真正未引用且未登记的生成图仍需清理、引用或接受
+  conditional 风险。
 - `pdf_visual_check.json = PASS`。
 - `submission_audit_report.json = PASS`（严格字体门禁）。
 - PDF 文本中不应出现 `print(`、`printf`、`console.log` 等批量控制台输出。
@@ -564,6 +567,8 @@ B 需要 1 小时机器时间、2 小时人工时间，利润 30 元；
 - 工作目录生成 `res.md`、`res.json`、`res.docx`、`res.pdf`、`candidate_manifest.json`
 - `paper_preflight_report.json = PASS`；若为 `CONDITIONAL_PASS`，需人工确认条件项，
   `submission_audit_report.json` 会是 `WARN`
+- `paper_preflight_report.json -> checks.images.unused_generated = []`，除非明确接受未引用且
+  未登记图片的 conditional 风险
 - `export_status.json -> pdf.success = true`
 - `pdf_visual_check.json = PASS`
 - `pdf_visual_check.json -> checks.abstract_first_page/body_page_limit/content_margin/no_table_of_contents/submission_anonymity`

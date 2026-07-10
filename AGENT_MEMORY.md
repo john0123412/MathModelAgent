@@ -13,6 +13,9 @@
   - `pdf_visual_check.json`
   - `submission_audit_report.json`
 - `latex_project/` 是候选 LaTeX sidecar，不是主交付链路。
+- `GET /download_all_url` 会按需生成任务目录下的 `all.zip`，用于下载当前任务工作区文件；
+  打包时会排除已有 `all.zip`、临时文件和常见缓存目录，并设置单文件/总大小上限，避免
+  意外打包过大目录。
 - LaTeX sidecar 当前已修复 CUMCM 图片路径、新版 pandoc `\pandocbounded`
   图片宏、notebook `# Cell n` 原始代码段拆分问题；导出时会扫描 Markdown/LaTeX
   中引用的本地图片，将可找到的图片复制到 `latex_project/` 和
@@ -111,6 +114,15 @@
 - LLM provider 单次请求超时由 `LLM_REQUEST_TIMEOUT_SECONDS` 控制，默认 90 秒；
   用于兼容较慢的 OpenAI-compatible/Responses/Anthropic 端点，避免建模手或写作手
   在正常长响应时过早 `Request timed out`。
+- `/save-api-config` 只把验证后的模型配置应用到当前后端进程的 `settings`，
+  不写回 `.env.dev`，响应中会明确 `scope=runtime`、`persisted=false`；
+  空字段不会覆盖 `.env.dev` 已加载的默认值，且响应不回显 API key。前端 Pinia
+  store 仍会在浏览器本地持久化用户填写的 API key，这是浏览器侧行为，不代表后端落盘。
+- LLM 成功调用后会在任务目录写入 `token_usage.json`，只保存按 agent 聚合的
+  `chat_count`、`prompt_tokens`、`completion_tokens`、`total_tokens` 和模型名，
+  不保存 prompt、completion、tool args、API key 或 base_url；`GET /track`
+  读取该文件返回聚合统计。统计写入是 best-effort，失败不会让已成功的 LLM 调用重试；
+  当前只保证单进程内加锁累加，多 worker/多进程场景不作为强一致账单依据。
 - Anthropic provider 对 `api.anthropic.com` 官方地址继续使用 Anthropic SDK
   `api_key` 认证；对非官方 Anthropic 兼容网关改用 Bearer `auth_token`，
   以兼容 `ANTHROPIC_AUTH_TOKEN` 风格服务。2026-07-09 用户提供的 CloudBase
@@ -130,6 +142,7 @@
   `26.7/13.3` 与 CSV 中 `16.67/6.67` 冲突而 `FAIL`；这说明旧报告的 PASS 不能代表
   当前代码门禁结果。该 smoke 只证明 provider/导出链路可用；preflight/audit 仍不等同
   于数学正确性证明。
+   该 smoke 只证明 provider/导出链路可用；preflight/audit 仍不等同于数学正确性证明。
 - 真实提交前仍需人工复核论文内容和 PDF 排版。
 
 ## 接手时禁止全盘扫描

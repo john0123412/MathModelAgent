@@ -58,6 +58,12 @@ docker compose exec backend uv run python -m ruff check app
 - `backend/.env.dev` 已配置好 API Key
 - Docker Desktop 正在运行
 
+WebUI 侧边栏的 API Key 配置会通过 `/save-api-config` 应用到当前后端进程，
+接口响应会标记 `scope=runtime`、`persisted=false`。它不会写回
+`backend/.env.dev`；后端或容器重启后仍以 `.env.dev` 或系统环境变量为准。
+注意：前端 Pinia store 仍会在浏览器本地持久化用户填写的 API key；这里的
+`persisted=false` 只表示后端没有把配置写入服务器文件。
+
 ### 构建说明
 
 后端镜像在 Python 基础镜像内通过带超时和重试的 `pip install uv==0.11.14`
@@ -125,6 +131,13 @@ pnpm run dev
 
 ## 功能说明
 
+### 下载任务工作区文件
+
+文件面板支持单文件下载和“下载全部”。后端 `GET /download_all_url?task_id=...`
+会在对应任务目录内按需生成 `all.zip`，然后返回 `/static/<task_id>/all.zip`
+下载链接。压缩包会排除已有 `all.zip`、临时文件和常见缓存目录，并限制单文件和
+总打包大小，避免意外打包过大的工作目录。
+
 ### 无外部数据题目的 EDA 边界
 
 当任务工作目录没有 `.csv` / `.xlsx` 等外部数据集时，代码手不应为了 EDA 随机生成样本
@@ -155,6 +168,22 @@ pnpm run dev
 2. Agent 在每次 LLM 调用前检查队列
 3. 用户消息作为额外上下文注入到 `chat_history`
 4. 前端实时回显用户输入
+
+### Token 用量统计
+
+每次 LLM 成功调用后，后端会在任务目录写入 `token_usage.json`，只保存按 agent
+聚合的 `chat_count`、`prompt_tokens`、`completion_tokens`、`total_tokens`
+和模型名，不保存 prompt、completion、tool args、API key 或 base_url。
+可通过以下接口读取：
+
+```powershell
+curl.exe "http://127.0.0.1:8000/track?task_id=<task_id>"
+```
+
+该统计用于运行过程观察和粗略成本估算，不等同于模型供应商账单。
+统计写入是 best-effort：写入失败不会触发 LLM 请求重试，也不会阻断任务继续运行。
+当前只保证单进程内加锁累加；如果后续部署为多 worker/多进程，该文件不应作为强一致
+成本账单依据。
 
 ### 导出模板选项（Export Profile）
 

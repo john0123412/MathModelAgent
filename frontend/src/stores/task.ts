@@ -1,6 +1,7 @@
 import { getTaskMessages } from "@/apis/commonApi";
 import { cancelTask as cancelTaskAPI } from "@/apis/commonApi";
 import { AgentType } from "@/utils/enum";
+import { getSafeErrorMessage } from "@/utils/safeError";
 import type {
 	CoderMessage,
 	CoordinatorMessage,
@@ -192,7 +193,7 @@ export const useTaskStore = defineStore("task", () => {
 			const validMessages = (response.data ?? []).filter(isMessagePayload);
 			mergeMessages(taskId, validMessages);
 		} catch (error) {
-			console.error("加载任务历史消息失败:", error);
+			console.error("加载任务历史消息失败:", getSafeErrorMessage(error));
 		}
 	}
 
@@ -211,7 +212,7 @@ export const useTaskStore = defineStore("task", () => {
 			}
 			return res.data;
 		} catch (error) {
-			console.error("取消任务失败:", error);
+			console.error("取消任务失败:", getSafeErrorMessage(error));
 			return { success: false, message: "取消请求失败" };
 		}
 	}

@@ -19,8 +19,22 @@ from app.core.llm.providers.base import BaseProvider
 from app.core.llm.providers.openai_chat import OpenAIChatProvider
 from app.core.llm.providers.openai_responses import OpenAIResponsesProvider
 from app.core.llm.providers.anthropic import AnthropicProvider
+from app.services.token_usage import record_token_usage
 
 DEFAULT_LLM_MAX_RETRIES = 3
+
+
+def _record_token_usage_best_effort(
+    task_id: str,
+    agent_name: str,
+    model: str | None,
+    response: StandardResponse,
+) -> None:
+    """记录 token usage；统计失败不能影响 LLM 主调用。"""
+    try:
+        record_token_usage(task_id, agent_name, model, response.usage)
+    except Exception as exc:
+        logger.warning(f"Token usage 统计写入失败，已跳过: {exc}")
 
 
 class LLM:
@@ -97,6 +111,12 @@ class LLM:
                 )
                 logger.info(f"API返回: content={response.content!r}, tool_calls={len(response.tool_calls)}")
                 self.chat_count += 1
+                _record_token_usage_best_effort(
+                    self.task_id,
+                    agent_name,
+                    self.model,
+                    response,
+                )
                 await self.send_message(response, agent_name, sub_title)
                 return response
             except Exception as e:
@@ -200,5 +220,11 @@ async def simple_chat(model: LLM, history: list) -> str:
         model=model.model,  # type: ignore[arg-type]
         api_key=model.api_key,  # type: ignore[arg-type]
         base_url=model.base_url,
+    )
+    _record_token_usage_best_effort(
+        model.task_id,
+        "simple_chat",
+        model.model,
+        response,
     )
     return response.content or ""

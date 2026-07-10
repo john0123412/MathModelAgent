@@ -21,6 +21,7 @@ from app.utils.common_utils import (
     safe_join_work_dir,
 )
 from app.tools.candidate_exporter import write_candidate_manifest
+from app.tools.submission_audit import write_submission_audit_report
 import os
 import asyncio
 import shutil
@@ -49,9 +50,14 @@ def _finalize_docx_and_manifest(
     task_id: str,
     export_profile: ExportProfile | str | None = DEFAULT_MODELING_EXPORT_PROFILE,
 ) -> None:
-    """生成 DOCX 后刷新候选清单，确保 manifest 反映最终产物。"""
+    """生成 DOCX 后刷新审核报告和候选清单，确保收尾产物不读取旧状态。"""
     md_2_docx(task_id, export_profile=export_profile)
-    write_candidate_manifest(get_work_dir(task_id), task_id)
+    work_dir = get_work_dir(task_id)
+    try:
+        write_submission_audit_report(work_dir)
+    except Exception as e:
+        logger.error(f"submission_audit_report 刷新失败: {e}")
+    write_candidate_manifest(work_dir, task_id)
 
 
 class ValidateApiKeyRequest(BaseModel):

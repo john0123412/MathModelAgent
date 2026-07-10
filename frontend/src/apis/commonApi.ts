@@ -78,11 +78,32 @@ export function resumeTask(task_id: string) {
 	);
 }
 
+/**
+ * 确认建模方案并从检查点继续任务
+ * @param task_id 任务ID
+ * @param comment 审批备注
+ */
+export function approveModeling(task_id: string, comment = "") {
+	return request.post<{ task_id: string; status: string }>(
+		`/modeling/${task_id}/approve-modeling`,
+		{ comment },
+	);
+}
+
 /** 任务信息 */
 export interface TaskInfo {
 	task_id: string;
 	title: string;
-	status: "completed" | "running" | "interrupted" | "unknown";
+	status:
+		| "completed"
+		| "pending"
+		| "running"
+		| "interrupted"
+		| "waiting_review"
+		| "resuming"
+		| "failed"
+		| "cancelled"
+		| "unknown";
 	created_at: string;
 	has_result: boolean;
 	has_pdf: boolean;

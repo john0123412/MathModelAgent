@@ -61,6 +61,15 @@
   - `submission_audit_report.json` 经 DOCX 后收尾刷新后为 `PASS`
   - 该任务使用 `mimo-v2.5` 真实接口完成轻量线性规划题，最优结果为
     `A=40, B=20, profit=2200`，机器时间增加 10 小时后利润约 `2366.67`。
+- 2026-07-09 针对当前多 PR 风险修复分支重建 Docker 后，基础服务烟雾验证通过：
+  `docker compose up --build -d`、前端入口 `http://127.0.0.1:5173/`、后端
+  docs 代理 `http://127.0.0.1:5173/api/docs`、容器内后端单测与
+  `ruff check app` 均可运行通过。完整真实建模 smoke 暂被外部 LLM provider
+  阻塞，最新任务 `20260709-014347-c9ed2ddd` 在 Coordinator 阶段连续重试后失败：
+  `403 GROUP_DISABLED` / `API Key 所属分组已停用`；任务目录仅生成
+  `task_status.json` 和字体文件，无 `res.md`、`res.json`、`res.docx`、
+  `candidate_manifest.json` 或 checkpoint。恢复有效 key 后需重跑项目规则中的
+  轻量线性规划题，验收 `/tasks` 为 `completed` 且主交付文件存在。
 - 2026-07-09 使用用户提供的新 `xiaomimimo` Responses provider key 后，模型验证
   `mimo-v2.5` + `https://api.xiaomimimo.com/v1` 成功，并完成一次真实轻量任务
   `20260709-091916-1ff165da`。随后在修复分支 `codex/refresh-audit-after-docx`
@@ -113,6 +122,9 @@
   即显示审批按钮；审批后任务恢复并完成。`modeling_decision.json=approved`，checkpoint、
   变量快照、Markdown/JSON/DOCX/PDF、manifest 均生成，preflight、PDF 视觉检查和 LaTeX
   编译通过；submission audit 仅因 Docker fallback 字体为 `WARN`。
+- `/status` 的 `backend.feature_warnings` 会报告配置存在但尚未接入主工作流的能力，
+  例如 `RAG_ENABLED`、通用 `HIL_ENABLED`、`FALLBACK_ENABLED`、`EVALUATOR_ENABLED`；
+  这些 warning 不阻断服务启动，只用于避免把配置开关误判为已完成功能。
 - `/save-api-config` 只把验证后的模型配置应用到当前后端进程的 `settings`，
   不写回 `.env.dev`，响应中会明确 `scope=runtime`、`persisted=false`；
   空字段不会覆盖 `.env.dev` 已加载的默认值，且响应不回显 API key。前端 Pinia

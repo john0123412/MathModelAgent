@@ -45,6 +45,10 @@ WebSocket 请求 `ws://localhost:5173/ws/task/<task_id>` 会被转发到后端
 `http://127.0.0.1:8000/docs`；若宿主机端口发布异常，以 `5173/api/docs`
 作为 Docker 验证入口。
 
+`/status` 的 `backend.feature_warnings` 会列出配置存在但尚未接入主工作流的能力，
+例如 `RAG_ENABLED`、通用 `HIL_ENABLED`、`FALLBACK_ENABLED`、`EVALUATOR_ENABLED`。
+这些 warning 不代表后端异常，只表示对应开关仍是配置/占位，不能当作已完成能力验收。
+
 后端 Docker 内验证：
 
 ```powershell

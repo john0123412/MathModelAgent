@@ -21,6 +21,7 @@ from app.utils.common_utils import (
     safe_join_work_dir,
 )
 from app.tools.candidate_exporter import write_candidate_manifest
+from app.tools.submission_audit import write_submission_audit_report
 import os
 import asyncio
 import shutil
@@ -49,9 +50,14 @@ def _finalize_docx_and_manifest(
     task_id: str,
     export_profile: ExportProfile | str | None = DEFAULT_MODELING_EXPORT_PROFILE,
 ) -> None:
-    """生成 DOCX 后刷新候选清单，确保 manifest 反映最终产物。"""
+    """生成 DOCX 后刷新审核报告和候选清单，确保收尾产物不读取旧状态。"""
     md_2_docx(task_id, export_profile=export_profile)
-    write_candidate_manifest(get_work_dir(task_id), task_id)
+    work_dir = get_work_dir(task_id)
+    try:
+        write_submission_audit_report(work_dir)
+    except Exception as e:
+        logger.error(f"submission_audit_report 刷新失败: {e}")
+    write_candidate_manifest(work_dir, task_id)
 
 
 class ValidateApiKeyRequest(BaseModel):
@@ -83,6 +89,13 @@ class SaveApiConfigRequest(BaseModel):
     openalex_email: str
 
 
+class SaveApiConfigResponse(BaseModel):
+    success: bool
+    message: str
+    scope: str
+    persisted: bool
+
+
 def _require_safe_task_id(task_id: str) -> str:
     """验证 URL 中的任务 ID，非法时返回 400。"""
     try:
@@ -106,10 +119,10 @@ def _resolve_example_dir(source: str) -> str:
     return example_dir
 
 
-@router.post("/save-api-config")
+@router.post("/save-api-config", response_model=SaveApiConfigResponse)
 async def save_api_config(request: SaveApiConfigRequest):
     """
-    保存验证成功的 API 配置到 settings
+    保存验证成功的 API 配置到当前进程 settings，不写入 .env.dev。
     """
     try:
         # 更新各个模块的设置：仅当字段非空时才覆盖，空字段保留 .env.dev 中
@@ -165,7 +178,12 @@ async def save_api_config(request: SaveApiConfigRequest):
         if request.openalex_email:
             settings.OPENALEX_EMAIL = request.openalex_email
 
-        return {"success": True, "message": "配置保存成功"}
+        return {
+            "success": True,
+            "message": "配置已保存到当前后端进程，重启后需重新配置或写入 .env.dev",
+            "scope": "runtime",
+            "persisted": False,
+        }
     except Exception as e:
         logger.error(f"保存配置失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"保存配置失败: {str(e)}")

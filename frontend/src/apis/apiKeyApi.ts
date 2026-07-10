@@ -21,26 +21,38 @@ export interface SaveApiConfigRequest {
 		baseUrl: string;
 		modelId: string;
 		apiType: string;
+		contextWindow?: number;
 	};
 	modeler: {
 		apiKey: string;
 		baseUrl: string;
 		modelId: string;
 		apiType: string;
+		contextWindow?: number;
 	};
 	coder: {
 		apiKey: string;
 		baseUrl: string;
 		modelId: string;
 		apiType: string;
+		contextWindow?: number;
 	};
 	writer: {
 		apiKey: string;
 		baseUrl: string;
 		modelId: string;
 		apiType: string;
+		contextWindow?: number;
 	};
 	openalex_email: string;
+}
+
+/** 保存 API 配置响应 */
+export interface SaveApiConfigResponse {
+	success: boolean;
+	message: string;
+	scope: "runtime";
+	persisted: boolean;
 }
 
 /** 验证 OpenAlex Email 请求参数 */
@@ -74,12 +86,9 @@ export function validateOpenalexEmail(params: ValidateOpenalexEmailRequest) {
 }
 
 /**
- * 保存 API 配置到后端
+ * 保存 API 配置到当前后端进程
  * @param params API 配置参数
  */
 export function saveApiConfig(params: SaveApiConfigRequest) {
-	return request.post<{ success: boolean; message: string }>(
-		"/save-api-config",
-		params,
-	);
+	return request.post<SaveApiConfigResponse>("/save-api-config", params);
 }

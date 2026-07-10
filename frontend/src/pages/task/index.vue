@@ -19,6 +19,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import FilesSheet from "@/pages/task/components/FileSheet.vue";
 import { useTaskStore } from "@/stores/task";
+import { getSafeErrorMessage } from "@/utils/safeError";
 import { onBeforeUnmount, onMounted, ref } from "vue";
 
 // ---- Props ----

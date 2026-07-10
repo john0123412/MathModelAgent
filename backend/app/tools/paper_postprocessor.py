@@ -62,7 +62,7 @@ MARKDOWN_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}
 EXTRA_PROBLEM_LABEL_RE = re.compile(r"问题(?P<number>\d+|[一二三四五六七八九十]+)(?P<suffix>[_、\s]?)")
 CLAIM_SENTENCE_RE = re.compile(r"[^。！？.!?\n]*(?:最优|利润|提高|增加|降低|结果表明|敏感性|影子价格|准确率|误差)[^。！？.!?\n]*[。！？.!?]?")
 NUMERIC_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:%|元|小时|件|吨|亩|分|倍|年|万元)?")
-PLAIN_NUMBER_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
+PLAIN_NUMBER_RE = re.compile(r"(?<![A-Za-z_\\])[-+]?\d+(?:\.\d+)?(?![A-Za-z_])")
 STRONG_WORDING_RE = re.compile(r"证明|唯一|显著优于|最可靠|精确预测")
 RANDOM_SIMULATION_RE = re.compile(
     r"Monte[\s_-]*Carlo|蒙特卡洛|随机模拟|随机扰动|随机生成样本|模拟样本|模拟数据集",
@@ -1073,6 +1073,23 @@ def _scan_generated_images(work_dir: str) -> list[str]:
     return sorted(images)
 
 
+def _support_material_image_paths(markdown: str) -> set[str]:
+    """Return image files listed in Appendix A support materials."""
+    paths: set[str] = set()
+    match = SUPPORT_MATERIAL_HEADING_RE.search(markdown)
+    if not match:
+        return paths
+    next_heading = HEADING_RE.search(markdown, match.end())
+    section = markdown[match.end() : next_heading.start() if next_heading else len(markdown)]
+    for line in section.splitlines():
+        if "图片文件" not in line or "|" not in line:
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) >= 2 and cells[1] == "图片文件" and cells[0]:
+            paths.add(cells[0].replace("\\", "/"))
+    return paths
+
+
 def _plain_text(text: str) -> str:
     text = _without_fenced_code_blocks(text)
     text = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", text)
@@ -1469,14 +1486,15 @@ def build_figure_usage(work_dir: str, markdown: str) -> dict:
         generated = [
             image for image in generated if not _is_random_simulation_asset(image)
         ]
-    referenced_set = {item["path"] for item in referenced}
+    accounted_set = {item["path"] for item in referenced}
+    accounted_set.update(_support_material_image_paths(markdown))
     return {
         "generated_at": datetime.datetime.now().isoformat(),
         "referenced": referenced,
         "generated": generated,
         "missing": [item["path"] for item in referenced if not item["exists"]],
         "unused_generated": [
-            image for image in generated if image not in referenced_set
+            image for image in generated if image not in accounted_set
         ],
     }
 
@@ -1877,6 +1895,7 @@ def build_preflight_report(
             image for image in generated_images if not _is_random_simulation_asset(image)
         ]
     used_image_set = {path.replace("\\", "/") for path in image_paths}
+    used_image_set.update(_support_material_image_paths(markdown))
     unused_generated_images = [
         image for image in generated_images if image not in used_image_set
     ]

@@ -838,6 +838,47 @@ class TestPreparePaperMarkdown(unittest.TestCase):
         self.assertTrue(check["passed"])
         self.assertEqual(check["conflicts"], [])
 
+    def test_preflight_ignores_symbol_subscripts_in_result_consistency(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(
+                os.path.join(work_dir, "敏感性分析结果汇总表.csv"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                f.write("分析项目,数值,单位,备注\n机器时间影子价格,16.67,元/小时,理论计算\n")
+            markdown = (
+                "# 方案\n\n"
+                "## 摘要\n\n"
+                "本文围绕生产优化问题建立线性规划模型，结合资源约束、利润目标和敏感性分析给出可复核的生产方案。"
+                "模型首先对机器时间和人工时间进行约束刻画，随后通过目标函数求解最大利润，并在结果分析中讨论资源变化对利润的影响。"
+                "结果表明，机器时间影子价格为16.67元/小时。\n\n"
+                "关键词：线性规划；生产优化；敏感性分析；资源约束\n\n"
+                "# 一、问题重述\n\n正文。\n\n"
+                "# 二、问题分析\n\n正文。\n\n"
+                "# 三、模型假设\n\n正文。\n\n"
+                "# 四、符号说明\n\n"
+                "| 符号 | 含义 | 单位 |\n"
+                "| --- | --- | --- |\n"
+                "| $\\lambda_1$ | 机器时间影子价格 | 元/小时 |\n\n"
+                "# 五、模型的建立与求解\n\n正文。\n\n"
+                "# 六、模型的分析与检验\n\n正文。\n\n"
+                "# 七、模型的评价、改进与推广\n\n正文。\n\n"
+                "## 参考文献\n\n[1] 文献。\n\n"
+                "# 附录\n\n"
+                "## 附录A 支撑材料文件列表\n\n本论文没有支撑材料。\n\n"
+                "## 附录B 源程序代码\n\n```python\nprint('ok')\n```\n"
+            )
+
+            report = build_preflight_report(
+                work_dir=work_dir,
+                markdown=markdown,
+                code_sources=["problem.py"],
+            )
+
+        check = report["checks"]["result_consistency"]
+        self.assertTrue(check["passed"])
+        self.assertEqual(check["conflicts"], [])
+
     def test_preflight_fails_swapped_shadow_prices_in_respective_sentence(self):
         with tempfile.TemporaryDirectory() as work_dir:
             with open(
@@ -1289,6 +1330,43 @@ class TestEnhancedPreflightChecks(unittest.TestCase):
         self.assertEqual(report["status"], "CONDITIONAL_PASS")
         self.assertEqual(report["checks"]["images"]["severity"], "conditional")
         self.assertIn("figures/exploratory.png", report["checks"]["images"]["unused_generated"])
+
+    def test_support_material_image_is_accounted_without_inline_reference(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(os.path.join(work_dir, "exploratory.png"), "wb") as f:
+                f.write(b"png")
+
+            markdown = (
+                "# 基于优化模型的生产方案研究\n\n"
+                "## 摘要\n\n"
+                "本文围绕生产优化问题建立线性规划模型，结合资源约束、利润目标和敏感性分析给出可复核的生产方案。"
+                "模型首先对机器时间和人工时间进行约束刻画，随后通过目标函数求解最大利润，并在结果分析中讨论资源变化对利润的影响。"
+                "结果表明，所给方案能够在约束范围内获得较高利润，同时机器时间增加会带来边际收益变化。\n\n"
+                "关键词：线性规划；生产优化；敏感性分析；资源约束\n\n"
+                "# 一、问题重述\n\n正文。\n\n"
+                "# 二、问题分析\n\n正文。\n\n"
+                "# 三、模型假设\n\n正文。\n\n"
+                "# 四、符号说明\n\n正文。\n\n"
+                "# 五、模型的建立与求解\n\n正文。\n\n"
+                "# 六、模型的分析与检验\n\n正文。\n\n"
+                "# 七、模型的评价、改进与推广\n\n正文。\n\n"
+                "## 参考文献\n\n[1] 文献。\n\n"
+                "# 附录\n\n"
+                "## 附录A 支撑材料文件列表\n\n"
+                "| 文件名 | 类型 |\n"
+                "| --- | --- |\n"
+                "| exploratory.png | 图片文件 |\n\n"
+                "## 附录B 源程序代码\n\n```python\nprint('ok')\n```\n"
+            )
+
+            report = build_preflight_report(
+                work_dir=work_dir,
+                markdown=markdown,
+                code_sources=["problem.py"],
+            )
+
+        self.assertEqual(report["checks"]["images"]["unused_generated"], [])
+        self.assertEqual(report["checks"]["images"]["severity"], "pass")
 
 
 if __name__ == "__main__":

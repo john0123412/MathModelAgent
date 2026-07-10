@@ -266,6 +266,9 @@ D:\texlive\2026\bin\windows\pdfinfo.exe backend\project\work_dir\<task_id>\res.p
   后应为 `PASS`。若为 `FAIL`，先按报告里的 remediation 挂载正式字体或本机重导。
 - `paper_preflight_report.json -> checks.appendix_console_noise.passed` 应为 `true`。
   若失败，先重跑 `prepare_paper_markdown` 重建附录，再重导 DOCX/PDF。
+- `paper_preflight_report.json -> checks.images.unused_generated` 应为空。若生成图片只作为
+  支撑材料而不插入正文，必须出现在附录A支撑材料表中并标记为 `图片文件`；否则应删除、
+  插入正文引用，或人工接受 `CONDITIONAL_PASS`。
 - 可用 PyMuPDF 或其他 PDF 文本提取工具确认 `res.pdf` 中没有 `print(`、`printf`、
   `console.log` 等控制台输出痕迹。
 - `tex_export_status.json` 中 `main_uses_structured_sections=true` 时，`latex_project/main.tex`

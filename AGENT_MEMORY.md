@@ -91,6 +91,10 @@
   PDF/DOCX 图题带 `.png`/下划线等文件名痕迹、把常见英文过渡词
   `Overall`/`However` 等替换为中文表达、在正式题目数不足时把可见 `问题3_...`
   扩展分析标签和 `问题三：...` 扩展段落规范为 `灵敏度分析...`（图片路径保持原文件名）。
+  图片预检会区分正文图和支撑材料图：正文 `![](...)` 引用的图片必须存在；生成图片
+  若没有正文引用但已在附录A支撑材料表中登记为 `图片文件`，视为 accounted support
+  artifact，不再计入 `checks.images.unused_generated`；既未正文引用、也未登记的生成图片
+  仍会触发图片 conditional。
   工作流会把原题拆分出的 `quesN` 数量传给后处理，避免 Writer 自行编出的额外问题
   污染题目数判断。后处理还会清理最终稿和附录代码中可见的 `用户`、`推断`、
   `估算`、`待验证` 等提交痕迹，改为 `题目`、`核定`、`测算`、`需核验` 等正式表达。
@@ -104,6 +108,8 @@
   `paper_preflight_report.json -> checks.result_consistency` 会读取任务目录中
   结果 CSV 的结构化关键数值，目前重点检查机器时间/人工时间影子价格；如果正文
   同标签句子中的数值与 CSV 不一致，预检硬门禁 `FAIL`。没有可识别结果 CSV 时
+  不阻断；符号表中的 LaTeX 下标数字（如 `\lambda_1`）不作为结果数值参与冲突判断。
+  因此该检查只能拦截已结构化事实的明显冲突，不替代完整数学复核。
   不阻断，因此该检查只能拦截已结构化事实的明显冲突，不替代完整数学复核。
   `flows.get_writer_prompt` 会把同一批结构化结果事实注入写作手提示，要求正文关键
   数值优先使用结果 CSV，减少 Writer 在摘要/求解/敏感性段落中复述错误数字。
@@ -162,6 +168,13 @@
   `26.7/13.3` 与 CSV 中 `16.67/6.67` 冲突而 `FAIL`；这说明旧报告的 PASS 不能代表
   当前代码门禁结果。该 smoke 只证明 provider/导出链路可用；preflight/audit 仍不等同
   于数学正确性证明。
+- 2026-07-09 在 `codex/image-accounting-gate` 分支重建 Docker 后，CloudBase
+  `hy3-preview` 真实轻量 smoke 任务 `20260709-153822-846f9e0e` 完成。刷新后
+  `paper_preflight_report=PASS`、`checks.images.unused_generated=[]`、
+  `checks.result_consistency.passed=true`、`pdf_visual_check=PASS`、
+  `tex_export_status.compile_success=true`、`res.docx`、`candidate_manifest.json`
+  均生成；`submission_audit_report=WARN`，唯一 WARN 是 Docker 环境字体 fallback，
+  按项目规则不视为主流程失败。
    该 smoke 只证明 provider/导出链路可用；preflight/audit 仍不等同于数学正确性证明。
 - 真实提交前仍需人工复核论文内容和 PDF 排版。
 
@@ -236,7 +249,8 @@
   - 参考文献、附录、支撑材料、预检、claim trace。
   - 负责 `paper_preflight_report.json/md`。
   - 检查正文引用编号是否都有文末参考文献条目、表格是否有编号标题、图片图题是否
-    避免文件名痕迹、常见英文过渡词是否已转为中文、扩展分析是否被误标为不存在的“问题3”。
+    避免文件名痕迹、生成图片是否已被正文引用或附录A支撑材料表登记、常见英文过渡词
+    是否已转为中文、扩展分析是否被误标为不存在的“问题3”。
 - `backend/app/tools/pdf_visual_checker.py`
   - PDF 后验视觉检查。
   - 检查 A4、非空、文本可提取、20MB 文件大小、摘要首页、无目录、

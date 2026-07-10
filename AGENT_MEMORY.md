@@ -114,6 +114,11 @@
 - `/status` 的 `backend.feature_warnings` 会报告配置存在但尚未接入主工作流的能力，
   例如 `RAG_ENABLED`、通用 `HIL_ENABLED`、`FALLBACK_ENABLED`、`EVALUATOR_ENABLED`；
   这些 warning 不阻断服务启动，只用于避免把配置开关误判为已完成功能。
+- LLM 成功调用后会在任务目录写入 `token_usage.json`，只保存按 agent 聚合的
+  `chat_count`、`prompt_tokens`、`completion_tokens`、`total_tokens` 和模型名，
+  不保存 prompt、completion、tool args、API key 或 base_url；`GET /track`
+  读取该文件返回聚合统计。统计写入是 best-effort，失败不会让已成功的 LLM 调用重试；
+  当前只保证单进程内加锁累加，多 worker/多进程场景不作为强一致账单依据。
 - Anthropic provider 对 `api.anthropic.com` 官方地址继续使用 Anthropic SDK
   `api_key` 认证；对非官方 Anthropic 兼容网关改用 Bearer `auth_token`，
   以兼容 `ANTHROPIC_AUTH_TOKEN` 风格服务。2026-07-09 用户提供的 CloudBase
@@ -129,7 +134,7 @@
   Times New Roman 导致 PDF 字体 fallback 到 Noto Serif CJK SC /
   Liberation Serif。按项目规则这不视为主流程失败，正式提交前仍应挂载
   `MMA_OFFICIAL_FONTS_DIR=C:\Windows\Fonts` 或在 Windows 本机重导并跑严格字体门禁。
-  该 smoke 只证明 provider/导出链路可用；preflight/audit 仍不等同于数学正确性证明。
+   该 smoke 只证明 provider/导出链路可用；preflight/audit 仍不等同于数学正确性证明。
 - 真实提交前仍需人工复核论文内容和 PDF 排版。
 
 ## 接手时禁止全盘扫描

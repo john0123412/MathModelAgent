@@ -93,8 +93,13 @@
   用于兼容较慢的 OpenAI-compatible/Responses/Anthropic 端点，避免建模手或写作手
   在正常长响应时过早 `Request timed out`。
 - `HUMAN_MODEL_GATE_ENABLED=true` 时，Modeler 阶段会生成 `modeling_decision.md/json`
-  并把任务状态置为 `waiting_review`；前端任务页会显示“确认建模方案并继续”，
+  并把任务状态置为 `waiting_review`；前端任务页会定时刷新任务状态并显示“确认建模方案并继续”，
   调用 `/modeling/{task_id}/approve-modeling` 后从 Coder 阶段续跑。
+- 2026-07-10 在 PR #11 最新后端与 PR #6 前端的临时集成 worktree 中重建 Docker，
+  真实任务 `20260710-010231-e6470545` 从 `running` 自动进入 `waiting_review`，无需刷新页面
+  即显示审批按钮；审批后任务恢复并完成。`modeling_decision.json=approved`，checkpoint、
+  变量快照、Markdown/JSON/DOCX/PDF、manifest 均生成，preflight、PDF 视觉检查和 LaTeX
+  编译通过；submission audit 仅因 Docker fallback 字体为 `WARN`。
 - 真实提交前仍需人工复核论文内容和 PDF 排版。
 
 ## 接手时禁止全盘扫描

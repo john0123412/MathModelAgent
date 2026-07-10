@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import {
+	type TaskInfo,
 	approveModeling,
 	getWriterSeque,
 	listTasks,
 	resumeTask,
-	type TaskInfo,
 } from "@/apis/commonApi";
 import CoderEditor from "@/components/AgentEditor/CoderEditor.vue";
 import ModelerEditor from "@/components/AgentEditor/ModelerEditor.vue";
@@ -35,7 +35,8 @@ const writerSequence = ref<string[]>([]);
 /** 运行时长相关状态 */
 const startTime = ref<number>(Date.now());
 const currentTime = ref<number>(Date.now());
-let timer: ReturnType<typeof setInterval> | null = null;
+let durationTimer: ReturnType<typeof setInterval> | null = null;
+let taskStatusTimer: ReturnType<typeof setInterval> | null = null;
 
 /** 格式化运行时长为可读字符串 */
 const formatDuration = (ms: number): string => {
@@ -148,17 +149,21 @@ onMounted(async () => {
 	writerSequence.value = Array.isArray(res.data) ? res.data : [];
 	await refreshTaskStatus();
 
-	// 开始计时
-	timer = setInterval(updateDuration, 1000);
+	// 运行时间与后端任务状态分别刷新，确保等待审批时无需手动重载页面。
+	durationTimer = setInterval(updateDuration, 1000);
+	taskStatusTimer = setInterval(() => void refreshTaskStatus(), 3000);
 	updateDuration(); // 立即更新一次
 });
 
 onBeforeUnmount(() => {
 	taskStore.closeWebSocket();
-	// 清理计时器
-	if (timer) {
-		clearInterval(timer);
-		timer = null;
+	if (durationTimer) {
+		clearInterval(durationTimer);
+		durationTimer = null;
+	}
+	if (taskStatusTimer) {
+		clearInterval(taskStatusTimer);
+		taskStatusTimer = null;
 	}
 });
 </script>

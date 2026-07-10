@@ -330,7 +330,7 @@ pnpm run dev
 - pdf_visual_check.json: PDF 视觉检查报告
 - submission_audit_report.json / submission_audit_report.md: 提交前审计报告
 
-当前后端尚未自动生成 `all.zip`，`download_all_url` 返回的压缩包下载链路仍需补齐；需要整体打包时请先在任务目录内人工核对上述文件。
+文件面板支持按需生成经过路径、符号链接、临时文件和大小过滤的 `all.zip`，用于下载当前任务工作区文件。
 
 上传带有多个附件的赛题时，建议在 WebUI 第一页一次多选所有题面、数据、图片、压缩包等附件；如果附件来自一个目录且文件很多，可以先压缩为 zip 后上传。第二页仍建议粘贴主题面正文，避免模型先在附件中定位题目而降低稳定性。
 
@@ -364,7 +364,7 @@ Prompt Inject : [prompt](./backend/app/config/md_template.toml)
 
 快速启用 Tavily：注册 [Tavily](https://tavily.com) 获取 API Key，在 `backend/.env.dev` 中设置 `TAVILY_API_KEY=tvly-xxx` 和 `SEARCH_ENABLED=true`。
 
-已知未闭环接口：
+接口边界：
 
 - `/track` 返回按任务和 Agent 聚合的 best-effort token 统计，不等同于供应商账单。
 - `/download_all_url` 会按需生成并返回经过路径、符号链接和大小过滤的 `all.zip`。

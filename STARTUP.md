@@ -156,6 +156,22 @@ pnpm run dev
 3. 用户消息作为额外上下文注入到 `chat_history`
 4. 前端实时回显用户输入
 
+### Token 用量统计
+
+每次 LLM 成功调用后，后端会在任务目录写入 `token_usage.json`，只保存按 agent
+聚合的 `chat_count`、`prompt_tokens`、`completion_tokens`、`total_tokens`
+和模型名，不保存 prompt、completion、tool args、API key 或 base_url。
+可通过以下接口读取：
+
+```powershell
+curl.exe "http://127.0.0.1:8000/track?task_id=<task_id>"
+```
+
+该统计用于运行过程观察和粗略成本估算，不等同于模型供应商账单。
+统计写入是 best-effort：写入失败不会触发 LLM 请求重试，也不会阻断任务继续运行。
+当前只保证单进程内加锁累加；如果后续部署为多 worker/多进程，该文件不应作为强一致
+成本账单依据。
+
 ### 导出模板选项（Export Profile）
 
 新建建模任务默认使用 `cumcm2026`，匹配当前高教社杯/国赛交付口径。历史兼容的

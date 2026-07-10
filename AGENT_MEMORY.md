@@ -32,6 +32,9 @@
   `fc-match` 返回 `SimSun,NSimSun` 这类字体族列表时正确命中。
 - 任务完成时会自动生成 `submission_audit_report.json/md`，汇总主交付文件、
   preflight、PDF 视觉检查和 `export_status.json -> pdf.font_resolution`。
+  由于 workflow 先导出 Markdown/PDF/LaTeX，再由路由最终生成 DOCX，正常完成后的
+  收尾步骤会在 `res.docx` 生成后重新刷新 `submission_audit_report.json/md`，
+  最后再刷新 `candidate_manifest.json`，避免审核报告读取到“缺少 res.docx”的旧状态。
   默认模式下 Docker fallback 字体记为 `WARN`；正式提交前可运行
   `uv run python -m app.tools.submission_audit --work-dir project\work_dir\<task_id> --require-official-fonts`
   作为严格门禁，fallback 或未知字体来源会 `FAIL`。
@@ -46,14 +49,21 @@
   删除批量 `print(...)`/`printf`/`console.log` 控制台输出语句，`paper_preflight_report`
   新增 `appendix_console_noise` 门禁。
 - 当前最新真实烟雾任务的主链路曾达到：
-  - `task_id = 20260706-161231-080acfb7`
+  - `task_id = 20260709-091916-1ff165da`
   - `paper_preflight_report.json = PASS`
   - `export_status.json -> pdf.success = true`
   - `pdf_visual_check = PASS`
   - `tex_export_status.json -> compile_success = true`
   - `latex_project/main.pdf` 已生成
+  - `submission_audit_report.json` 经 DOCX 后收尾刷新后为 `PASS`
   - 该任务使用 `mimo-v2.5` 真实接口完成轻量线性规划题，最优结果为
     `A=40, B=20, profit=2200`，机器时间增加 10 小时后利润约 `2366.67`。
+- 2026-07-09 使用用户提供的新 `xiaomimimo` Responses provider key 后，模型验证
+  `mimo-v2.5` + `https://api.xiaomimimo.com/v1` 成功，并完成一次真实轻量任务
+  `20260709-091916-1ff165da`。随后在修复分支 `codex/refresh-audit-after-docx`
+  再次重建 Docker 并重跑真实任务 `20260709-093451-96f6f897` 时，任务已越过
+  Coordinator/Modeler/Coder，后续 Writer 阶段因 provider 返回 `402 Insufficient account balance`
+  中断；这表示 key 已可用但账户余额不足，恢复余额后需继续重跑完整 smoke。
 - `cumcm2026` 是基于 2026 修订稿规范实现的暂定模板，不是官方最终 DOCX/LaTeX 模板包。
 - 主 PDF 导出会在摘要/关键词后做 PDF-only 分页，支持裸 `关键词：...` 与
   `**关键词**：...`，保证摘要页独占第一页、正文从第二页开始；该分页不写回

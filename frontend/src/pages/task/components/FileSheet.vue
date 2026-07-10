@@ -203,7 +203,18 @@ const downloadAll = async () => {
       <SheetHeader>
         <SheetTitle class="flex items-center justify-between mr-5">
           工作区文件
-
+          <Button
+            v-if="fileList.length > 0"
+            @click="downloadAll()"
+            :disabled="downloadingAll"
+            size="sm"
+            variant="outline"
+            class="flex gap-2"
+          >
+            <RefreshCw v-if="downloadingAll" class="w-4 h-4 animate-spin" />
+            <Archive v-else class="w-4 h-4" />
+            下载全部
+          </Button>
         </SheetTitle>
         <SheetDescription>
           运行的结果和产生在<span class="font-mono">backend/project/work_dir/{{ taskId }}/*</span> 目录下

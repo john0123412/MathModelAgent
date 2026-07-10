@@ -1,4 +1,5 @@
 import axios from "axios";
+import { getSafeErrorMessage } from "@/utils/safeError";
 
 /** 创建 axios 实例 */
 const service = axios.create({
@@ -12,7 +13,7 @@ service.interceptors.request.use(
 		return config;
 	},
 	(error) => {
-		console.log(error);
+		console.warn("请求配置失败:", getSafeErrorMessage(error));
 		return Promise.reject(error);
 	},
 );

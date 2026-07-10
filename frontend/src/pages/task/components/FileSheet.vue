@@ -21,6 +21,7 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { getSafeErrorMessage } from "@/utils/safeError";
 import {
 	Archive,
 	Download,
@@ -73,7 +74,7 @@ const openFolder = async () => {
 			});
 		}
 	} catch (error) {
-		console.error("获取文件列表失败:", error);
+		console.error("获取文件列表失败:", getSafeErrorMessage(error));
 		toast({
 			title: "错误",
 			description: "获取文件列表时出现错误",
@@ -134,7 +135,7 @@ const downloadSingleFile = async (filename: string) => {
 			throw new Error("获取下载链接失败");
 		}
 	} catch (error) {
-		console.error("下载文件失败:", error);
+		console.error("下载文件失败:", getSafeErrorMessage(error));
 		toast({
 			title: "下载失败",
 			description: `下载文件 ${filename} 时出现错误`,
@@ -168,7 +169,7 @@ const downloadAll = async () => {
 			throw new Error("获取下载链接失败");
 		}
 	} catch (error) {
-		console.error("下载所有文件失败:", error);
+		console.error("下载所有文件失败:", getSafeErrorMessage(error));
 		toast({
 			title: "下载失败",
 			description: "下载所有文件时出现错误",

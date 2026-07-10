@@ -13,6 +13,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import FilesSheet from "@/pages/task/components/FileSheet.vue";
 import { useTaskStore } from "@/stores/task";
+import { getSafeErrorMessage } from "@/utils/safeError";
 import { onBeforeUnmount, onMounted, ref } from "vue";
 
 // ---- Props ----
@@ -79,7 +80,7 @@ async function checkInterruptedStatus() {
 		const task = res.data.find((t) => t.task_id === props.task_id);
 		isInterrupted.value = task?.status === "interrupted";
 	} catch (error) {
-		console.error("获取任务状态失败:", error);
+		console.error("获取任务状态失败:", getSafeErrorMessage(error));
 	}
 }
 
@@ -92,7 +93,7 @@ async function handleResume() {
 		await taskStore.loadTaskMessages(props.task_id);
 		taskStore.connectWebSocket(props.task_id);
 	} catch (error) {
-		console.error("续传任务失败:", error);
+		console.error("续传任务失败:", getSafeErrorMessage(error));
 	} finally {
 		isResuming.value = false;
 	}

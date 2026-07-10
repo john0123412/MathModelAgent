@@ -58,6 +58,12 @@ docker compose exec backend uv run python -m ruff check app
 - `backend/.env.dev` 已配置好 API Key
 - Docker Desktop 正在运行
 
+WebUI 侧边栏的 API Key 配置会通过 `/save-api-config` 应用到当前后端进程，
+接口响应会标记 `scope=runtime`、`persisted=false`。它不会写回
+`backend/.env.dev`；后端或容器重启后仍以 `.env.dev` 或系统环境变量为准。
+注意：前端 Pinia store 仍会在浏览器本地持久化用户填写的 API key；这里的
+`persisted=false` 只表示后端没有把配置写入服务器文件。
+
 ### 构建说明
 
 后端镜像在 Python 基础镜像内通过带超时和重试的 `pip install uv==0.11.14`

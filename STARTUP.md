@@ -496,6 +496,9 @@ docker compose exec backend uv run python -m app.tools.submission_audit --work-d
 验收要点：
 
 - `paper_preflight_report.json = PASS`，且 `checks.appendix_console_noise.passed=true`。
+- 若 `paper_preflight_report.json = CONDITIONAL_PASS`，`submission_audit_report.json`
+  会降级为 `WARN`，表示主交付已生成但仍有条件项需要人工接受或修正；正式提交前优先修到
+  `PASS`。
 - `pdf_visual_check.json = PASS`。
 - `submission_audit_report.json = PASS`（严格字体门禁）。
 - PDF 文本中不应出现 `print(`、`printf`、`console.log` 等批量控制台输出。
@@ -510,7 +513,9 @@ docker compose exec backend uv run python -m app.tools.submission_audit --work-d
 
 该报告汇总主交付文件、`paper_preflight_report.json`、`pdf_visual_check.json`
 和 `export_status.json -> pdf.font_resolution`。默认自动流程中，如果 PDF 使用
-Docker fallback 字体，报告为 `WARN` 而不是阻断任务；正式提交前可以启用严格字体门禁：
+Docker fallback 字体，报告为 `WARN` 而不是阻断任务；如果
+`paper_preflight_report.json = CONDITIONAL_PASS`，报告同样为 `WARN`，需要人工查看
+具体条件项后决定修正或接受。正式提交前可以启用严格字体门禁：
 
 ```powershell
 cd backend
@@ -549,7 +554,8 @@ B 需要 1 小时机器时间、2 小时人工时间，利润 30 元；
 
 - `GET /tasks` 中任务状态为 `completed`
 - 工作目录生成 `res.md`、`res.json`、`res.docx`、`res.pdf`、`candidate_manifest.json`
-- `paper_preflight_report.json = PASS`
+- `paper_preflight_report.json = PASS`；若为 `CONDITIONAL_PASS`，需人工确认条件项，
+  `submission_audit_report.json` 会是 `WARN`
 - `export_status.json -> pdf.success = true`
 - `pdf_visual_check.json = PASS`
 - `pdf_visual_check.json -> checks.abstract_first_page/body_page_limit/content_margin/no_table_of_contents/submission_anonymity`

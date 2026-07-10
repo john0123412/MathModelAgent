@@ -1,9 +1,19 @@
 """工作流提示边界测试。"""
 
+import os
+import tempfile
 import unittest
 
 from app.core.flows import Flows
 from app.schemas.A2A import ModelerToCoder
+
+
+class FakeCodeInterpreter:
+    def __init__(self, work_dir: str):
+        self.work_dir = work_dir
+
+    def get_code_output(self, section: str) -> str:
+        return f"{section} code output"
 
 
 class TestFlows(unittest.TestCase):
@@ -27,6 +37,42 @@ class TestFlows(unittest.TestCase):
         self.assertIn("不得随机生成样本", eda_prompt)
         self.assertIn("不得创建“模拟数据集.csv”", eda_prompt)
         self.assertIn("约束可行性", eda_prompt)
+
+    def test_writer_prompt_includes_structured_result_facts(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(
+                os.path.join(work_dir, "机器时间敏感性分析结果.csv"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                f.write(
+                    "分析项目,数值,单位,备注\n"
+                    "机器时间影子价格,16.666666666666668,元/小时,理论计算\n"
+                    "人工时间影子价格,6.666666666666667,元/小时,理论计算\n"
+                )
+            flows = Flows(
+                {
+                    "ques_count": 1,
+                    "background": "生产计划优化。",
+                    "ques1": "求最优生产方案。",
+                }
+            )
+
+            prompt = flows.get_writer_prompt(
+                "ques1",
+                "coder response",
+                FakeCodeInterpreter(work_dir),
+                {
+                    "eda": "EDA模板",
+                    "ques1": "模板",
+                    "sensitivity_analysis": "敏感性模板",
+                },
+            )
+
+        self.assertIn("结构化结果事实", prompt)
+        self.assertIn("机器时间影子价格 = 16.6667 元/小时", prompt)
+        self.assertIn("人工时间影子价格 = 6.6667 元/小时", prompt)
+        self.assertIn("正文关键数值必须优先使用以上结构化事实", prompt)
 
 
 if __name__ == "__main__":

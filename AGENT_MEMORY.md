@@ -41,6 +41,9 @@
   默认模式下 Docker fallback 字体记为 `WARN`；正式提交前可运行
   `uv run python -m app.tools.submission_audit --work-dir project\work_dir\<task_id> --require-official-fonts`
   作为严格门禁，fallback 或未知字体来源会 `FAIL`。
+  `paper_preflight_report.json = CONDITIONAL_PASS` 会在 `submission_audit_report`
+  中记为 `WARN` 而不是 `FAIL`，用于表达主交付可生成但存在需人工复核/接受的条件项；
+  `paper_preflight_report.json = FAIL` 或无法读取报告仍是硬失败。
   用 `export_cli pdf` 手动/正式重导时加 `--update-status`，会同步刷新
   `export_status.json`、`pdf_visual_check.json`、`submission_audit_report.json`
   和已有的 manifest，避免审核读取旧字体记录。
@@ -98,6 +101,12 @@
   孤立的 `: ... DOI ...` 定义式参考行会被删除，避免同类 description list 误解析。
   预检还会阻断电子论文中出现 `承诺书`、`编号专用页`、`参赛队号`、`队员姓名`
   等身份/封面字段，避免违反高教社杯匿名电子稿口径。
+  `paper_preflight_report.json -> checks.result_consistency` 会读取任务目录中
+  结果 CSV 的结构化关键数值，目前重点检查机器时间/人工时间影子价格；如果正文
+  同标签句子中的数值与 CSV 不一致，预检硬门禁 `FAIL`。没有可识别结果 CSV 时
+  不阻断，因此该检查只能拦截已结构化事实的明显冲突，不替代完整数学复核。
+  `flows.get_writer_prompt` 会把同一批结构化结果事实注入写作手提示，要求正文关键
+  数值优先使用结果 CSV，减少 Writer 在摘要/求解/敏感性段落中复述错误数字。
   若正文已经说明题目参数是确定性常量、无随机样本数据，后处理会把
   `描述性统计` 这类样本数据 EDA 用语规范为 `参数核验`，并清理正文/支撑材料中的
   Monte Carlo、蒙特卡洛、随机模拟等探索性随机模拟内容；代码附录中的同类标签会
@@ -141,6 +150,10 @@
   Times New Roman 导致 PDF 字体 fallback 到 Noto Serif CJK SC /
   Liberation Serif。按项目规则这不视为主流程失败，正式提交前仍应挂载
   `MMA_OFFICIAL_FONTS_DIR=C:\Windows\Fonts` 或在 Windows 本机重导并跑严格字体门禁。
+  在新增 `checks.result_consistency` 后，用当前分支代码只读复核该任务会因正文影子价格
+  `26.7/13.3` 与 CSV 中 `16.67/6.67` 冲突而 `FAIL`；这说明旧报告的 PASS 不能代表
+  当前代码门禁结果。该 smoke 只证明 provider/导出链路可用；preflight/audit 仍不等同
+  于数学正确性证明。
    该 smoke 只证明 provider/导出链路可用；preflight/audit 仍不等同于数学正确性证明。
 - 真实提交前仍需人工复核论文内容和 PDF 排版。
 
@@ -267,6 +280,9 @@
 - 如果参考文献或表格细节异常，优先看：
   `checks.references.missing_inline`、`checks.tables.uncaptioned_tables`、
   `checks.extra_problem_labels.issues`。
+- 如果正文关键数值与代码/CSV 输出疑似不一致，优先看：
+  `checks.result_consistency.conflicts`，再对照对应 `source` CSV 和 `res.md`
+  中的 `sentence`。
 - 如果轻量题目没有外部数据集但论文出现“模拟数据集”“随机生成样本”等内容，
   优先检查代码手 EDA 输出和 `flows.py`/`prompts/coder.py` 的无数据 EDA 边界提示。
 - 如果 PDF 视觉检查失败，优先看：
@@ -300,6 +316,8 @@ uv run python scripts/smoke_pdf_export.py
   - `tex_export_status.json -> missing_assets = []`
 - 如果 `res.pdf` 成功但 `latex_project/` 编译失败，先汇报 sidecar 非阻断。
 - 如果 `preflight PASS` 但论文内容可疑，使用最终人工复核清单。
+- 如果 `checks.result_consistency` 为 PASS，仅表示已识别 CSV 事实没有与正文冲突；
+  未结构化入 CSV 的公式推导、模型选择和单位理解仍需人工复核。
 - 如果官方发布 2026 Word/DOCX 模板，按 `docs/md/CUMCM2026模板替换指南.md` 替换 `cumcm2026_docx`。
 - 如果官方发布 2026 LaTeX 模板，按 `docs/md/CUMCM2026模板替换指南.md` 新增 `cumcm2026/`。
 - 不要覆盖 `cumcm2025/` 或 `cumcm2025_docx/`。

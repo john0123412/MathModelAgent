@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import csv
 import json
 import os
 import re
@@ -61,6 +62,7 @@ MARKDOWN_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}
 EXTRA_PROBLEM_LABEL_RE = re.compile(r"问题(?P<number>\d+|[一二三四五六七八九十]+)(?P<suffix>[_、\s]?)")
 CLAIM_SENTENCE_RE = re.compile(r"[^。！？.!?\n]*(?:最优|利润|提高|增加|降低|结果表明|敏感性|影子价格|准确率|误差)[^。！？.!?\n]*[。！？.!?]?")
 NUMERIC_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:%|元|小时|件|吨|亩|分|倍|年|万元)?")
+PLAIN_NUMBER_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
 STRONG_WORDING_RE = re.compile(r"证明|唯一|显著优于|最可靠|精确预测")
 RANDOM_SIMULATION_RE = re.compile(
     r"Monte[\s_-]*Carlo|蒙特卡洛|随机模拟|随机扰动|随机生成样本|模拟样本|模拟数据集",
@@ -85,6 +87,7 @@ DETERMINISTIC_NO_SAMPLE_MARKERS = (
 MAX_CODE_SEPARATOR_CHARS = 48
 MAX_APPENDIX_CODE_LINES = 240
 MAX_APPENDIX_CONSOLE_LINES = 20
+NUMERIC_CONSISTENCY_TOLERANCE = 0.05
 LONG_CODE_SEPARATOR_RE = re.compile(
     r"^(?P<indent>\s*)(?P<prefix>#|//|%|--)?(?P<gap>\s*)"
     r"(?P<char>[=\-_*])(?P=char){59,}\s*$"
@@ -1626,6 +1629,203 @@ def _claim_trace_check_severity(check: dict) -> str:
     return "pass"
 
 
+def _parse_float(value: object) -> float | None:
+    if value is None:
+        return None
+    text = str(value).strip().replace(",", "")
+    if not text:
+        return None
+    match = PLAIN_NUMBER_RE.search(text)
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def _csv_fact_from_row(row: dict[str, str], source_name: str = "") -> dict | None:
+    label = (
+        row.get("分析项目")
+        or row.get("项目")
+        or row.get("指标")
+        or row.get("名称")
+        or next((value for value in row.values() if value), "")
+    )
+    value = _parse_float(row.get("数值") or row.get("value") or row.get("Value"))
+    if value is None:
+        return None
+    label_text = str(label)
+    context_text = " ".join([label_text, source_name, str(row.get("备注", ""))])
+    label_is_machine_shadow_price = bool(
+        re.search(r"机器时间.*影子价格|影子价格.*机器时间", label_text)
+    )
+    label_is_labor_shadow_price = bool(
+        re.search(r"人工时间.*影子价格|影子价格.*人工时间", label_text)
+    )
+    context_is_machine_shadow_price = bool(
+        re.search(r"机器时间.*影子价格|影子价格.*机器时间", context_text)
+    )
+    context_is_labor_shadow_price = bool(
+        re.search(r"人工时间.*影子价格|影子价格.*人工时间", context_text)
+    )
+    if label_is_machine_shadow_price or (
+        not label_is_labor_shadow_price and context_is_machine_shadow_price
+    ):
+        return {
+            "id": "machine_time_shadow_price",
+            "label": "机器时间影子价格",
+            "keywords": ["机器时间", "影子价格"],
+            "expected": value,
+            "unit": row.get("单位", ""),
+        }
+    if label_is_labor_shadow_price or (
+        not label_is_machine_shadow_price and context_is_labor_shadow_price
+    ):
+        return {
+            "id": "labor_time_shadow_price",
+            "label": "人工时间影子价格",
+            "keywords": ["人工时间", "影子价格"],
+            "expected": value,
+            "unit": row.get("单位", ""),
+        }
+    return None
+
+
+def _load_result_numeric_facts(work_dir: str) -> list[dict]:
+    facts_by_id: dict[str, dict] = {}
+    if not os.path.isdir(work_dir):
+        return []
+    for filename in os.listdir(work_dir):
+        if not filename.lower().endswith(".csv"):
+            continue
+        path = os.path.join(work_dir, filename)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, newline="", encoding="utf-8-sig") as f:
+                for row in csv.DictReader(f):
+                    fact = _csv_fact_from_row(row, filename)
+                    if fact:
+                        fact["source"] = filename
+                        facts_by_id[fact["id"]] = fact
+        except (OSError, csv.Error, UnicodeDecodeError) as exc:
+            logger.warning(f"结果数值一致性检查跳过 CSV {filename}: {exc}")
+    return list(facts_by_id.values())
+
+
+def build_result_fact_summary(work_dir: str) -> str:
+    """从任务结果 CSV 中生成给写作手使用的关键数值事实摘要。"""
+    facts = _load_result_numeric_facts(work_dir)
+    if not facts:
+        return ""
+    lines = [
+        "【结构化结果事实】",
+        "正文关键数值必须优先使用以上结构化事实；若与代码输出或上下文存在冲突，以结果 CSV 为准，不能凭印象改写。",
+    ]
+    for fact in facts:
+        unit = f" {fact.get('unit')}" if fact.get("unit") else ""
+        lines.append(
+            f"- {fact['label']} = {fact['expected']:.4f}{unit}（来源：{fact.get('source', '')}）"
+        )
+    return "\n".join(lines)
+
+
+def _sentences_with_offsets(markdown: str) -> list[tuple[int, str]]:
+    parts: list[tuple[int, str]] = []
+    for match in re.finditer(r"[^。！？!?\n]+[。！？!?]?", markdown):
+        sentence = match.group(0).strip()
+        if sentence:
+            parts.append((match.start(), sentence))
+    return parts
+
+
+def _sentence_mentions_fact(sentence: str, fact: dict) -> bool:
+    if not all(keyword in sentence for keyword in fact["keywords"]):
+        return False
+    if "影子价格" in fact["keywords"] and "元" not in sentence:
+        return False
+    return True
+
+
+def _numbers_close_to_expected(numbers: list[float], expected: float) -> bool:
+    tolerance = max(NUMERIC_CONSISTENCY_TOLERANCE, abs(expected) * 0.005)
+    return any(abs(number - expected) <= tolerance for number in numbers)
+
+
+def _number_close_to_expected(number: float, expected: float) -> bool:
+    tolerance = max(NUMERIC_CONSISTENCY_TOLERANCE, abs(expected) * 0.005)
+    return abs(number - expected) <= tolerance
+
+
+def _ordered_shadow_price_number(sentence: str, fact: dict, numbers: list[float]) -> float | None:
+    if "分别" not in sentence or len(numbers) < 2:
+        return None
+    if not all(keyword in sentence for keyword in ("机器时间", "人工时间", "影子价格")):
+        return None
+    machine_pos = sentence.find("机器时间")
+    labor_pos = sentence.find("人工时间")
+    if machine_pos < 0 or labor_pos < 0:
+        return None
+    if fact["id"] == "machine_time_shadow_price":
+        return numbers[0] if machine_pos < labor_pos else numbers[1]
+    if fact["id"] == "labor_time_shadow_price":
+        return numbers[1] if machine_pos < labor_pos else numbers[0]
+    return None
+
+
+def _check_result_consistency(work_dir: str, markdown: str) -> dict:
+    facts = _load_result_numeric_facts(work_dir)
+    if not facts:
+        return {"passed": True, "facts": [], "conflicts": []}
+
+    conflicts: list[dict] = []
+    markdown_without_code = _without_fenced_code_blocks(markdown)
+    for offset, sentence in _sentences_with_offsets(markdown_without_code):
+        for fact in facts:
+            if not _sentence_mentions_fact(sentence, fact):
+                continue
+            numbers = [
+                number
+                for number in (_parse_float(match.group(0)) for match in PLAIN_NUMBER_RE.finditer(sentence))
+                if number is not None
+            ]
+            ordered_number = _ordered_shadow_price_number(sentence, fact, numbers)
+            if ordered_number is not None:
+                matches_expected = _number_close_to_expected(ordered_number, fact["expected"])
+            else:
+                matches_expected = _numbers_close_to_expected(numbers, fact["expected"])
+            if not numbers or matches_expected:
+                continue
+            conflicts.append(
+                {
+                    "fact": fact["label"],
+                    "expected": fact["expected"],
+                    "unit": fact.get("unit", ""),
+                    "source": fact.get("source", ""),
+                    "paper_section": _current_section_for_offset(
+                        markdown_without_code, offset
+                    ),
+                    "sentence": _plain_text(sentence),
+                    "paper_numbers": numbers,
+                }
+            )
+
+    return {
+        "passed": not conflicts,
+        "facts": [
+            {
+                "fact": fact["label"],
+                "expected": fact["expected"],
+                "unit": fact.get("unit", ""),
+                "source": fact.get("source", ""),
+            }
+            for fact in facts
+        ],
+        "conflicts": conflicts,
+    }
+
+
 def build_preflight_report(
     work_dir: str,
     markdown: str,
@@ -1725,6 +1925,7 @@ def build_preflight_report(
     }
     sections_check = _check_sections(markdown_without_code)
     export_profile_check = _check_export_profile(export_profile)
+    result_consistency_check = _check_result_consistency(work_dir, markdown)
     claim_trace_check = _check_claim_trace(
         claim_trace if claim_trace is not None else build_claim_trace(markdown, code_sources)
     )
@@ -1748,6 +1949,7 @@ def build_preflight_report(
         ),
         "tables": _with_severity(_check_tables(markdown_without_code), "conditional"),
         "extra_problem_labels": _with_severity(extra_problem_labels_check, "conditional"),
+        "result_consistency": _with_severity(result_consistency_check, "fail"),
         "claim_trace": _with_severity(
             claim_trace_check, _claim_trace_check_severity(claim_trace_check)
         ),
@@ -1789,6 +1991,11 @@ def _format_check_detail(check: dict) -> str:
         return (
             f"wide_tables={len(check['wide_tables'])}; "
             f"uncaptioned={len(check.get('uncaptioned_tables', []))}"
+        )
+    if "conflicts" in check:
+        return (
+            f"facts={len(check.get('facts', []))}; "
+            f"conflicts={len(check.get('conflicts', []))}"
         )
     if "issues" in check:
         return f"issues={len(check['issues'])}"

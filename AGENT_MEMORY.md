@@ -32,6 +32,9 @@
   `fc-match` 返回 `SimSun,NSimSun` 这类字体族列表时正确命中。
 - 任务完成时会自动生成 `submission_audit_report.json/md`，汇总主交付文件、
   preflight、PDF 视觉检查和 `export_status.json -> pdf.font_resolution`。
+  由于 workflow 先导出 Markdown/PDF/LaTeX，再由路由最终生成 DOCX，正常完成后的
+  收尾步骤会在 `res.docx` 生成后重新刷新 `submission_audit_report.json/md`，
+  最后再刷新 `candidate_manifest.json`，避免审核报告读取到“缺少 res.docx”的旧状态。
   默认模式下 Docker fallback 字体记为 `WARN`；正式提交前可运行
   `uv run python -m app.tools.submission_audit --work-dir project\work_dir\<task_id> --require-official-fonts`
   作为严格门禁，fallback 或未知字体来源会 `FAIL`。
@@ -46,12 +49,13 @@
   删除批量 `print(...)`/`printf`/`console.log` 控制台输出语句，`paper_preflight_report`
   新增 `appendix_console_noise` 门禁。
 - 当前最新真实烟雾任务的主链路曾达到：
-  - `task_id = 20260706-161231-080acfb7`
+  - `task_id = 20260709-091916-1ff165da`
   - `paper_preflight_report.json = PASS`
   - `export_status.json -> pdf.success = true`
   - `pdf_visual_check = PASS`
   - `tex_export_status.json -> compile_success = true`
   - `latex_project/main.pdf` 已生成
+  - `submission_audit_report.json` 经 DOCX 后收尾刷新后为 `PASS`
   - 该任务使用 `mimo-v2.5` 真实接口完成轻量线性规划题，最优结果为
     `A=40, B=20, profit=2200`，机器时间增加 10 小时后利润约 `2366.67`。
 - 2026-07-09 针对当前多 PR 风险修复分支重建 Docker 后，基础服务烟雾验证通过：
@@ -63,6 +67,12 @@
   `task_status.json` 和字体文件，无 `res.md`、`res.json`、`res.docx`、
   `candidate_manifest.json` 或 checkpoint。恢复有效 key 后需重跑项目规则中的
   轻量线性规划题，验收 `/tasks` 为 `completed` 且主交付文件存在。
+- 2026-07-09 使用用户提供的新 `xiaomimimo` Responses provider key 后，模型验证
+  `mimo-v2.5` + `https://api.xiaomimimo.com/v1` 成功，并完成一次真实轻量任务
+  `20260709-091916-1ff165da`。随后在修复分支 `codex/refresh-audit-after-docx`
+  再次重建 Docker 并重跑真实任务 `20260709-093451-96f6f897` 时，任务已越过
+  Coordinator/Modeler/Coder，后续 Writer 阶段因 provider 返回 `402 Insufficient account balance`
+  中断；这表示 key 已可用但账户余额不足，恢复余额后需继续重跑完整 smoke。
 - `cumcm2026` 是基于 2026 修订稿规范实现的暂定模板，不是官方最终 DOCX/LaTeX 模板包。
 - 主 PDF 导出会在摘要/关键词后做 PDF-only 分页，支持裸 `关键词：...` 与
   `**关键词**：...`，保证摘要页独占第一页、正文从第二页开始；该分页不写回
@@ -104,6 +114,22 @@
 - `/status` 的 `backend.feature_warnings` 会报告配置存在但尚未接入主工作流的能力，
   例如 `RAG_ENABLED`、通用 `HIL_ENABLED`、`FALLBACK_ENABLED`、`EVALUATOR_ENABLED`；
   这些 warning 不阻断服务启动，只用于避免把配置开关误判为已完成功能。
+- Anthropic provider 对 `api.anthropic.com` 官方地址继续使用 Anthropic SDK
+  `api_key` 认证；对非官方 Anthropic 兼容网关改用 Bearer `auth_token`，
+  以兼容 `ANTHROPIC_AUTH_TOKEN` 风格服务。2026-07-09 用户提供的 CloudBase
+  网关已用 `hy3-preview` 验证文本请求和 `tool_choice=auto` 工具调用可用；
+  本地忽略配置 `backend/.env.dev` 可设置四个 Agent 使用
+  `COORDINATOR/MODELER/CODER/WRITER_API_TYPE=anthropic`、模型 `hy3-preview`
+  和对应 CloudBase base URL，密钥不应写入 Git。
+- 2026-07-09 CloudBase `hy3-preview` 真实轻量 smoke 任务
+  `20260709-111913-995cfe14` 已在 Docker 中通过续传完成，主产物、变量快照、
+  `paper_preflight_report=PASS`、`pdf_visual_check=PASS`、
+  `tex_export_status.compile_success=true`、`candidate_manifest.json` 均生成；
+  `submission_audit_report=WARN`，唯一 WARN 是 Docker 环境缺少 SimSun /
+  Times New Roman 导致 PDF 字体 fallback 到 Noto Serif CJK SC /
+  Liberation Serif。按项目规则这不视为主流程失败，正式提交前仍应挂载
+  `MMA_OFFICIAL_FONTS_DIR=C:\Windows\Fonts` 或在 Windows 本机重导并跑严格字体门禁。
+  该 smoke 只证明 provider/导出链路可用；preflight/audit 仍不等同于数学正确性证明。
 - 真实提交前仍需人工复核论文内容和 PDF 排版。
 
 ## 接手时禁止全盘扫描

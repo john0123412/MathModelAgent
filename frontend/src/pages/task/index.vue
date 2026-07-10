@@ -37,6 +37,8 @@ const startTime = ref<number>(Date.now());
 const currentTime = ref<number>(Date.now());
 let durationTimer: ReturnType<typeof setInterval> | null = null;
 let taskStatusTimer: ReturnType<typeof setInterval> | null = null;
+let isTaskPageActive = false;
+let taskStatusRequestId = 0;
 
 /** 格式化运行时长为可读字符串 */
 const formatDuration = (ms: number): string => {
@@ -100,11 +102,18 @@ const applyTaskStatus = (task: TaskInfo | undefined) => {
 
 /** 检查当前任务状态，用于展示续传/审批按钮 */
 async function refreshTaskStatus() {
+	const requestId = ++taskStatusRequestId;
 	try {
 		const res = await listTasks();
+		if (!isTaskPageActive || requestId !== taskStatusRequestId) {
+			return;
+		}
 		const task = res.data.find((t) => t.task_id === props.task_id);
 		applyTaskStatus(task);
 	} catch (error) {
+		if (!isTaskPageActive || requestId !== taskStatusRequestId) {
+			return;
+		}
 		console.error("获取任务状态失败:", getSafeErrorMessage(error));
 	}
 }
@@ -114,8 +123,12 @@ async function handleResume() {
 	isResuming.value = true;
 	try {
 		await resumeTask(props.task_id);
+		if (!isTaskPageActive) return;
+		taskStatusRequestId += 1;
 		await refreshTaskStatus();
+		if (!isTaskPageActive) return;
 		await taskStore.loadTaskMessages(props.task_id);
+		if (!isTaskPageActive) return;
 		taskStore.connectWebSocket(props.task_id);
 	} catch (error) {
 		console.error("续传任务失败:", getSafeErrorMessage(error));
@@ -129,8 +142,11 @@ async function handleApproveModeling() {
 	isApprovingModeling.value = true;
 	try {
 		await approveModeling(props.task_id);
+		if (!isTaskPageActive) return;
+		taskStatusRequestId += 1;
 		isWaitingModelingReview.value = false;
 		await taskStore.loadTaskMessages(props.task_id);
+		if (!isTaskPageActive) return;
 		taskStore.connectWebSocket(props.task_id);
 		await refreshTaskStatus();
 	} catch (error) {
@@ -143,19 +159,29 @@ async function handleApproveModeling() {
 // ---- Lifecycle Hooks ----
 
 onMounted(async () => {
+	isTaskPageActive = true;
 	await taskStore.loadTaskMessages(props.task_id);
+	if (!isTaskPageActive) return;
 	taskStore.connectWebSocket(props.task_id);
 	const res = await getWriterSeque();
+	if (!isTaskPageActive) return;
 	writerSequence.value = Array.isArray(res.data) ? res.data : [];
 	await refreshTaskStatus();
+	if (!isTaskPageActive) return;
 
 	// 运行时间与后端任务状态分别刷新，确保等待审批时无需手动重载页面。
 	durationTimer = setInterval(updateDuration, 1000);
-	taskStatusTimer = setInterval(() => void refreshTaskStatus(), 3000);
+	taskStatusTimer = setInterval(() => {
+		if (!isApprovingModeling.value && !isResuming.value) {
+			void refreshTaskStatus();
+		}
+	}, 3000);
 	updateDuration(); // 立即更新一次
 });
 
 onBeforeUnmount(() => {
+	isTaskPageActive = false;
+	taskStatusRequestId += 1;
 	taskStore.closeWebSocket();
 	if (durationTimer) {
 		clearInterval(durationTimer);

@@ -23,7 +23,9 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
+import { useToast } from "@/components/ui/toast/use-toast";
 import { useApiKeyStore } from "@/stores/apiKeys";
+import { getSafeErrorMessage } from "@/utils/safeError";
 import { CheckCircle, XCircle } from "lucide-vue-next";
 import { computed, onMounted, ref } from "vue";
 
@@ -35,6 +37,7 @@ const emit = defineEmits<(e: "update:open", value: boolean) => void>();
 // ---- Reactive State ----
 
 const apiKeyStore = useApiKeyStore();
+const { toast } = useToast();
 
 /** API 类型选项 */
 const apiTypeOptions = [
@@ -138,15 +141,23 @@ const saveToStore = async () => {
 	apiKeyStore.setOpenalexEmail(form.value.openalex_email);
 	if (allValid.value) {
 		try {
-			await saveApiConfig({
+			const result = await saveApiConfig({
 				coordinator: form.value.coordinator,
 				modeler: form.value.modeler,
 				coder: form.value.coder,
 				writer: form.value.writer,
 				openalex_email: form.value.openalex_email,
 			});
+			if (result.data?.success) {
+				toast({
+					title: "配置已应用",
+					description: result.data.persisted
+						? result.data.message
+						: "配置已应用到当前后端进程；后端重启后需重新配置或写入 .env.dev。",
+				});
+			}
 		} catch (error) {
-			console.error("保存配置到后端失败:", error);
+			console.error("应用运行时配置失败:", getSafeErrorMessage(error));
 		}
 	}
 };
@@ -239,7 +250,7 @@ const validateAllApiKeys = async () => {
 			email: form.value.openalex_email,
 		}).then((res) => res.data);
 	} catch (error) {
-		console.error("验证过程中发生错误:", error);
+		console.error("验证过程中发生错误:", getSafeErrorMessage(error));
 		for (const key of Object.keys(validationResults.value)) {
 			if (
 				!validationResults.value[key as keyof typeof validationResults.value]

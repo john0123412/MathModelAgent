@@ -21,6 +21,7 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { getSafeErrorMessage } from "@/utils/safeError";
 import {
 	Archive,
 	Download,
@@ -73,7 +74,7 @@ const openFolder = async () => {
 			});
 		}
 	} catch (error) {
-		console.error("获取文件列表失败:", error);
+		console.error("获取文件列表失败:", getSafeErrorMessage(error));
 		toast({
 			title: "错误",
 			description: "获取文件列表时出现错误",
@@ -134,7 +135,7 @@ const downloadSingleFile = async (filename: string) => {
 			throw new Error("获取下载链接失败");
 		}
 	} catch (error) {
-		console.error("下载文件失败:", error);
+		console.error("下载文件失败:", getSafeErrorMessage(error));
 		toast({
 			title: "下载失败",
 			description: `下载文件 ${filename} 时出现错误`,
@@ -168,7 +169,7 @@ const downloadAll = async () => {
 			throw new Error("获取下载链接失败");
 		}
 	} catch (error) {
-		console.error("下载所有文件失败:", error);
+		console.error("下载所有文件失败:", getSafeErrorMessage(error));
 		toast({
 			title: "下载失败",
 			description: "下载所有文件时出现错误",
@@ -203,7 +204,18 @@ const downloadAll = async () => {
       <SheetHeader>
         <SheetTitle class="flex items-center justify-between mr-5">
           工作区文件
-
+          <Button
+            v-if="fileList.length > 0"
+            @click="downloadAll()"
+            :disabled="downloadingAll"
+            size="sm"
+            variant="outline"
+            class="flex gap-2"
+          >
+            <RefreshCw v-if="downloadingAll" class="w-4 h-4 animate-spin" />
+            <Archive v-else class="w-4 h-4" />
+            下载全部
+          </Button>
         </SheetTitle>
         <SheetDescription>
           运行的结果和产生在<span class="font-mono">backend/project/work_dir/{{ taskId }}/*</span> 目录下

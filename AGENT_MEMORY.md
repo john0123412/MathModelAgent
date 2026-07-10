@@ -13,6 +13,9 @@
   - `pdf_visual_check.json`
   - `submission_audit_report.json`
 - `latex_project/` 是候选 LaTeX sidecar，不是主交付链路。
+- `GET /download_all_url` 会按需生成任务目录下的 `all.zip`，用于下载当前任务工作区文件；
+  打包时会排除已有 `all.zip`、临时文件和常见缓存目录，并设置单文件/总大小上限，避免
+  意外打包过大目录。
 - LaTeX sidecar 当前已修复 CUMCM 图片路径、新版 pandoc `\pandocbounded`
   图片宏、notebook `# Cell n` 原始代码段拆分问题；导出时会扫描 Markdown/LaTeX
   中引用的本地图片，将可找到的图片复制到 `latex_project/` 和
@@ -114,6 +117,10 @@
 - `/status` 的 `backend.feature_warnings` 会报告配置存在但尚未接入主工作流的能力，
   例如 `RAG_ENABLED`、通用 `HIL_ENABLED`、`FALLBACK_ENABLED`、`EVALUATOR_ENABLED`；
   这些 warning 不阻断服务启动，只用于避免把配置开关误判为已完成功能。
+- `/save-api-config` 只把验证后的模型配置应用到当前后端进程的 `settings`，
+  不写回 `.env.dev`，响应中会明确 `scope=runtime`、`persisted=false`；
+  空字段不会覆盖 `.env.dev` 已加载的默认值，且响应不回显 API key。前端 Pinia
+  store 仍会在浏览器本地持久化用户填写的 API key，这是浏览器侧行为，不代表后端落盘。
 - LLM 成功调用后会在任务目录写入 `token_usage.json`，只保存按 agent 聚合的
   `chat_count`、`prompt_tokens`、`completion_tokens`、`total_tokens` 和模型名，
   不保存 prompt、completion、tool args、API key 或 base_url；`GET /track`

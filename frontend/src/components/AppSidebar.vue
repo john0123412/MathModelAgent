@@ -7,6 +7,7 @@ import {
 	TWITTER,
 	XHS,
 } from "@/utils/const";
+import { getSafeErrorMessage } from "@/utils/safeError";
 import NavUser from "./NavUser.vue";
 import { listTasks, type TaskInfo } from "@/apis/commonApi";
 import { ref, onMounted } from "vue";
@@ -75,7 +76,7 @@ const loadHistory = async () => {
 			taskId: t.task_id,
 		}));
 	} catch (e) {
-		console.error("加载历史任务失败:", e);
+		console.error("加载历史任务失败:", getSafeErrorMessage(e));
 		historyError.value = true;
 		historyTasks.value = [];
 		data.value.navMain[1].items = [];

@@ -62,6 +62,12 @@ docker compose exec backend uv run python -m ruff check app
 - `backend/.env.dev` 已配置好 API Key
 - Docker Desktop 正在运行
 
+WebUI 侧边栏的 API Key 配置会通过 `/save-api-config` 应用到当前后端进程，
+接口响应会标记 `scope=runtime`、`persisted=false`。它不会写回
+`backend/.env.dev`；后端或容器重启后仍以 `.env.dev` 或系统环境变量为准。
+注意：前端 Pinia store 仍会在浏览器本地持久化用户填写的 API key；这里的
+`persisted=false` 只表示后端没有把配置写入服务器文件。
+
 ### 构建说明
 
 后端镜像在 Python 基础镜像内通过带超时和重试的 `pip install uv==0.11.14`
@@ -128,6 +134,13 @@ pnpm run dev
 ---
 
 ## 功能说明
+
+### 下载任务工作区文件
+
+文件面板支持单文件下载和“下载全部”。后端 `GET /download_all_url?task_id=...`
+会在对应任务目录内按需生成 `all.zip`，然后返回 `/static/<task_id>/all.zip`
+下载链接。压缩包会排除已有 `all.zip`、临时文件和常见缓存目录，并限制单文件和
+总打包大小，避免意外打包过大的工作目录。
 
 ### 无外部数据题目的 EDA 边界
 

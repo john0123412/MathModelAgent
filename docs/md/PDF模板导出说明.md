@@ -90,7 +90,8 @@ Windows 本机工具读取 res.md -> Pandoc + XeLaTeX 用真实系统字体重�
   `fc-match "SimSun"`、`fc-match "Times New Roman"` 命中正式字体时，
   Docker PDF 会直接使用正式字体，不再触发对应 fallback。
 - 任务完成后会生成 `submission_audit_report.json/md`；默认模式下 Docker fallback
-  字体记为 `WARN`，正式提交前可运行
+  字体记为 `WARN`；`paper_preflight_report.json = CONDITIONAL_PASS` 也会记为
+  `WARN`，表示主交付可生成但存在需人工接受或修正的条件项。正式提交前可运行
   `uv run python -m app.tools.submission_audit --work-dir project\work_dir\<task_id> --require-official-fonts`
   作为严格门禁，若 PDF 仍有 fallback/未知字体来源则返回 `FAIL`。
 
@@ -258,11 +259,16 @@ D:\texlive\2026\bin\windows\pdfinfo.exe backend\project\work_dir\<task_id>\res.p
   `checks.body_page_limit.passed=true`、
   `checks.content_margin.passed=true`、
   `checks.text_margin.passed=true`。
-- `submission_audit_report.json` 默认应为 `PASS` 或 `WARN`；若正式提交要求官方字体，
+- `submission_audit_report.json` 默认应为 `PASS` 或 `WARN`；`WARN` 可能来自
+  Docker 字体 fallback 或 `paper_preflight_report.json = CONDITIONAL_PASS`，需查看
+  具体检查项后人工接受或修正。若正式提交要求官方字体，
   运行 `python -m app.tools.submission_audit --work-dir <task_dir> --require-official-fonts`
   后应为 `PASS`。若为 `FAIL`，先按报告里的 remediation 挂载正式字体或本机重导。
 - `paper_preflight_report.json -> checks.appendix_console_noise.passed` 应为 `true`。
   若失败，先重跑 `prepare_paper_markdown` 重建附录，再重导 DOCX/PDF。
+- `paper_preflight_report.json -> checks.images.unused_generated` 应为空。若生成图片只作为
+  支撑材料而不插入正文，必须出现在附录A支撑材料表中并标记为 `图片文件`；否则应删除、
+  插入正文引用，或人工接受 `CONDITIONAL_PASS`。
 - 可用 PyMuPDF 或其他 PDF 文本提取工具确认 `res.pdf` 中没有 `print(`、`printf`、
   `console.log` 等控制台输出痕迹。
 - `tex_export_status.json` 中 `main_uses_structured_sections=true` 时，`latex_project/main.tex`

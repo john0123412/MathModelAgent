@@ -36,12 +36,12 @@
 - 🤝 HIL 人机协作：当前只实现 `HUMAN_MODEL_GATE_ENABLED` 的建模方案确认门禁；通用 6 种动作尚未接入前端/工作流
 - 🛡️ 容错与续传：已实现基础重试、错误反思、断点续传和变量快照；Fallback Hand Off / Evaluator Shadow Mode / Feedback Rerun 尚未形成完整闭环
 
-## 当前代码实现状态（2026-07-08 审计）
+## 当前代码实现状态（2026-07-10 审计）
 
-- 已实现：FastAPI/Vue WebUI 主流程、本地 Jupyter interpreter、可选 E2B、OpenAI/Responses/Anthropic provider、断点续传、变量快照、实时消息注入、`search_papers` 多源文献检索、CUMCM2026 Markdown/DOCX/PDF/LaTeX sidecar 导出和提交审计。
-- 部分实现：`HUMAN_MODEL_GATE_ENABLED` 后端建模门禁存在，但前端确认入口未闭环；`/save-api-config` 只修改内存配置，不持久化 `.env`；`download_all_url` 返回 `all.zip` 路径，但当前没有生成该压缩包的后端逻辑。
-- 未接入主流程：`/track` 路由为空实现；RAG、通用 HIL 6 种动作、Fallback Hand Off、Evaluator Shadow Mode、Feedback Rerun、Daytona、LiteLLM runtime、视觉模型、R/MATLAB 执行链路。
-- 最近验证：后端完整单测 `155 tests` 通过，`ruff check app` 通过；本机前端构建未运行（Windows 本机 Node 工具链有已知风险）；Docker Desktop 当时未启动，未完成 Docker 运行态复验。
+- 已实现：FastAPI/Vue WebUI 主流程、本地 Jupyter interpreter、可选 E2B、OpenAI/Responses/Anthropic provider、断点续传、变量快照、实时消息注入、多源文献检索、建模方案审批、任务文件打包下载、token 聚合统计、CUMCM2026 导出和提交审计。
+- 有明确边界：`/save-api-config` 只修改当前进程配置，不持久化 `.env`；`/track` 是 best-effort 单进程聚合，不是供应商账单。
+- 未接入主流程：RAG、通用 HIL 6 种动作、Fallback Hand Off、Evaluator Shadow Mode、Feedback Rerun、Daytona、LiteLLM runtime、视觉模型、R/MATLAB 执行链路。
+- 最近验证：2026-07-10 的完整非 E2B 后端单测 `191 tests` 通过，`ruff check app` 通过；本机前端构建未运行（Windows 本机 Node 工具链有已知风险）；本轮 10-PR 集成按测试范围未重跑 Docker 运行态验收。
 
 
 
@@ -149,10 +149,10 @@ Harness SKILL 的优化需要大量黑盒测试和调优.
 - [x] 云端代码解释器：E2B 可通过 `E2B_API_KEY` 启用；无 key 时使用本地 Jupyter。
 - [ ] Web 服务运营化：线上托管、账号、配额、隔离和运维策略仍需独立确认。
 - [ ] 英文支持（MCM/ICM）：英文 README 存在，但 MCM/ICM 交付模板和验收口径未形成完整闭环。
-- [ ] 通用 HIL：当前只有建模方案门禁的后端能力，6 种动作和前端审批流未闭环。
+- [x] 建模方案确认门禁：`waiting_review`、前端审批按钮和 checkpoint/resume 续跑已闭环。
 - [ ] Feedback Rerun：评估器评分、反馈注入和 Writer/Coder 重跑未实现。
-- [ ] 下载全部文件：`download_all_url` 暴露了 `all.zip` 路径，但后端尚未生成压缩包。
-- [ ] Token/成本追踪：`/track` 路由当前为空实现。
+- [x] 下载全部文件：后端按需生成经过路径与大小过滤的 `all.zip`。
+- [x] Token 用量追踪：`/track` 返回按任务和 Agent 聚合的 best-effort 统计。
 - [ ] API 配置持久化：`/save-api-config` 当前只改运行时内存，不写回 `.env`。
 - [ ] RAG 知识库：`RAG_ENABLED` 等配置项存在，ChromaDB/Rerank 主流程检索尚未接入。
 - [ ] A2A/Fallback/Evaluator：基础重试存在，备用模型 handoff、shadow evaluator 和 feedback rerun 尚未闭环。
@@ -349,7 +349,7 @@ Prompt Inject : [prompt](./backend/app/config/md_template.toml)
 |------|----------|------|
 | 文献搜索 | `OPENALEX_EMAIL` / `OPENALEX_API_KEY` 可选 | Writer 检索学术论文引用；无 OpenAlex 邮箱时仍会使用 Semantic Scholar / Crossref / arXiv |
 | Web Search | `SEARCH_ENABLED` + `TAVILY_API_KEY` | Tavily 网页搜索，用于补充官方报告、数据来源和背景资料，不替代学术数据库 |
-| 建模方案确认门禁 | `HUMAN_MODEL_GATE_ENABLED` | 后端可在 Modeler 阶段等待人工确认；前端审批入口尚未闭环 |
+| 建模方案确认门禁 | `HUMAN_MODEL_GATE_ENABLED` | 后端在 Modeler 阶段等待人工确认；前端审批后从 Coder 续跑 |
 | RAG 知识库 | `RAG_ENABLED` | 配置项存在；当前主工作流尚未接入 ChromaDB/Rerank 检索 |
 | 通用 HIL 人机协作 | `HIL_ENABLED` | 配置项存在；confirm/edit/regenerate/ask/skip/abort 6 种动作尚未接入前端/工作流 |
 | Fallback Hand Off | `FALLBACK_*` 系列 | 尚未接入主工作流；当前只有基础重试和错误反思 |
@@ -366,8 +366,8 @@ Prompt Inject : [prompt](./backend/app/config/md_template.toml)
 
 已知未闭环接口：
 
-- `/track` 当前为空实现，不能作为 token/成本统计依据。
-- `/download_all_url` 当前返回 `all.zip` 静态路径，但后端没有生成该压缩包。
+- `/track` 返回按任务和 Agent 聚合的 best-effort token 统计，不等同于供应商账单。
+- `/download_all_url` 会按需生成并返回经过路径、符号链接和大小过滤的 `all.zip`。
 - `/save-api-config` 当前只修改进程内配置，不会持久化到 `.env.dev`。
 - `/approve-modeling` 后端接口存在，但前端尚未提供完整审批操作入口。
 

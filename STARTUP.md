@@ -45,6 +45,10 @@ WebSocket 请求 `ws://localhost:5173/ws/task/<task_id>` 会被转发到后端
 `http://127.0.0.1:8000/docs`；若宿主机端口发布异常，以 `5173/api/docs`
 作为 Docker 验证入口。
 
+`/status` 的 `backend.feature_warnings` 会列出配置存在但尚未接入主工作流的能力，
+例如 `RAG_ENABLED`、通用 `HIL_ENABLED`、`FALLBACK_ENABLED`、`EVALUATOR_ENABLED`。
+这些 warning 不代表后端异常，只表示对应开关仍是配置/占位，不能当作已完成能力验收。
+
 后端 Docker 内验证：
 
 ```powershell
@@ -57,6 +61,12 @@ docker compose exec backend uv run python -m ruff check app
 ### 前置条件
 - `backend/.env.dev` 已配置好 API Key
 - Docker Desktop 正在运行
+
+WebUI 侧边栏的 API Key 配置会通过 `/save-api-config` 应用到当前后端进程，
+接口响应会标记 `scope=runtime`、`persisted=false`。它不会写回
+`backend/.env.dev`；后端或容器重启后仍以 `.env.dev` 或系统环境变量为准。
+注意：前端 Pinia store 仍会在浏览器本地持久化用户填写的 API key；这里的
+`persisted=false` 只表示后端没有把配置写入服务器文件。
 
 ### 构建说明
 
@@ -125,16 +135,12 @@ pnpm run dev
 
 ## 功能说明
 
-### 当前代码实现边界
+### 下载任务工作区文件
 
-以下边界基于 2026-07-08 本地代码审计，不能只按 README 旧描述或 `.env` 开关判断功能已完成：
-
-- `/track` 路由当前为空实现，不能作为 token/成本统计依据。
-- `/download_all_url` 当前返回 `/static/<task_id>/all.zip`，但后端没有生成 `all.zip` 的逻辑。
-- `/save-api-config` 只修改当前进程内的 `settings`，不会持久化写回 `.env.dev`。
-- `HUMAN_MODEL_GATE_ENABLED` 只覆盖 Modeler 阶段的后端建模方案确认门禁；`/approve-modeling` 后端接口存在，但前端审批入口尚未闭环。
-- `RAG_ENABLED`、`HIL_ENABLED`、Fallback/Evaluator 相关配置项存在或有占位，但尚未接入主工作流。
-- 当前代码没有接入 Daytona，也没有集成 LiteLLM runtime；运行时 provider 以 OpenAI Chat Completions、OpenAI Responses、Anthropic 和 OpenAI-compatible `base_url` 为主。
+文件面板支持单文件下载和“下载全部”。后端 `GET /download_all_url?task_id=...`
+会在对应任务目录内按需生成 `all.zip`，然后返回 `/static/<task_id>/all.zip`
+下载链接。压缩包会排除已有 `all.zip`、临时文件和常见缓存目录，并限制单文件和
+总打包大小，避免意外打包过大的工作目录。
 
 ### 无外部数据题目的 EDA 边界
 
@@ -159,6 +165,14 @@ pnpm run dev
 - 续传重放使用 `replay_code()`，只执行代码，不写入 notebook，不向前端重复推送代码单元格
 - 重建完成后继续执行未完成阶段
 
+### 建模方案人工确认
+
+设置 `HUMAN_MODEL_GATE_ENABLED=true` 后，Modeler 阶段完成时会生成
+`modeling_decision.md/json`，任务状态变为 `waiting_review` 并等待人工确认。
+前端任务页会定时刷新任务状态，无需手动刷新即可显示“确认建模方案并继续”按钮；点击后调用
+`POST /modeling/{task_id}/approve-modeling`，后端标记方案已确认并从 Coder 阶段续跑。
+如需先查看方案，可打开文件面板下载 `modeler_plan.md` 或 `modeling_decision.md`。
+
 ### 实时消息干预
 
 **原理**：
@@ -166,6 +180,22 @@ pnpm run dev
 2. Agent 在每次 LLM 调用前检查队列
 3. 用户消息作为额外上下文注入到 `chat_history`
 4. 前端实时回显用户输入
+
+### Token 用量统计
+
+每次 LLM 成功调用后，后端会在任务目录写入 `token_usage.json`，只保存按 agent
+聚合的 `chat_count`、`prompt_tokens`、`completion_tokens`、`total_tokens`
+和模型名，不保存 prompt、completion、tool args、API key 或 base_url。
+可通过以下接口读取：
+
+```powershell
+curl.exe "http://127.0.0.1:8000/track?task_id=<task_id>"
+```
+
+该统计用于运行过程观察和粗略成本估算，不等同于模型供应商账单。
+统计写入是 best-effort：写入失败不会触发 LLM 请求重试，也不会阻断任务继续运行。
+当前只保证单进程内加锁累加；如果后续部署为多 worker/多进程，该文件不应作为强一致
+成本账单依据。
 
 ### 导出模板选项（Export Profile）
 
@@ -474,6 +504,12 @@ docker compose exec backend uv run python -m app.tools.submission_audit --work-d
 验收要点：
 
 - `paper_preflight_report.json = PASS`，且 `checks.appendix_console_noise.passed=true`。
+- 若 `paper_preflight_report.json = CONDITIONAL_PASS`，`submission_audit_report.json`
+  会降级为 `WARN`，表示主交付已生成但仍有条件项需要人工接受或修正；正式提交前优先修到
+  `PASS`。
+- `paper_preflight_report.json -> checks.images.unused_generated = []`。已登记在附录A
+  支撑材料表中的 `图片文件` 不算 unused；真正未引用且未登记的生成图仍需清理、引用或接受
+  conditional 风险。
 - `pdf_visual_check.json = PASS`。
 - `submission_audit_report.json = PASS`（严格字体门禁）。
 - PDF 文本中不应出现 `print(`、`printf`、`console.log` 等批量控制台输出。
@@ -488,7 +524,9 @@ docker compose exec backend uv run python -m app.tools.submission_audit --work-d
 
 该报告汇总主交付文件、`paper_preflight_report.json`、`pdf_visual_check.json`
 和 `export_status.json -> pdf.font_resolution`。默认自动流程中，如果 PDF 使用
-Docker fallback 字体，报告为 `WARN` 而不是阻断任务；正式提交前可以启用严格字体门禁：
+Docker fallback 字体，报告为 `WARN` 而不是阻断任务；如果
+`paper_preflight_report.json = CONDITIONAL_PASS`，报告同样为 `WARN`，需要人工查看
+具体条件项后决定修正或接受。正式提交前可以启用严格字体门禁：
 
 ```powershell
 cd backend
@@ -527,7 +565,10 @@ B 需要 1 小时机器时间、2 小时人工时间，利润 30 元；
 
 - `GET /tasks` 中任务状态为 `completed`
 - 工作目录生成 `res.md`、`res.json`、`res.docx`、`res.pdf`、`candidate_manifest.json`
-- `paper_preflight_report.json = PASS`
+- `paper_preflight_report.json = PASS`；若为 `CONDITIONAL_PASS`，需人工确认条件项，
+  `submission_audit_report.json` 会是 `WARN`
+- `paper_preflight_report.json -> checks.images.unused_generated = []`，除非明确接受未引用且
+  未登记图片的 conditional 风险
 - `export_status.json -> pdf.success = true`
 - `pdf_visual_check.json = PASS`
 - `pdf_visual_check.json -> checks.abstract_first_page/body_page_limit/content_margin/no_table_of_contents/submission_anonymity`

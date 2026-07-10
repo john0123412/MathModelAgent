@@ -2,7 +2,7 @@
 
 ## 使用时机
 
-- `paper_preflight_report.json = PASS`
+- `paper_preflight_report.json = PASS`，或 `CONDITIONAL_PASS` 且准备逐项人工复核并接受/修正条件项。
 - `pdf_visual_check.json = PASS`
 - `res.pdf` / `res.docx` 已生成后
 - 正式提交前人工复核
@@ -67,6 +67,9 @@
 ## 结果与敏感性分析
 
 - 结果是否有数值支撑。
+- `paper_preflight_report.json -> checks.result_consistency.passed` 是否为 `true`；
+  若为 `false`，先按 `conflicts[].source` 对照结果 CSV 和 `conflicts[].sentence`
+  修正文中关键数值。
 - 图表是否被正文引用。
 - 敏感性分析是否真的回答题目。
 - 敏感性分析是否说明参数变化范围。
@@ -85,6 +88,8 @@
 - 图片是否清晰。
 - 图表是否出现在合适位置。
 - 图表是否被正文引用。
+- 仅列入支撑材料、未进入正文的图片是否确实只是辅助/中间结果；若是核心结果图，
+  应插入正文而不是只放在附录A清单。
 - 坐标轴、图例、色条是否可读。
 - 表格小数位是否一致。
 - 图片中文字是否不是乱码或方框。
@@ -134,9 +139,13 @@
 
 ## 最终提交前必须确认
 
-- `paper_preflight_report.json = PASS`
+- `paper_preflight_report.json = PASS`；若为 `CONDITIONAL_PASS`，必须逐项查看
+  `severity=conditional` 的检查，正式提交前优先修正为 `PASS`，无法修正时需人工接受风险。
+- `paper_preflight_report.json -> checks.result_consistency.passed=true`；该项只覆盖
+  已结构化到结果 CSV 的关键事实，不替代人工复算模型和公式。
 - `pdf_visual_check.json = PASS`
-- `submission_audit_report.json` 已查看；正式提交前如启用
+- `submission_audit_report.json` 已查看；`WARN` 可来自 Docker 字体 fallback 或
+  `paper_preflight_report.json = CONDITIONAL_PASS`，必须确认原因；正式提交前如启用
   `--require-official-fonts`，结果应为 `PASS`。
 - `pdf_visual_check.json` 中摘要首页、无目录、匿名电子稿身份字段、正文页数、文件大小和内容边距检查均通过。
 - `paper_preflight_report.json -> checks.appendix_console_noise.passed=true`，附录没有

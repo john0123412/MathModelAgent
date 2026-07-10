@@ -75,6 +75,52 @@ class TestSubmissionAudit(unittest.TestCase):
         font_check = next(item for item in report["checks"] if item["id"] == "pdf_fonts")
         self.assertEqual(font_check["severity"], "error")
 
+    def test_conditional_preflight_warns_instead_of_failing_submission_audit(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_required_success_files(
+                work_dir,
+                [
+                    {
+                        "variable": "mainfont",
+                        "preferred": "Times New Roman",
+                        "actual": "Times New Roman",
+                        "fallback": "Liberation Serif",
+                        "source": "profile",
+                    }
+                ],
+            )
+            _write_json(work_dir, "paper_preflight_report.json", {"status": "CONDITIONAL_PASS"})
+
+            report = audit_submission(work_dir)
+
+        self.assertEqual(report["status"], "WARN")
+        preflight_check = next(item for item in report["checks"] if item["id"] == "paper_preflight")
+        self.assertFalse(preflight_check["passed"])
+        self.assertEqual(preflight_check["severity"], "warning")
+
+    def test_failed_preflight_still_fails_submission_audit(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_required_success_files(
+                work_dir,
+                [
+                    {
+                        "variable": "mainfont",
+                        "preferred": "Times New Roman",
+                        "actual": "Times New Roman",
+                        "fallback": "Liberation Serif",
+                        "source": "profile",
+                    }
+                ],
+            )
+            _write_json(work_dir, "paper_preflight_report.json", {"status": "FAIL"})
+
+            report = audit_submission(work_dir)
+
+        self.assertEqual(report["status"], "FAIL")
+        preflight_check = next(item for item in report["checks"] if item["id"] == "paper_preflight")
+        self.assertFalse(preflight_check["passed"])
+        self.assertEqual(preflight_check["severity"], "error")
+
     def test_official_fonts_pass_and_report_files_are_written(self):
         with tempfile.TemporaryDirectory() as work_dir:
             _write_required_success_files(

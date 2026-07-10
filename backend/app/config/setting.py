@@ -102,6 +102,10 @@ class Settings(BaseSettings):
         "paper_review": True,
     }
 
+    # 预留功能开关：当前仅用于 /status guardrail warning，不代表已接入主工作流
+    FALLBACK_ENABLED: bool = False
+    EVALUATOR_ENABLED: bool = False
+
     model_config = SettingsConfigDict(
         env_file=".env.dev",
         env_file_encoding="utf-8",

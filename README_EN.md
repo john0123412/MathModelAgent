@@ -35,11 +35,11 @@ Automatically generate an award-level modeling paper
 - 🧩 Custom templates: prompt inject for setting requirements for each subtask separately
 - 🌐 Literature and web search: Writer `search_papers` aggregates OpenAlex, Semantic Scholar, Crossref, and arXiv; Tavily is only used when `SEARCH_ENABLED=true` and `TAVILY_API_KEY` is configured
 
-## Current Implementation Status (Code Audit: 2026-07-08)
+## Current Implementation Status (Code Audit: 2026-07-10)
 
-- Implemented: FastAPI/Vue WebUI workflow, local Jupyter interpreter, optional E2B, OpenAI/Responses/Anthropic providers, checkpoint resume, variable snapshots, live user-message injection, multi-source literature search, CUMCM2026 Markdown/DOCX/PDF/LaTeX sidecar export, and submission audit reports.
-- Partially implemented: `HUMAN_MODEL_GATE_ENABLED` backend modeling gate exists but the frontend approval flow is not closed; `/save-api-config` changes in-memory settings only; `download_all_url` returns an `all.zip` path but no backend code currently creates that archive.
-- Not wired into the main workflow: `/track`, RAG, generic six-action HIL, Fallback Hand Off, Evaluator Shadow Mode, Feedback Rerun, Daytona, LiteLLM runtime, vision models, and R/MATLAB execution.
+- Implemented: FastAPI/Vue WebUI workflow, local Jupyter interpreter, optional E2B, OpenAI/Responses/Anthropic providers, checkpoint resume, variable snapshots, live user-message injection, multi-source literature search, modeling approval, filtered task archive downloads, aggregate token tracking, CUMCM2026 exports, and submission audits.
+- Explicit boundaries: `/save-api-config` changes runtime settings only; `/track` is best-effort single-process aggregation, not provider billing.
+- Not wired into the main workflow: RAG, generic six-action HIL, Fallback Hand Off, Evaluator Shadow Mode, Feedback Rerun, Daytona, LiteLLM runtime, vision models, and R/MATLAB execution.
 
 ## 🚀 Current Status and Future Plans
 
@@ -51,10 +51,10 @@ Automatically generate an award-level modeling paper
 - [x] Optional E2B cloud interpreter.
 - [ ] Hosted web service operations.
 - [ ] Full English/MCM/ICM delivery templates and validation rules.
-- [ ] Generic HIL approval flow with six actions.
+- [x] Modeling-plan approval through `waiting_review`, frontend approval, and checkpoint resume.
 - [ ] Feedback rerun with evaluator scoring.
-- [ ] Download-all archive generation.
-- [ ] Token/cost tracking through `/track`.
+- [x] Filtered download-all archive generation.
+- [x] Best-effort token usage tracking through `/track`.
 - [ ] Persistent API configuration.
 - [ ] RAG knowledge base.
 - [ ] Fallback handoff, shadow evaluator, Daytona, vision models, R/MATLAB, drawing tools, benchmark, chat/agent mode.
@@ -167,7 +167,8 @@ Results and outputs are generated in the `backend/project/work_dir/xxx/*` direct
 - pdf_visual_check.json: PDF visual check report
 - submission_audit_report.json / submission_audit_report.md: pre-submission audit report
 
-The backend does not currently generate `all.zip`; the download-all archive flow still needs implementation.
+The file panel can request a filtered `all.zip`; symlinks, temporary files, existing archives,
+common cache directories, and oversized inputs are excluded or rejected.
 
 ### 🚀 Option 3: Automated Script Deployment (Community Contribution)
 Need an automatic deployment script?

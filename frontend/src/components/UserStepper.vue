@@ -16,6 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { useApiKeyStore } from "@/stores/apiKeys";
 import { useTaskStore } from "@/stores/task";
+import { getSafeErrorMessage } from "@/utils/safeError";
 import { FileUp } from "lucide-vue-next";
 import { Rocket } from "lucide-vue-next";
 import { ref } from "vue";
@@ -136,8 +137,8 @@ const router = useRouter();
 /** 提交建模任务 */
 const handleSubmit = async () => {
 	try {
-		// 保存 API Key（若未在 WebUI 中填写，字段为空，后端会保留
-		// .env.dev 中已加载的默认配置，不会被空值覆盖）
+		// 应用 API Key 到当前后端进程。若字段为空，后端会保留 .env.dev
+		// 中已加载的默认配置，不会被空值覆盖；接口不会写回 .env.dev。
 		await saveApiConfig({
 			coordinator: apiKeyStore.coordinatorConfig,
 			modeler: apiKeyStore.modelerConfig,
@@ -186,7 +187,7 @@ const handleSubmit = async () => {
 			description: `任务提交成功，编号为：${taskId.value}`,
 		});
 	} catch (error) {
-		console.error("任务提交失败:", error);
+		console.error("任务提交失败:", getSafeErrorMessage(error));
 		toast({
 			title: "任务提交失败",
 			description: "请检查 API Key 是否正确",

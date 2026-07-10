@@ -13,6 +13,9 @@
   - `pdf_visual_check.json`
   - `submission_audit_report.json`
 - `latex_project/` 是候选 LaTeX sidecar，不是主交付链路。
+- `GET /download_all_url` 会按需生成任务目录下的 `all.zip`，用于下载当前任务工作区文件；
+  打包时会排除已有 `all.zip`、临时文件和常见缓存目录，并设置单文件/总大小上限，避免
+  意外打包过大目录。
 - LaTeX sidecar 当前已修复 CUMCM 图片路径、新版 pandoc `\pandocbounded`
   图片宏、notebook `# Cell n` 原始代码段拆分问题；导出时会扫描 Markdown/LaTeX
   中引用的本地图片，将可找到的图片复制到 `latex_project/` 和
@@ -32,9 +35,15 @@
   `fc-match` 返回 `SimSun,NSimSun` 这类字体族列表时正确命中。
 - 任务完成时会自动生成 `submission_audit_report.json/md`，汇总主交付文件、
   preflight、PDF 视觉检查和 `export_status.json -> pdf.font_resolution`。
+  由于 workflow 先导出 Markdown/PDF/LaTeX，再由路由最终生成 DOCX，正常完成后的
+  收尾步骤会在 `res.docx` 生成后重新刷新 `submission_audit_report.json/md`，
+  最后再刷新 `candidate_manifest.json`，避免审核报告读取到“缺少 res.docx”的旧状态。
   默认模式下 Docker fallback 字体记为 `WARN`；正式提交前可运行
   `uv run python -m app.tools.submission_audit --work-dir project\work_dir\<task_id> --require-official-fonts`
   作为严格门禁，fallback 或未知字体来源会 `FAIL`。
+  `paper_preflight_report.json = CONDITIONAL_PASS` 会在 `submission_audit_report`
+  中记为 `WARN` 而不是 `FAIL`，用于表达主交付可生成但存在需人工复核/接受的条件项；
+  `paper_preflight_report.json = FAIL` 或无法读取报告仍是硬失败。
   用 `export_cli pdf` 手动/正式重导时加 `--update-status`，会同步刷新
   `export_status.json`、`pdf_visual_check.json`、`submission_audit_report.json`
   和已有的 manifest，避免审核读取旧字体记录。
@@ -46,14 +55,30 @@
   删除批量 `print(...)`/`printf`/`console.log` 控制台输出语句，`paper_preflight_report`
   新增 `appendix_console_noise` 门禁。
 - 当前最新真实烟雾任务的主链路曾达到：
-  - `task_id = 20260706-161231-080acfb7`
+  - `task_id = 20260709-091916-1ff165da`
   - `paper_preflight_report.json = PASS`
   - `export_status.json -> pdf.success = true`
   - `pdf_visual_check = PASS`
   - `tex_export_status.json -> compile_success = true`
   - `latex_project/main.pdf` 已生成
+  - `submission_audit_report.json` 经 DOCX 后收尾刷新后为 `PASS`
   - 该任务使用 `mimo-v2.5` 真实接口完成轻量线性规划题，最优结果为
     `A=40, B=20, profit=2200`，机器时间增加 10 小时后利润约 `2366.67`。
+- 2026-07-09 针对当前多 PR 风险修复分支重建 Docker 后，基础服务烟雾验证通过：
+  `docker compose up --build -d`、前端入口 `http://127.0.0.1:5173/`、后端
+  docs 代理 `http://127.0.0.1:5173/api/docs`、容器内后端单测与
+  `ruff check app` 均可运行通过。完整真实建模 smoke 暂被外部 LLM provider
+  阻塞，最新任务 `20260709-014347-c9ed2ddd` 在 Coordinator 阶段连续重试后失败：
+  `403 GROUP_DISABLED` / `API Key 所属分组已停用`；任务目录仅生成
+  `task_status.json` 和字体文件，无 `res.md`、`res.json`、`res.docx`、
+  `candidate_manifest.json` 或 checkpoint。恢复有效 key 后需重跑项目规则中的
+  轻量线性规划题，验收 `/tasks` 为 `completed` 且主交付文件存在。
+- 2026-07-09 使用用户提供的新 `xiaomimimo` Responses provider key 后，模型验证
+  `mimo-v2.5` + `https://api.xiaomimimo.com/v1` 成功，并完成一次真实轻量任务
+  `20260709-091916-1ff165da`。随后在修复分支 `codex/refresh-audit-after-docx`
+  再次重建 Docker 并重跑真实任务 `20260709-093451-96f6f897` 时，任务已越过
+  Coordinator/Modeler/Coder，后续 Writer 阶段因 provider 返回 `402 Insufficient account balance`
+  中断；这表示 key 已可用但账户余额不足，恢复余额后需继续重跑完整 smoke。
 - `cumcm2026` 是基于 2026 修订稿规范实现的暂定模板，不是官方最终 DOCX/LaTeX 模板包。
 - 主 PDF 导出会在摘要/关键词后做 PDF-only 分页，支持裸 `关键词：...` 与
   `**关键词**：...`，保证摘要页独占第一页、正文从第二页开始；该分页不写回
@@ -66,6 +91,10 @@
   PDF/DOCX 图题带 `.png`/下划线等文件名痕迹、把常见英文过渡词
   `Overall`/`However` 等替换为中文表达、在正式题目数不足时把可见 `问题3_...`
   扩展分析标签和 `问题三：...` 扩展段落规范为 `灵敏度分析...`（图片路径保持原文件名）。
+  图片预检会区分正文图和支撑材料图：正文 `![](...)` 引用的图片必须存在；生成图片
+  若没有正文引用但已在附录A支撑材料表中登记为 `图片文件`，视为 accounted support
+  artifact，不再计入 `checks.images.unused_generated`；既未正文引用、也未登记的生成图片
+  仍会触发图片 conditional。
   工作流会把原题拆分出的 `quesN` 数量传给后处理，避免 Writer 自行编出的额外问题
   污染题目数判断。后处理还会清理最终稿和附录代码中可见的 `用户`、`推断`、
   `估算`、`待验证` 等提交痕迹，改为 `题目`、`核定`、`测算`、`需核验` 等正式表达。
@@ -76,6 +105,12 @@
   孤立的 `: ... DOI ...` 定义式参考行会被删除，避免同类 description list 误解析。
   预检还会阻断电子论文中出现 `承诺书`、`编号专用页`、`参赛队号`、`队员姓名`
   等身份/封面字段，避免违反高教社杯匿名电子稿口径。
+  `paper_preflight_report.json -> checks.result_consistency` 会读取任务目录中
+  结果 CSV 的结构化关键数值，目前重点检查机器时间/人工时间影子价格；如果正文
+  同标签句子中的数值与 CSV 不一致，预检硬门禁 `FAIL`。没有可识别结果 CSV 时
+  不阻断，因此该检查只能拦截已结构化事实的明显冲突，不替代完整数学复核。
+  `flows.get_writer_prompt` 会把同一批结构化结果事实注入写作手提示，要求正文关键
+  数值优先使用结果 CSV，减少 Writer 在摘要/求解/敏感性段落中复述错误数字。
   若正文已经说明题目参数是确定性常量、无随机样本数据，后处理会把
   `描述性统计` 这类样本数据 EDA 用语规范为 `参数核验`，并清理正文/支撑材料中的
   Monte Carlo、蒙特卡洛、随机模拟等探索性随机模拟内容；代码附录中的同类标签会
@@ -92,18 +127,53 @@
 - LLM provider 单次请求超时由 `LLM_REQUEST_TIMEOUT_SECONDS` 控制，默认 90 秒；
   用于兼容较慢的 OpenAI-compatible/Responses/Anthropic 端点，避免建模手或写作手
   在正常长响应时过早 `Request timed out`。
-- 2026-07-08 代码审计后已修正 README/README_EN/STARTUP 的事实口径：后续判断项目状态
-  应以代码实现和本记忆为准，不要把旧 README 中的 RAG、通用 HIL、四层容错、Daytona、
-  LiteLLM、完全 SKILLS 驱动等描述当作已完成事实。
-- 当前已知未闭环能力：`/track` 空实现；`download_all_url` 只返回 `all.zip` 路径但
-  后端不生成压缩包；`/save-api-config` 只改内存不持久化；`HUMAN_MODEL_GATE_ENABLED`
-  只有后端 Modeler 门禁，前端审批入口未闭环；`RAG_ENABLED`/`HIL_ENABLED`/
-  Fallback/Evaluator 主要是配置或占位，尚未接入主工作流；Daytona、LiteLLM runtime、
-  视觉模型、R/MATLAB 执行链路未接入当前代码。
-- 2026-07-08 本地验证：后端完整单测 `python -m unittest discover -s app\tests -p 'test_*.py'`
-  通过 `155 tests`，`ruff check app` 通过；本机前端构建未运行，原因是项目规则禁止
-  agent 主动调用 Windows 本机前端 Node 工具链；Docker Desktop 当时未启动，未完成
-  Docker 运行态复验。
+- `HUMAN_MODEL_GATE_ENABLED=true` 时，Modeler 阶段会生成 `modeling_decision.md/json`
+  并把任务状态置为 `waiting_review`；前端任务页会定时刷新任务状态并显示“确认建模方案并继续”，
+  调用 `/modeling/{task_id}/approve-modeling` 后从 Coder 阶段续跑。
+- 2026-07-10 在 PR #11 最新后端与 PR #6 前端的临时集成 worktree 中重建 Docker，
+  真实任务 `20260710-010231-e6470545` 从 `running` 自动进入 `waiting_review`，无需刷新页面
+  即显示审批按钮；审批后任务恢复并完成。`modeling_decision.json=approved`，checkpoint、
+  变量快照、Markdown/JSON/DOCX/PDF、manifest 均生成，preflight、PDF 视觉检查和 LaTeX
+  编译通过；submission audit 仅因 Docker fallback 字体为 `WARN`。
+- `/status` 的 `backend.feature_warnings` 会报告配置存在但尚未接入主工作流的能力，
+  例如 `RAG_ENABLED`、通用 `HIL_ENABLED`、`FALLBACK_ENABLED`、`EVALUATOR_ENABLED`；
+  这些 warning 不阻断服务启动，只用于避免把配置开关误判为已完成功能。
+- `/save-api-config` 只把验证后的模型配置应用到当前后端进程的 `settings`，
+  不写回 `.env.dev`，响应中会明确 `scope=runtime`、`persisted=false`；
+  空字段不会覆盖 `.env.dev` 已加载的默认值，且响应不回显 API key。前端 Pinia
+  store 仍会在浏览器本地持久化用户填写的 API key，这是浏览器侧行为，不代表后端落盘。
+- LLM 成功调用后会在任务目录写入 `token_usage.json`，只保存按 agent 聚合的
+  `chat_count`、`prompt_tokens`、`completion_tokens`、`total_tokens` 和模型名，
+  不保存 prompt、completion、tool args、API key 或 base_url；`GET /track`
+  读取该文件返回聚合统计。统计写入是 best-effort，失败不会让已成功的 LLM 调用重试；
+  当前只保证单进程内加锁累加，多 worker/多进程场景不作为强一致账单依据。
+- Anthropic provider 对 `api.anthropic.com` 官方地址继续使用 Anthropic SDK
+  `api_key` 认证；对非官方 Anthropic 兼容网关改用 Bearer `auth_token`，
+  以兼容 `ANTHROPIC_AUTH_TOKEN` 风格服务。2026-07-09 用户提供的 CloudBase
+  网关已用 `hy3-preview` 验证文本请求和 `tool_choice=auto` 工具调用可用；
+  本地忽略配置 `backend/.env.dev` 可设置四个 Agent 使用
+  `COORDINATOR/MODELER/CODER/WRITER_API_TYPE=anthropic`、模型 `hy3-preview`
+  和对应 CloudBase base URL，密钥不应写入 Git。
+- 2026-07-09 CloudBase `hy3-preview` 真实轻量 smoke 任务
+  `20260709-111913-995cfe14` 已在 Docker 中通过续传完成，主产物、变量快照、
+  `paper_preflight_report=PASS`、`pdf_visual_check=PASS`、
+  `tex_export_status.compile_success=true`、`candidate_manifest.json` 均生成；
+  `submission_audit_report=WARN`，唯一 WARN 是 Docker 环境缺少 SimSun /
+  Times New Roman 导致 PDF 字体 fallback 到 Noto Serif CJK SC /
+  Liberation Serif。按项目规则这不视为主流程失败，正式提交前仍应挂载
+  `MMA_OFFICIAL_FONTS_DIR=C:\Windows\Fonts` 或在 Windows 本机重导并跑严格字体门禁。
+  在新增 `checks.result_consistency` 后，用当前分支代码只读复核该任务会因正文影子价格
+  `26.7/13.3` 与 CSV 中 `16.67/6.67` 冲突而 `FAIL`；这说明旧报告的 PASS 不能代表
+  当前代码门禁结果。该 smoke 只证明 provider/导出链路可用；preflight/audit 仍不等同
+  于数学正确性证明。
+- 2026-07-09 在 `codex/image-accounting-gate` 分支重建 Docker 后，CloudBase
+  `hy3-preview` 真实轻量 smoke 任务 `20260709-153822-846f9e0e` 完成。刷新后
+  `paper_preflight_report=PASS`、`checks.images.unused_generated=[]`、
+  `checks.result_consistency.passed=true`、`pdf_visual_check=PASS`、
+  `tex_export_status.compile_success=true`、`res.docx`、`candidate_manifest.json`
+  均生成；`submission_audit_report=WARN`，唯一 WARN 是 Docker 环境字体 fallback，
+  按项目规则不视为主流程失败。
+   该 smoke 只证明 provider/导出链路可用；preflight/audit 仍不等同于数学正确性证明。
 - 真实提交前仍需人工复核论文内容和 PDF 排版。
 
 ## 接手时禁止全盘扫描
@@ -177,7 +247,8 @@
   - 参考文献、附录、支撑材料、预检、claim trace。
   - 负责 `paper_preflight_report.json/md`。
   - 检查正文引用编号是否都有文末参考文献条目、表格是否有编号标题、图片图题是否
-    避免文件名痕迹、常见英文过渡词是否已转为中文、扩展分析是否被误标为不存在的“问题3”。
+    避免文件名痕迹、生成图片是否已被正文引用或附录A支撑材料表登记、常见英文过渡词
+    是否已转为中文、扩展分析是否被误标为不存在的“问题3”。
 - `backend/app/tools/pdf_visual_checker.py`
   - PDF 后验视觉检查。
   - 检查 A4、非空、文本可提取、20MB 文件大小、摘要首页、无目录、
@@ -229,6 +300,9 @@
 - 如果参考文献或表格细节异常，优先看：
   `checks.references.missing_inline`、`checks.tables.uncaptioned_tables`、
   `checks.extra_problem_labels.issues`。
+- 如果正文关键数值与代码/CSV 输出疑似不一致，优先看：
+  `checks.result_consistency.conflicts`，再对照对应 `source` CSV 和 `res.md`
+  中的 `sentence`。
 - 如果轻量题目没有外部数据集但论文出现“模拟数据集”“随机生成样本”等内容，
   优先检查代码手 EDA 输出和 `flows.py`/`prompts/coder.py` 的无数据 EDA 边界提示。
 - 如果 PDF 视觉检查失败，优先看：
@@ -262,6 +336,8 @@ uv run python scripts/smoke_pdf_export.py
   - `tex_export_status.json -> missing_assets = []`
 - 如果 `res.pdf` 成功但 `latex_project/` 编译失败，先汇报 sidecar 非阻断。
 - 如果 `preflight PASS` 但论文内容可疑，使用最终人工复核清单。
+- 如果 `checks.result_consistency` 为 PASS，仅表示已识别 CSV 事实没有与正文冲突；
+  未结构化入 CSV 的公式推导、模型选择和单位理解仍需人工复核。
 - 如果官方发布 2026 Word/DOCX 模板，按 `docs/md/CUMCM2026模板替换指南.md` 替换 `cumcm2026_docx`。
 - 如果官方发布 2026 LaTeX 模板，按 `docs/md/CUMCM2026模板替换指南.md` 新增 `cumcm2026/`。
 - 不要覆盖 `cumcm2025/` 或 `cumcm2025_docx/`。

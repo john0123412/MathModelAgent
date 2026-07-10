@@ -4,7 +4,7 @@
 </p>
 <h4 align="center">
     An agent designed for mathematical modeling<br>
-    Automatically complete mathematical modeling and generate a ready-to-submit paper.
+    Automatically complete modeling, code execution, and candidate paper generation; manual review is still required before submission.
 </h4>
 
 <h5 align="center"><a href="README.md">简体中文</a> | English</h5>
@@ -26,34 +26,38 @@ Automatically generate an award-level modeling paper
 - 🔍 Automatic problem analysis, mathematical modeling, code writing, error correction, and paper writing
 - 💻 Code Interpreter
     - Local Interpreter: Based on Jupyter, code saved as notebook for easy editing
-    - Cloud Code Interpreter: [E2B](https://e2b.dev/) and [daytona](https://app.daytona.io/)
-- 📝 Generate a well-formatted paper
+    - Cloud Code Interpreter: [E2B](https://e2b.dev/) when `E2B_API_KEY` is configured; Daytona is not wired into the current codebase
+- 📝 Generate Markdown / DOCX / PDF / LaTeX sidecar candidate papers and audit reports
 - 🤝 Multi-agents: modeling expert, coding expert, paper expert, etc.
 - 🔄 Multi-LLMs: Different models for each agent
-- 🤖 Support for all models: [litellm](https://docs.litellm.ai/docs/providers)
+- 🤖 Built-in OpenAI Chat Completions, OpenAI Responses, Anthropic, and OpenAI-compatible `base_url` configuration; LiteLLM runtime is not integrated
 - 💰 Low cost: workflow agentless, no dependency on agent framework
 - 🧩 Custom templates: prompt inject for setting requirements for each subtask separately
+- 🌐 Literature and web search: Writer `search_papers` aggregates OpenAlex, Semantic Scholar, Crossref, and arXiv; Tavily is only used when `SEARCH_ENABLED=true` and `TAVILY_API_KEY` is configured
 
-## 🚀 Future Plans
+## Current Implementation Status (Code Audit: 2026-07-10)
 
-- [x] Add and complete webui, cli
-- [ ] Comprehensive tutorials and documentation
-- [ ] Provide web service
-- [ ] English support (MCM/ICM)
-- [ ] LaTeX template integration
-- [ ] Vision model integration
-- [x] Proper citation implementation
-- [x] More test cases
-- [x] Docker deployment
-- [ ] Human in loop: User interaction (model selection, @agent rewriting, etc.)
-- [ ] Feedback: evaluate the result and modify
-- [x] Cloud integration for code interpreter (e.g., e2b providers)
-- [ ] Multi-language: R, Matlab
-- [ ] Drawing: napki, draw.io, plantuml, svg, mermaid.js
-- [ ] Add benchmark
-- [ ] Web search tool
-- [ ] RAG knowledge base
-- [ ] A2A hand off: Code expert reflects on errors multiple times, hands off to smarter model agent
+- Implemented: FastAPI/Vue WebUI workflow, local Jupyter interpreter, optional E2B, OpenAI/Responses/Anthropic providers, checkpoint resume, variable snapshots, live user-message injection, multi-source literature search, modeling approval, filtered task archive downloads, aggregate token tracking, CUMCM2026 exports, and submission audits.
+- Explicit boundaries: `/save-api-config` changes runtime settings only; `/track` is best-effort single-process aggregation, not provider billing.
+- Not wired into the main workflow: RAG, generic six-action HIL, Fallback Hand Off, Evaluator Shadow Mode, Feedback Rerun, Daytona, LiteLLM runtime, vision models, and R/MATLAB execution.
+
+## 🚀 Current Status and Future Plans
+
+- [x] WebUI workflow: upload task, modeling, code execution, writing, task list, resume.
+- [x] Docker deployment configuration.
+- [x] Literature search: OpenAlex, Semantic Scholar, Crossref, arXiv, plus optional Tavily web search.
+- [x] Checkpoint resume and variable snapshots.
+- [x] Markdown, DOCX, PDF, LaTeX sidecar, manifest, preflight, visual check, and submission audit exports.
+- [x] Optional E2B cloud interpreter.
+- [ ] Hosted web service operations.
+- [ ] Full English/MCM/ICM delivery templates and validation rules.
+- [x] Modeling-plan approval through `waiting_review`, frontend approval, and checkpoint resume.
+- [ ] Feedback rerun with evaluator scoring.
+- [x] Filtered download-all archive generation.
+- [x] Best-effort token usage tracking through `/track`.
+- [ ] Persistent API configuration.
+- [ ] RAG knowledge base.
+- [ ] Fallback handoff, shadow evaluator, Daytona, vision models, R/MATLAB, drawing tools, benchmark, chat/agent mode.
 
 ## Video Demo
 
@@ -154,6 +158,17 @@ pnpm run dev
 Results and outputs are generated in the `backend/project/work_dir/xxx/*` directory:
 - notebook.ipynb: code generated during execution
 - res.md: final results in markdown format
+- res.json: structured result data
+- res.docx: Word candidate paper
+- res.pdf: PDF candidate paper
+- modeler_plan.md / modeler_plan.json: structured modeling plan for review before code execution
+- candidate_manifest.json: candidate delivery manifest
+- paper_preflight_report.json: paper preflight report
+- pdf_visual_check.json: PDF visual check report
+- submission_audit_report.json / submission_audit_report.md: pre-submission audit report
+
+The file panel can request a filtered `all.zip`; symlinks, temporary files, existing archives,
+common cache directories, and oversized inputs are excluded or rejected.
 
 ### 🚀 Option 3: Automated Script Deployment (Community Contribution)
 Need an automatic deployment script?

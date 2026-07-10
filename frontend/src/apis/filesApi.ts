@@ -5,12 +5,12 @@ import request from "@/utils/request";
  * @param task_id 任务ID
  */
 export function getFiles(task_id: string) {
-	return request.get<{
-		files: {
+	return request.get<
+		{
 			filename: string;
 			file_type: string;
-		}[];
-	}>("/files", {
+		}[]
+	>("/files", {
 		params: { task_id },
 	});
 }

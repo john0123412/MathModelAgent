@@ -1,6 +1,8 @@
 """Anthropic Messages API Provider。"""
 
 import json as _json
+from urllib.parse import urlparse
+
 from anthropic import AsyncAnthropic
 from app.config.setting import settings
 from app.core.llm.providers.base import BaseProvider
@@ -21,8 +23,9 @@ class AnthropicProvider(BaseProvider):
         max_tokens: int | None = None,
         top_p: float | None = None,
     ) -> StandardResponse:
+        auth_kwargs = self._build_auth_kwargs(api_key, base_url)
         client = AsyncAnthropic(
-            api_key=api_key,
+            **auth_kwargs,
             base_url=base_url,
             timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS,
         )
@@ -133,3 +136,10 @@ class AnthropicProvider(BaseProvider):
         if tool_choice == "required":
             return {"type": "any"}
         return {"type": "auto"}
+
+    def _build_auth_kwargs(self, api_key: str, base_url: str | None) -> dict:
+        """Anthropic 官方使用 api_key，部分兼容网关使用 Bearer auth_token。"""
+        hostname = urlparse(base_url).hostname if base_url else None
+        if hostname and hostname.lower() != "api.anthropic.com":
+            return {"api_key": None, "auth_token": api_key}
+        return {"api_key": api_key, "auth_token": None}

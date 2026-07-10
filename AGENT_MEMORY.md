@@ -102,6 +102,22 @@
 - LLM provider 单次请求超时由 `LLM_REQUEST_TIMEOUT_SECONDS` 控制，默认 90 秒；
   用于兼容较慢的 OpenAI-compatible/Responses/Anthropic 端点，避免建模手或写作手
   在正常长响应时过早 `Request timed out`。
+- Anthropic provider 对 `api.anthropic.com` 官方地址继续使用 Anthropic SDK
+  `api_key` 认证；对非官方 Anthropic 兼容网关改用 Bearer `auth_token`，
+  以兼容 `ANTHROPIC_AUTH_TOKEN` 风格服务。2026-07-09 用户提供的 CloudBase
+  网关已用 `hy3-preview` 验证文本请求和 `tool_choice=auto` 工具调用可用；
+  本地忽略配置 `backend/.env.dev` 可设置四个 Agent 使用
+  `COORDINATOR/MODELER/CODER/WRITER_API_TYPE=anthropic`、模型 `hy3-preview`
+  和对应 CloudBase base URL，密钥不应写入 Git。
+- 2026-07-09 CloudBase `hy3-preview` 真实轻量 smoke 任务
+  `20260709-111913-995cfe14` 已在 Docker 中通过续传完成，主产物、变量快照、
+  `paper_preflight_report=PASS`、`pdf_visual_check=PASS`、
+  `tex_export_status.compile_success=true`、`candidate_manifest.json` 均生成；
+  `submission_audit_report=WARN`，唯一 WARN 是 Docker 环境缺少 SimSun /
+  Times New Roman 导致 PDF 字体 fallback 到 Noto Serif CJK SC /
+  Liberation Serif。按项目规则这不视为主流程失败，正式提交前仍应挂载
+  `MMA_OFFICIAL_FONTS_DIR=C:\Windows\Fonts` 或在 Windows 本机重导并跑严格字体门禁。
+  该 smoke 只证明 provider/导出链路可用；preflight/audit 仍不等同于数学正确性证明。
 - 真实提交前仍需人工复核论文内容和 PDF 排版。
 
 ## 接手时禁止全盘扫描

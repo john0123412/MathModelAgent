@@ -81,14 +81,6 @@ const updateDuration = () => {
 	runningDuration.value = formatDuration(currentTime.value - startTime.value);
 };
 
-const getSafeErrorMessage = (error: unknown) => {
-	if (error && typeof error === "object" && "response" in error) {
-		const response = (error as { response?: { status?: number } }).response;
-		return `status=${response?.status ?? "unknown"}`;
-	}
-	return error instanceof Error ? error.message : "unknown error";
-};
-
 /** 处理停止运行 */
 async function handleStop() {
 	isStopping.value = true;

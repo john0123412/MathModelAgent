@@ -369,7 +369,7 @@ Prompt Inject : [prompt](./backend/app/config/md_template.toml)
 - `/track` 返回按任务和 Agent 聚合的 best-effort token 统计，不等同于供应商账单。
 - `/download_all_url` 会按需生成并返回经过路径、符号链接和大小过滤的 `all.zip`。
 - `/save-api-config` 当前只修改进程内配置，不会持久化到 `.env.dev`。
-- `/approve-modeling` 后端接口存在，但前端尚未提供完整审批操作入口。
+- `/approve-modeling` 已由任务页的“确认建模方案并继续”操作调用；该流程仅在任务状态为 `waiting_review` 时出现。
 
 ## 🤝 贡献和开发
 

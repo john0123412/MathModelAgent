@@ -174,6 +174,11 @@
   均生成；`submission_audit_report=WARN`，唯一 WARN 是 Docker 环境字体 fallback，
   按项目规则不视为主流程失败。
    该 smoke 只证明 provider/导出链路可用；preflight/audit 仍不等同于数学正确性证明。
+- 2026-07-11 在最终审计修复分支重建 Docker 后，前端入口、`/api/docs` 代理、
+  后端 docs、容器内指定单测和 Ruff 均通过；真实轻量线性规划任务
+  `20260711-005536-09d34201` 在 Coordinator 早期因 provider 授权失败而终止，
+  未生成主交付物或 checkpoint。按当次验收要求未重试；恢复有效 provider 授权后，
+  需重跑项目规则中的轻量线性规划题并核验任务状态和交付物。
 - 真实提交前仍需人工复核论文内容和 PDF 排版。
 
 ## 接手时禁止全盘扫描

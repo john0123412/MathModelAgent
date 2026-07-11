@@ -8,6 +8,11 @@
 
 **Tech Stack:** FastAPI, Python unittest, Vue 3, TypeScript, existing Docker Compose stack.
 
+> **Historical status (2026-07-11):** Tasks 1-5 were delivered in PRs #3-#7 and
+> are merged into `main`. The original work branches were deleted after verification.
+> This file is an archived planning record; its file lists describe planned scope, not
+> the current implementation inventory.
+
 ## Global Constraints
 
 - Work from `D:\workspace\MathModelAgent`.
@@ -24,7 +29,7 @@
 
 **Risk:** Low.
 
-**Branch:** `codex/download-all-zip`
+**Merged PR:** #3
 
 **Files:**
 - Modify: `backend/app/routers/files_router.py`
@@ -38,18 +43,18 @@
 - Produces: `GET /download_all_url?task_id=...` creates or refreshes `all.zip` under the task work directory and returns its static URL.
 
 **Steps:**
-- [ ] Add tests for archive generation, file inclusion, zip exclusion, missing task handling, and unsafe task-id rejection.
-- [ ] Implement safe zip creation in the backend route.
-- [ ] Fix frontend `getFiles` response typing to match the backend array response.
-- [ ] Expose the existing `downloadAll()` action in the file sheet UI.
-- [ ] Run targeted backend tests and `ruff check app`.
-- [ ] Commit, push, and open a draft PR.
+- [x] Add tests for archive generation, file inclusion, zip exclusion, missing task handling, and unsafe task-id rejection.
+- [x] Implement safe zip creation in the backend route.
+- [x] Fix frontend `getFiles` response typing to match the backend array response.
+- [x] Expose the existing `downloadAll()` action in the file sheet UI.
+- [x] Run targeted backend tests and `ruff check app`.
+- [x] Commit, push, and merge the PR.
 
 ## Task 2: Token Tracking Endpoint Closure
 
 **Risk:** Low to medium.
 
-**Branch:** `codex/token-track-endpoint`
+**Merged PR:** #4
 
 **Files:**
 - Modify: `backend/app/routers/common_router.py`
@@ -62,18 +67,18 @@
 - Produces: `token_usage.json` and `GET /track?task_id=...` response with per-agent usage and totals.
 
 **Steps:**
-- [ ] Add tests for missing usage file, malformed usage file, valid aggregation, and unsafe task-id rejection.
-- [ ] Add a small recorder used by `LLM.chat()` after successful provider calls.
-- [ ] Implement `/track` to read and normalize usage data.
-- [ ] Mark costs as estimated and avoid logging secrets.
-- [ ] Run targeted backend tests and `ruff check app`.
-- [ ] Commit, push, and open a draft PR.
+- [x] Add tests for missing usage file, malformed usage file, valid aggregation, and unsafe task-id rejection.
+- [x] Add a small recorder used by `LLM.chat()` after successful provider calls.
+- [x] Implement `/track` to read and normalize usage data.
+- [x] Mark costs as estimated and avoid logging secrets.
+- [x] Run targeted backend tests and `ruff check app`.
+- [x] Commit, push, and merge the PR.
 
 ## Task 3: API Config Save Semantics
 
 **Risk:** Medium because it touches API key handling.
 
-**Branch:** `codex/api-config-save-semantics`
+**Merged PR:** #5
 
 **Files:**
 - Modify: `backend/app/routers/modeling_router.py`
@@ -85,18 +90,18 @@
 - Produces: explicit response fields indicating `scope: "runtime"` and `persisted: false` unless a later approved persist mode is added.
 
 **Steps:**
-- [ ] Add tests proving empty fields do not erase existing config and responses do not echo keys.
-- [ ] Return accurate runtime-only save semantics.
-- [ ] Update frontend copy so users are not told runtime-only settings were persisted to disk.
-- [ ] Do not implement key persistence without a separate explicit approval.
-- [ ] Run targeted backend tests and `ruff check app`.
-- [ ] Commit, push, and open a draft PR.
+- [x] Add tests proving empty fields do not erase existing config and responses do not echo keys.
+- [x] Return accurate runtime-only save semantics.
+- [x] Update frontend copy so users are not told runtime-only settings were persisted to disk.
+- [x] Do not implement key persistence without a separate explicit approval.
+- [x] Run targeted backend tests and `ruff check app`.
+- [x] Commit, push, and merge the PR.
 
 ## Task 4: Modeling Approval UI Closure
 
 **Risk:** Medium to high because it changes task continuation UX.
 
-**Branch:** `codex/modeling-approval-ui`
+**Merged PR:** #6
 
 **Files:**
 - Modify: frontend task API layer.
@@ -108,17 +113,17 @@
 - Produces: visible UI path for reviewing and approving a paused modeling decision.
 
 **Steps:**
-- [ ] Identify the task status and file signal used when `HUMAN_MODEL_GATE_ENABLED=true`.
-- [ ] Add frontend API wrapper for approval.
-- [ ] Add task-page action for “确认建模方案并继续”.
-- [ ] Verify via Docker/browser when Docker is available.
-- [ ] Commit, push, open draft PR, then rebuild Docker and run smoke checks until passing.
+- [x] Identify the task status and file signal used when `HUMAN_MODEL_GATE_ENABLED=true`.
+- [x] Add frontend API wrapper for approval.
+- [x] Add task-page action for “确认建模方案并继续”.
+- [x] Verify via Docker/browser when Docker is available.
+- [x] Commit, push, merge the PR, then rebuild Docker and run smoke checks.
 
 ## Task 5: Config-Only Feature Guardrails
 
 **Risk:** Medium.
 
-**Branch:** `codex/config-feature-guardrails`
+**Merged PR:** #7
 
 **Files:**
 - Modify: settings or startup/status endpoint code.
@@ -130,8 +135,8 @@
 - Produces: explicit warnings when config-only features are enabled but not wired into the main workflow.
 
 **Steps:**
-- [ ] Add backend warnings/status metadata for config-only features.
-- [ ] Ensure warnings are visible without breaking task startup.
-- [ ] Update docs/memory if user-facing behavior changes.
-- [ ] Run backend tests and `ruff check app`.
-- [ ] Commit, push, open draft PR.
+- [x] Add backend warnings/status metadata for config-only features.
+- [x] Ensure warnings are visible without breaking task startup.
+- [x] Update docs/memory if user-facing behavior changes.
+- [x] Run backend tests and `ruff check app`.
+- [x] Commit, push, and merge the PR.

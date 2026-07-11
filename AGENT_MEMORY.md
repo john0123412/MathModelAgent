@@ -75,7 +75,7 @@
   轻量线性规划题，验收 `/tasks` 为 `completed` 且主交付文件存在。
 - 2026-07-09 使用用户提供的新 `xiaomimimo` Responses provider key 后，模型验证
   `mimo-v2.5` + `https://api.xiaomimimo.com/v1` 成功，并完成一次真实轻量任务
-  `20260709-091916-1ff165da`。随后在修复分支 `codex/refresh-audit-after-docx`
+  `20260709-091916-1ff165da`。随后在 PR #8 合并后的修复代码上
   再次重建 Docker 并重跑真实任务 `20260709-093451-96f6f897` 时，任务已越过
   Coordinator/Modeler/Coder，后续 Writer 阶段因 provider 返回 `402 Insufficient account balance`
   中断；这表示 key 已可用但账户余额不足，恢复余额后需继续重跑完整 smoke。
@@ -166,7 +166,7 @@
   `26.7/13.3` 与 CSV 中 `16.67/6.67` 冲突而 `FAIL`；这说明旧报告的 PASS 不能代表
   当前代码门禁结果。该 smoke 只证明 provider/导出链路可用；preflight/audit 仍不等同
   于数学正确性证明。
-- 2026-07-09 在 `codex/image-accounting-gate` 分支重建 Docker 后，CloudBase
+- 2026-07-09 在 PR #11 对应代码上重建 Docker 后，CloudBase
   `hy3-preview` 真实轻量 smoke 任务 `20260709-153822-846f9e0e` 完成。刷新后
   `paper_preflight_report=PASS`、`checks.images.unused_generated=[]`、
   `checks.result_consistency.passed=true`、`pdf_visual_check=PASS`、
@@ -186,6 +186,9 @@
   LaTeX 编译均为 `PASS`/成功。正文经人工数值核验为 `A=40`、`B=20`、利润 `2200`，
   机器时间增加 10 小时后利润 `2366.67`；`/track` 返回四个 Agent 的聚合统计，
   `/download_all_url` 生成并成功下载 ZIP 归档。
+- 2026-07-11 已核验 PR #1-#14 全部合并到 `main`，随后删除其历史本地/远程
+  `codex/*` 分支、六个不再使用的 worktree 以及一个失效 worktree 注册。后续工作应
+  从干净的 `main` 创建新分支；归档计划中的 PR 编号可用于追溯历史实现。
 - 真实提交前仍需人工复核论文内容和 PDF 排版。
 
 ## 接手时禁止全盘扫描

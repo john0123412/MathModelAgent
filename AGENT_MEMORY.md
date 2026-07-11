@@ -179,6 +179,13 @@
   `20260711-005536-09d34201` 在 Coordinator 早期因 provider 授权失败而终止，
   未生成主交付物或 checkpoint。按当次验收要求未重试；恢复有效 provider 授权后，
   需重跑项目规则中的轻量线性规划题并核验任务状态和交付物。
+- 2026-07-11 更新有效的 OpenAI Responses 兼容运行配置并重建后端后，模型枚举与
+  真实轻量线性规划任务 `20260711-133616-38439fe3` 均成功。任务状态为 `completed`，
+  已生成 Markdown/JSON/DOCX/PDF、manifest、checkpoint 和变量快照；
+  `paper_preflight_report`、结果一致性、PDF 视觉检查、submission audit、PDF 导出和
+  LaTeX 编译均为 `PASS`/成功。正文经人工数值核验为 `A=40`、`B=20`、利润 `2200`，
+  机器时间增加 10 小时后利润 `2366.67`；`/track` 返回四个 Agent 的聚合统计，
+  `/download_all_url` 生成并成功下载 ZIP 归档。
 - 真实提交前仍需人工复核论文内容和 PDF 排版。
 
 ## 接手时禁止全盘扫描

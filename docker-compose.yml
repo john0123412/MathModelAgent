@@ -42,9 +42,7 @@ services:
       - REDIS_URL=redis://redis:6379/0 # 覆盖 .env.dev 中的 127.0.0.1，容器内用服务名连 Redis
       - SERVER_HOST=http://localhost:5173/api # Docker 前端通过 Vite /api 代理访问后端，下载链接也走同一入口
     volumes:
-      - ./backend:/app # 挂载后端代码以实现热重载 (开发环境)
       - ./backend/project/work_dir:/app/project/work_dir # 持久化生成的文件
-      - backend_venv:/app/.venv # 可选：持久化 venv 以在依赖不变时加快后续构建速度
       - "${MMA_OFFICIAL_FONTS_DIR:-./backend/fonts}:/usr/local/share/fonts/mma-extra:ro" # 可选：挂载宿主机合法安装的正式字体；Windows 可在根目录 .env 设置 MMA_OFFICIAL_FONTS_DIR=C:\Windows\Fonts
     depends_on:
       redis:
@@ -75,7 +73,6 @@ services:
     env_file:
       - ./frontend/.env.docker # 加载前端的环境变量（docker-compose 场景下后端映射在宿主机 8000，与本地开发用的 .env.development(8003) 区分）
     volumes:
-      - ./frontend:/app # 挂载前端代码以实现热重载 (开发环境)
       - /app/node_modules # 匿名卷，防止主机的 node_modules 覆盖容器内的
     depends_on:
       backend:
@@ -85,4 +82,4 @@ services:
 
 volumes:
   redis_data: # 定义用于 Redis 持久化的命名卷
-  backend_venv: # 定义用于后端 venv 的命名卷
+  backend_venv: # 仅 docker-compose.dev.yml 使用的开发依赖缓存

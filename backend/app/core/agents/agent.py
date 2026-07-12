@@ -1,6 +1,7 @@
 """Agent 基类模块，提供对话管理和记忆压缩功能。"""
 
 import asyncio
+from contextlib import suppress
 from typing import Any, Callable
 from app.core.llm.llm import LLM, simple_chat
 from app.utils.log_util import logger
@@ -69,16 +70,28 @@ class Agent:
 
         chat_task = asyncio.create_task(self.model.chat(**kwargs))
         cancel_wait_task = asyncio.create_task(self.cancel_event.wait())
-        done, pending = await asyncio.wait(
-            {chat_task, cancel_wait_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if cancel_wait_task in done:
-            chat_task.cancel()
-            for p in pending:
-                p.cancel()
-            raise asyncio.CancelledError("任务被用户停止")
-        return await chat_task
+        try:
+            done, _ = await asyncio.wait(
+                {chat_task, cancel_wait_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if cancel_wait_task in done:
+                chat_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await chat_task
+                raise asyncio.CancelledError("任务被用户停止")
+            return await chat_task
+        except BaseException:
+            if not chat_task.done():
+                chat_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await chat_task
+            raise
+        finally:
+            if not cancel_wait_task.done():
+                cancel_wait_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await cancel_wait_task
 
     async def run(self, prompt: str, system_prompt: str, sub_title: str) -> Any:
         """执行 Agent 对话并返回模型响应。
@@ -133,9 +146,9 @@ class Agent:
         except asyncio.CancelledError:
             logger.info(f"{self.__class__.__name__}:任务被用户停止")
             raise
-        except Exception as e:
-            error_msg = f"执行过程中遇到错误: {str(e)}"
-            logger.error(f"Agent执行失败: {str(e)}")
+        except Exception as exc:
+            error_msg = f"执行过程中遇到错误: {type(exc).__name__}"
+            logger.error(f"Agent执行失败: {type(exc).__name__}")
             return error_msg
 
     async def append_chat_history(self, msg: dict) -> None:
@@ -219,8 +232,11 @@ class Agent:
             else:
                 logger.info(f"{self.__class__.__name__}:无需压缩，记录数量合理")
 
-        except Exception as e:
-            logger.error(f"记忆压缩失败，使用简单切片策略: {str(e)}")
+        except Exception as exc:
+            logger.error(
+                "记忆压缩失败，使用简单切片策略: "
+                f"{type(exc).__name__}"
+            )
             # 如果总结失败，回退到安全的策略：保留系统消息和最后几条消息，确保工具调用完整性
             safe_history = self._get_safe_fallback_history()
             self.chat_history = safe_history

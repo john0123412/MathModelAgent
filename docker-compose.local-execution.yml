@@ -1,0 +1,21 @@
+# E2B 不可用时的受控 Linux Docker 本地执行覆盖文件。
+# 仅限单用户、可信本机 Docker；不要与 docker-compose.dev.yml 同时使用。
+services:
+  backend:
+    environment:
+      CODE_INTERPRETER_KIND: auto
+      ALLOW_LOCAL_CODE_EXECUTION: "true"
+      LOCAL_CODE_EXECUTION_TIMEOUT_SECONDS: "300"
+    cap_drop:
+      - ALL
+    # Backend uses these only to manage shared task files, prepare, and terminate the
+    # dedicated Jupyter child; the child drops all privileges before model code runs.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - KILL
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256

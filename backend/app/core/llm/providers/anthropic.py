@@ -30,6 +30,7 @@ class AnthropicProvider(BaseProvider):
                 **auth_kwargs,
                 base_url=base_url,
                 timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS,
+                max_retries=0,
                 http_client=http_client,
             )
 

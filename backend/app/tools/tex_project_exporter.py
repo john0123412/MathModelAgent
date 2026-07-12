@@ -809,7 +809,7 @@ def export_markdown_to_latex_project(
         latex_markdown = _normalize_markdown_for_latex_sidecar(markdown)
     except Exception as e:
         result["reason"] = f"准备 latex_project 失败: {e}"
-        logger.error(f"LaTeX sidecar 导出失败: {result['reason']}")
+        logger.error(f"LaTeX sidecar 导出失败: {type(e).__name__}")
         _write_status(status_path, result)
         return result
 
@@ -841,7 +841,7 @@ def export_markdown_to_latex_project(
         return result
     except Exception as e:
         result["reason"] = f"LaTeX 正文转换异常: {e}"
-        logger.error(f"LaTeX sidecar 导出异常: {e}")
+        logger.error(f"LaTeX sidecar 导出异常: {type(e).__name__}")
         _write_status(status_path, result)
         return result
 
@@ -849,7 +849,8 @@ def export_markdown_to_latex_project(
         result["reason"] = f"pandoc 转换返回码非 0: {proc.returncode}"
         result["stderr"] = proc.stderr
         logger.error(
-            f"LaTeX sidecar 正文转换失败: returncode={proc.returncode}, stderr={proc.stderr}"
+            "LaTeX sidecar 正文转换失败: "
+            f"returncode={proc.returncode}, stderr_chars={len(proc.stderr or '')}"
         )
         _write_status(status_path, result)
         return result
@@ -862,7 +863,7 @@ def export_markdown_to_latex_project(
         )
     except Exception as e:
         result["reason"] = str(e)
-        logger.error(f"LaTeX sidecar 结构化章节导出失败: {e}")
+        logger.error(f"LaTeX sidecar 结构化章节导出失败: {type(e).__name__}")
         _write_status(status_path, result)
         return result
     result["structured_sections"] = structured_sections
@@ -881,7 +882,7 @@ def export_markdown_to_latex_project(
         result["missing_assets"] = missing_assets
     except Exception as e:
         result["reason"] = f"复制 LaTeX 引用资源失败: {e}"
-        logger.error(f"LaTeX sidecar 导出失败: {result['reason']}")
+        logger.error(f"LaTeX sidecar 导出失败: {type(e).__name__}")
         _write_status(status_path, result)
         return result
 
@@ -891,7 +892,7 @@ def export_markdown_to_latex_project(
         )
     except Exception as e:
         result["reason"] = f"复制 LaTeX 模板资源失败: {e}"
-        logger.error(f"LaTeX sidecar 导出失败: {result['reason']}")
+        logger.error(f"LaTeX sidecar 导出失败: {type(e).__name__}")
         _write_status(status_path, result)
         return result
 
@@ -908,7 +909,7 @@ def export_markdown_to_latex_project(
                 f.write(_render_main_tex(_MAIN_TEX_TEMPLATE, section_inputs))
     except Exception as e:
         result["reason"] = f"写入 main.tex 失败: {e}"
-        logger.error(f"LaTeX sidecar 导出失败: {result['reason']}")
+        logger.error(f"LaTeX sidecar 导出失败: {type(e).__name__}")
         _write_status(status_path, result)
         return result
 
@@ -1003,7 +1004,10 @@ def export_markdown_to_latex_project(
             logger.warning(f"LaTeX sidecar 编译超时（不阻断主任务）: {main_tex_path}")
         except Exception as e:
             result["compile_reason"] = f"LaTeX 编译异常: {e}"
-            logger.warning(f"LaTeX sidecar 编译异常（不阻断主任务）: {e}")
+            logger.warning(
+                "LaTeX sidecar 编译异常（不阻断主任务）: "
+                f"{type(e).__name__}"
+            )
 
     _write_status(status_path, result)
     return result

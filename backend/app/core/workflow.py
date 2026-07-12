@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import json
 import os
+from contextlib import asynccontextmanager
 import nbformat
 from app.core.agents import WriterAgent, CoderAgent, CoordinatorAgent, ModelerAgent
 from app.core.checkpoint import CheckpointManager, TaskCheckpoint
@@ -63,6 +64,25 @@ class MathModelWorkFlow(WorkFlow):
             )
             raise asyncio.CancelledError("任务被用户停止")
 
+    async def _cleanup_interpreter(
+        self, code_interpreter: BaseCodeInterpreter
+    ) -> None:
+        """Release the execution environment without masking workflow failures."""
+        try:
+            await code_interpreter.cleanup()
+        except Exception as exc:
+            logger.warning(
+                "代码执行环境清理失败: error_type={}", type(exc).__name__
+            )
+
+    @asynccontextmanager
+    async def _managed_interpreter(self, code_interpreter: BaseCodeInterpreter):
+        """Guarantee cleanup when coding, cancellation, or export preparation fails."""
+        try:
+            yield code_interpreter
+        finally:
+            await self._cleanup_interpreter(code_interpreter)
+
     async def _build_agents(
         self,
         coder_llm,
@@ -85,7 +105,7 @@ class MathModelWorkFlow(WorkFlow):
         """
         await redis_manager.publish_message(
             self.task_id,
-            SystemMessage(content="正在创建代码沙盒环境"),
+            SystemMessage(content="正在创建代码执行环境"),
         )
 
         notebook_serializer = NotebookSerializer(work_dir=self.work_dir)
@@ -95,58 +115,61 @@ class MathModelWorkFlow(WorkFlow):
             notebook_serializer=notebook_serializer,
             timeout=3000,
         )
+        try:
+            scholar = OpenAlexScholar(
+                task_id=self.task_id,
+                email=settings.OPENALEX_EMAIL,
+                api_key=settings.OPENALEX_API_KEY,
+                tavily_api_key=settings.TAVILY_API_KEY,
+                web_search_enabled=settings.SEARCH_ENABLED,
+            )
+            if not settings.OPENALEX_EMAIL:
+                logger.warning("OPENALEX_EMAIL 未配置，将跳过 OpenAlex，继续使用其他文献源")
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(
+                        content="OpenAlex Email 未配置，文献检索将使用其他可用来源",
+                        type="warning",
+                    ),
+                )
 
-        scholar = OpenAlexScholar(
-            task_id=self.task_id,
-            email=settings.OPENALEX_EMAIL,
-            api_key=settings.OPENALEX_API_KEY,
-            tavily_api_key=settings.TAVILY_API_KEY,
-            web_search_enabled=settings.SEARCH_ENABLED,
-        )
-        if not settings.OPENALEX_EMAIL:
-            logger.warning("OPENALEX_EMAIL 未配置，将跳过 OpenAlex，继续使用其他文献源")
             await redis_manager.publish_message(
                 self.task_id,
-                SystemMessage(
-                    content="OpenAlex Email 未配置，文献检索将使用其他可用来源",
-                    type="warning",
-                ),
+                SystemMessage(content="创建完成"),
             )
 
-        await redis_manager.publish_message(
-            self.task_id,
-            SystemMessage(content="创建完成"),
-        )
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content="初始化代码手"),
+            )
 
-        await redis_manager.publish_message(
-            self.task_id,
-            SystemMessage(content="初始化代码手"),
-        )
+            coder_agent = CoderAgent(
+                task_id=self.task_id,
+                model=coder_llm,
+                work_dir=self.work_dir,
+                max_chat_turns=settings.MAX_CHAT_TURNS,
+                max_retries=settings.MAX_RETRIES,
+                code_interpreter=code_interpreter,
+                context_window=settings.CODER_CONTEXT_WINDOW,
+                cancel_event=self.cancel_event,
+                user_input_provider=user_input_provider,
+            )
 
-        coder_agent = CoderAgent(
-            task_id=self.task_id,
-            model=coder_llm,
-            work_dir=self.work_dir,
-            max_chat_turns=settings.MAX_CHAT_TURNS,
-            max_retries=settings.MAX_RETRIES,
-            code_interpreter=code_interpreter,
-            context_window=settings.CODER_CONTEXT_WINDOW,
-            cancel_event=self.cancel_event,
-            user_input_provider=user_input_provider,
-        )
+            writer_agent = WriterAgent(
+                task_id=self.task_id,
+                model=writer_llm,
+                comp_template=comp_template,
+                format_output=format_output,
+                scholar=scholar,
+                context_window=settings.WRITER_CONTEXT_WINDOW,
+                cancel_event=self.cancel_event,
+                user_input_provider=user_input_provider,
+            )
 
-        writer_agent = WriterAgent(
-            task_id=self.task_id,
-            model=writer_llm,
-            comp_template=comp_template,
-            format_output=format_output,
-            scholar=scholar,
-            context_window=settings.WRITER_CONTEXT_WINDOW,
-            cancel_event=self.cancel_event,
-            user_input_provider=user_input_provider,
-        )
-
-        return notebook_serializer, code_interpreter, coder_agent, writer_agent
+            return notebook_serializer, code_interpreter, coder_agent, writer_agent
+        except BaseException:
+            await self._cleanup_interpreter(code_interpreter)
+            raise
 
     async def _replay_notebook(
         self,
@@ -529,7 +552,10 @@ class MathModelWorkFlow(WorkFlow):
                     SystemMessage(content="论文排版预检通过，已规范参考文献并附加核心代码"),
                 )
             else:
-                logger.warning(f"论文排版预检存在风险: {preflight_report}")
+                logger.warning(
+                    "论文排版预检存在风险: "
+                    f"status={preflight_report.get('status', 'unknown')}"
+                )
                 await redis_manager.publish_message(
                     self.task_id,
                     SystemMessage(
@@ -541,7 +567,7 @@ class MathModelWorkFlow(WorkFlow):
                     ),
                 )
         except Exception as e:
-            logger.error(f"论文排版后处理失败: {e}")
+            logger.error(f"论文排版后处理失败: {type(e).__name__}")
             await redis_manager.publish_message(
                 self.task_id,
                 SystemMessage(
@@ -580,7 +606,7 @@ class MathModelWorkFlow(WorkFlow):
             )
         else:
             # 环境缺失（文件不存在、pandoc/xelatex 未安装），主动跳过
-            logger.warning(f"PDF 生成跳过: {pdf_result['reason']}")
+            logger.warning("PDF 生成跳过")
             await redis_manager.publish_message(
                 self.task_id,
                 SystemMessage(
@@ -598,7 +624,10 @@ class MathModelWorkFlow(WorkFlow):
                     SystemMessage(content="PDF 后验视觉检查通过"),
                 )
             else:
-                logger.warning(f"PDF 后验视觉检查存在风险: {pdf_visual_result}")
+                logger.warning(
+                    "PDF 后验视觉检查存在风险: "
+                    f"status={pdf_visual_result.get('status', 'unknown')}"
+                )
                 await redis_manager.publish_message(
                     self.task_id,
                     SystemMessage(
@@ -623,7 +652,7 @@ class MathModelWorkFlow(WorkFlow):
                     indent=2,
                 )
         except Exception as e:
-            logger.error(f"写入 export_status.json 失败: {e}")
+            logger.error(f"写入 export_status.json 失败: {type(e).__name__}")
 
         ################################################ generate LaTeX sidecar project
         try:
@@ -638,7 +667,7 @@ class MathModelWorkFlow(WorkFlow):
                     ),
                 )
             elif tex_result["enabled"]:
-                logger.error(f"LaTeX sidecar 导出失败: {tex_result['reason']}")
+                logger.error("LaTeX sidecar 导出失败")
                 await redis_manager.publish_message(
                     self.task_id,
                     SystemMessage(
@@ -647,7 +676,7 @@ class MathModelWorkFlow(WorkFlow):
                     ),
                 )
             else:
-                logger.warning(f"LaTeX sidecar 导出跳过: {tex_result['reason']}")
+                logger.warning("LaTeX sidecar 导出跳过")
                 await redis_manager.publish_message(
                     self.task_id,
                     SystemMessage(
@@ -656,7 +685,7 @@ class MathModelWorkFlow(WorkFlow):
                     ),
                 )
         except Exception as e:
-            logger.error(f"LaTeX sidecar 导出异常: {e}")
+            logger.error(f"LaTeX sidecar 导出异常: {type(e).__name__}")
             await redis_manager.publish_message(
                 self.task_id,
                 SystemMessage(
@@ -681,7 +710,7 @@ class MathModelWorkFlow(WorkFlow):
                     ),
                 )
         except Exception as e:
-            logger.error(f"submission_audit_report 生成失败: {e}")
+            logger.error(f"submission_audit_report 生成失败: {type(e).__name__}")
             await redis_manager.publish_message(
                 self.task_id,
                 SystemMessage(
@@ -693,7 +722,7 @@ class MathModelWorkFlow(WorkFlow):
         try:
             write_candidate_manifest(self.work_dir, self.task_id)
         except Exception as e:
-            logger.error(f"candidate_manifest.json 生成失败: {e}")
+            logger.error(f"candidate_manifest.json 生成失败: {type(e).__name__}")
             await redis_manager.publish_message(
                 self.task_id,
                 SystemMessage(
@@ -737,7 +766,7 @@ class MathModelWorkFlow(WorkFlow):
             self.ques_count = coordinator_response.ques_count
         except Exception as e:
             #  非数学建模问题
-            logger.error(f"CoordinatorAgent 执行失败: {e}")
+            logger.error(f"CoordinatorAgent 执行失败: {type(e).__name__}")
             raise e
 
         await redis_manager.publish_message(
@@ -816,19 +845,17 @@ class MathModelWorkFlow(WorkFlow):
         config_template = get_config_template(problem.comp_template)
 
         ################################################ solution steps
-        await self._run_solution_flows(
-            flows,
-            modeler_response,
-            coder_agent,
-            writer_agent,
-            code_interpreter,
-            user_output,
-            checkpoint_manager,
-            config_template,
-        )
-
-        # 关闭沙盒
-        await code_interpreter.cleanup()
+        async with self._managed_interpreter(code_interpreter):
+            await self._run_solution_flows(
+                flows,
+                modeler_response,
+                coder_agent,
+                writer_agent,
+                code_interpreter,
+                user_output,
+                checkpoint_manager,
+                config_template,
+            )
 
         ################################################ write steps
         await self._run_write_flows(
@@ -898,26 +925,24 @@ class MathModelWorkFlow(WorkFlow):
             user_input_provider,
         )
 
-        # 重建 Jupyter 内核变量状态
-        await self._replay_notebook(code_interpreter, checkpoint_manager)
-
         flows = Flows(self.questions)
         config_template = get_config_template(comp_template)
 
-        ################################################ solution steps
-        await self._run_solution_flows(
-            flows,
-            modeler_response,
-            coder_agent,
-            writer_agent,
-            code_interpreter,
-            user_output,
-            checkpoint_manager,
-            config_template,
-        )
+        async with self._managed_interpreter(code_interpreter):
+            # 重建 Jupyter 内核变量状态
+            await self._replay_notebook(code_interpreter, checkpoint_manager)
 
-        # 关闭沙盒
-        await code_interpreter.cleanup()
+            ################################################ solution steps
+            await self._run_solution_flows(
+                flows,
+                modeler_response,
+                coder_agent,
+                writer_agent,
+                code_interpreter,
+                user_output,
+                checkpoint_manager,
+                config_template,
+            )
 
         ################################################ write steps
         await self._run_write_flows(

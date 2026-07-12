@@ -12,9 +12,16 @@ venv/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.agent-work/
 # Git
 .git/
 .gitignore
+.env
+.env.*
+# Runtime-only data must never be copied into an image layer.
+project/work_dir/
+logs/
+fonts/
 # IDE
 .idea/
 .vscode/

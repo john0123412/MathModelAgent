@@ -306,7 +306,7 @@ def export_markdown_to_pdf(
         pdf_md_path, cleanup_pdf_md = _prepare_pdf_markdown_source(md_path, work_dir)
     except Exception as e:
         result["reason"] = f"PDF 输入预处理失败: {e}"
-        logger.error(f"PDF 导出异常: {result['reason']}")
+        logger.error("PDF 导出异常")
         return result
 
     command = [
@@ -351,7 +351,7 @@ def export_markdown_to_pdf(
         return result
     except Exception as e:
         result["reason"] = f"PDF 生成异常: {e}"
-        logger.error(f"PDF 导出异常: {e}")
+        logger.error(f"PDF 导出异常: {type(e).__name__}")
         return result
     finally:
         if cleanup_pdf_md:
@@ -367,6 +367,9 @@ def export_markdown_to_pdf(
     else:
         result["reason"] = f"pandoc 返回码非 0: {proc.returncode}"
         result["stderr"] = proc.stderr
-        logger.error(f"PDF 生成失败: returncode={proc.returncode}, stderr={proc.stderr}")
+        logger.error(
+            "PDF 生成失败: "
+            f"returncode={proc.returncode}, stderr_chars={len(proc.stderr or '')}"
+        )
 
     return result

@@ -57,7 +57,7 @@ async def _load_task_messages_from_file(task_id: str) -> list[dict]:
             data = json.loads(content)
         return data if isinstance(data, list) else []
     except Exception as e:
-        logger.error(f"读取任务消息文件失败: {str(e)}")
+        logger.error(f"读取任务消息文件失败: {type(e).__name__}")
         return _load_task_messages_from_jsonl(jsonl_file)
 
 
@@ -76,7 +76,7 @@ def _load_task_messages_from_jsonl(message_file: Path) -> list[dict]:
                 if isinstance(data, dict):
                     messages.append(data)
     except Exception as e:
-        logger.error(f"读取任务 JSONL 消息失败: {str(e)}")
+        logger.error(f"读取任务 JSONL 消息失败: {type(e).__name__}")
     return messages
 
 
@@ -182,7 +182,7 @@ async def get_service_status():
         await redis_client.ping()  # type: ignore[reportGeneralTypeIssues]
         status["redis"] = {"status": "running", "message": "Redis connection is healthy"}
     except Exception as e:
-        logger.error(f"Redis connection failed: {str(e)}")
+        logger.error(f"Redis connection failed: {type(e).__name__}")
         status["redis"] = {"status": "error", "message": f"Redis connection failed: {str(e)}"}
 
     return status
@@ -297,7 +297,7 @@ async def list_tasks():
                     # 获取创建时间（第一条消息的时间）
                     task_info["created_at"] = messages[0].get("id", "")[:19]
             except Exception as e:
-                logger.error(f"读取任务消息失败: {task_id}, {e}")
+                logger.error(f"读取任务消息失败: {task_id}, {type(e).__name__}")
 
         # 从目录修改时间获取创建时间
         try:
@@ -305,7 +305,9 @@ async def list_tasks():
             dt = datetime.fromtimestamp(mtime)
             task_info["created_at"] = dt.strftime("%Y-%m-%d %H:%M:%S")
         except Exception as exc:
-            logger.debug(f"读取任务目录修改时间失败: {task_id}, {exc}")
+            logger.debug(
+                f"读取任务目录修改时间失败: {task_id}, {type(exc).__name__}"
+            )
 
         tasks.append(task_info)
 

@@ -127,7 +127,8 @@
   `SERVER_HOST` 也指向 `http://localhost:5173/api`，下载链接走同一代理入口。
 - LLM provider 单次请求超时由 `LLM_REQUEST_TIMEOUT_SECONDS` 控制，默认 90 秒；
   用于兼容较慢的 OpenAI-compatible/Responses/Anthropic 端点，避免建模手或写作手
-  在正常长响应时过早 `Request timed out`。
+  在正常长响应时过早 `Request timed out`。LLM 层以 `asyncio.wait_for` 强制该上限，
+  并关闭三个 SDK 的隐式重试，重试次数只由项目层控制，避免单次请求因嵌套重试失去时限。
 - `HUMAN_MODEL_GATE_ENABLED=true` 时，Modeler 阶段会生成 `modeling_decision.md/json`
   并把任务状态置为 `waiting_review`；前端任务页会定时刷新任务状态并显示“确认建模方案并继续”，
   调用 `/modeling/{task_id}/approve-modeling` 后从 Coder 阶段续跑。
@@ -147,11 +148,22 @@
   WebSocket Origin 和 Host 均为明确 allowlist（防 DNS rebinding）；工作区文件不再以任意静态目录直出，
   只有安全单层文件名可下载，非栅格图片附件强制下载。新 task_id 使用 128 位随机
   capability 后缀；上传按单文件/总量流式限额写入。
-- 模型生成代码默认必须通过 E2B 远程沙箱执行（`CODE_INTERPRETER_KIND=remote`）；缺少
-  `E2B_API_KEY` 时失败而不降级。`local` 仅在 `ALLOW_LOCAL_CODE_EXECUTION=true` 的
-  受信任隔离开发环境可用，不能当作共享/正式环境的默认执行方式。
+- 模型生成代码默认必须通过 E2B 远程沙箱执行（`CODE_INTERPRETER_KIND=remote`）。新增
+  `auto` 模式：有 E2B 时优先远程沙箱；缺少 E2B 时仅在显式
+  `ALLOW_LOCAL_CODE_EXECUTION=true` 的本地执行 Compose 覆盖文件中降级到 Jupyter。
+  基础 Compose 不挂载完整源码，后端镜像排除 `.env.*`；本地模式只支持受控 Linux Docker，
+  内核启动或重启前必须把当前任务目录交给专用非 root `mma-runner` 用户，并在 exec 前降权；
+  后端仅在该覆盖文件中保留 `CHOWN`、`DAC_OVERRIDE`、`SETGID`、`SETUID`、`KILL` 五项能力来
+  管理共享任务文件、降权和终止该降权子内核；runner 降权后不继承这些能力，`PR_SET_DUMPABLE=0`
+  作为额外纵深防护。为兼容 Windows Docker 共享目录，不强制修改 POSIX mode 位；降权、环境保护
+  或内核生命周期管理不可用即失败关闭；随后内核只继承
+  最小环境，代码单元有超时中断。容器日志只记录 Agent/代码/消息的类型、数量或长度，不回显
+  正文、提示词、代码、工具参数或图像 Base64。
+  该模式仍与后端共享文件系统和网络，只适用于可信单用户恢复开发，不能用于共享/公开/
+  正式验收环境，也不能与热重载 `docker-compose.dev.yml` 混用。
 - LLM Base URL 默认要求 HTTPS、公开 IP/DNS 解析结果，且 SDK 请求禁用重定向与环境代理；
-  私有地址必须显式设置 `ALLOW_PRIVATE_LLM_BASE_URLS=true`。
+  对瞬时 DNS 故障会进行 3 次短暂解析尝试，全部失败仍失败关闭；私有地址必须显式设置
+  `ALLOW_PRIVATE_LLM_BASE_URLS=true`。
 - LLM 成功调用后会在任务目录写入 `token_usage.json`，只保存按 agent 聚合的
   `chat_count`、`prompt_tokens`、`completion_tokens`、`total_tokens` 和模型名，
   不保存 prompt、completion、tool args、API key 或 base_url；`GET /track`
@@ -209,10 +221,18 @@
   `docker compose build --pull`，再 `docker compose up -d --wait` 并确认
   `docker compose ps` 中三个服务均为 `healthy`，避免刚启动时的连接重置或代理 `500` 误报。
 - 2026-07-12 当前 Docker 运行配置中四个 Agent 的模型凭据存在，但
-  `E2B_API_KEY` 缺失。真实轻量任务 `20260712-024021-3050861c811b2e324f70675e8d5b49a2`
-  已按安全默认值失败，明确拒绝降级到本地解释器；这不是模型或导出代码缺陷。要完成
-  新的端到端真实任务，必须由账户所有者在忽略的 `backend/.env.dev` 或安全运行环境中
-  配置有效 E2B 凭据，不能通过启用本地代码执行绕过该限制。
+  `E2B_API_KEY` 缺失。历史轻量任务 `20260712-024021-3050861c811b2e324f70675e8d5b49a2`
+  曾按当时的 `remote` 安全默认值失败；现在可在受控 Linux Docker 中使用
+  `docker-compose.local-execution.yml` 的显式信任覆盖完成恢复开发。不要通过普通
+  `.env.dev` 把生产/验收环境切到 `local`，该覆盖不等同于 E2B 沙箱。
+- 2026-07-12 在该受控本地执行覆盖中，真实轻量线性规划任务
+  `20260712-084612-4c953bb6dadb65d2ed5cb493839ba70c` 完成：状态为 `completed`，
+  `res.md/res.json/res.docx/res.pdf`、manifest、checkpoint、变量快照、PDF/LaTeX
+  导出、preflight、PDF visual check 与 submission audit 均通过，`/track` 返回四个
+  Agent 的聚合统计，ZIP 下载为 200。运行时检查确认 kernel 为 UID 10001、无有效 Linux
+  capabilities、无敏感环境变量、不能读取 backend `/proc` 环境，backend 可持久化任务文件，
+  kernel 退出后连接目录和进程均清理。此验证只证明受控单用户恢复开发链路，不替代 E2B 或
+  等效隔离运行器的共享/公开/正式验收要求；测试任务目录和 Compose 容器已在收尾时清理。
 - 2026-07-12 已使用 `git-filter-repo` 重写本地和正常远程 Git 历史，并 force-push
   `main`；可达对象中已删除资产路径计数为零，当前 `main` 和正常远程分支均不含该路径。
   但 GitHub 已合并 PR #1-#15 的服务端头快照仍保留该历史路径，普通 Git 重写无法删除。

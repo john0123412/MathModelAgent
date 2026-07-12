@@ -53,6 +53,13 @@ RUN if [ "$INSTALL_MS_FONTS" = "true" ]; then \
         echo "跳过 Microsoft Core Fonts 安装（INSTALL_MS_FONTS=$INSTALL_MS_FONTS）：英文字体 fallback 到 fonts-liberation，中文字体不受此选项影响，始终 fallback 到 fonts-noto-cjk/texlive-lang-chinese"; \
     fi
 
+# The local E2B fallback launches model-generated Jupyter code as this account.
+# The backend remains root only in the explicit local-execution Compose profile so it
+# can prepare the per-task directory and then drop the child process privileges.
+RUN groupadd --gid 10001 mma-runner && \
+    useradd --uid 10001 --gid 10001 --home-dir /nonexistent \
+    --shell /usr/sbin/nologin --no-create-home mma-runner
+
 # 安装 uv。避免使用 ghcr.io/astral-sh/uv:latest 作为额外构建阶段：
 # 在网络不稳定环境中，GHCR token 获取失败会导致即使 Python 基础镜像已有缓存也
 # 无法构建。固定 PyPI 版本也避免 latest 漂移；pip 下载使用较长超时和重试，

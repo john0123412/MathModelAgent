@@ -202,6 +202,17 @@
   `403` 拒绝。对任务 `20260711-133616-38439fe3` 重新执行
   `submission_audit --require-official-fonts` 为 `PASS`。这轮没有另起真实模型/E2B
   任务，严格审核复用的是已完成真实任务的交付物。
+- 2026-07-12 Docker/CI 安全维护：GitHub Actions 已固定到使用 Node 24 的发布提交，
+  CI `GITHUB_TOKEN` 仅授予 `contents: read`，checkout 不持久化凭据；前端容器已从
+  结束支持的 Node 20 升级到 Node 24 LTS。Compose 为 Redis、后端和前端配置健康检查，
+  并以健康依赖顺序启动。Docker 基础镜像或系统包安全更新时先执行
+  `docker compose build --pull`，再 `docker compose up -d --wait` 并确认
+  `docker compose ps` 中三个服务均为 `healthy`，避免刚启动时的连接重置或代理 `500` 误报。
+- 2026-07-12 当前 Docker 运行配置中四个 Agent 的模型凭据存在，但
+  `E2B_API_KEY` 缺失。真实轻量任务 `20260712-024021-3050861c811b2e324f70675e8d5b49a2`
+  已按安全默认值失败，明确拒绝降级到本地解释器；这不是模型或导出代码缺陷。要完成
+  新的端到端真实任务，必须由账户所有者在忽略的 `backend/.env.dev` 或安全运行环境中
+  配置有效 E2B 凭据，不能通过启用本地代码执行绕过该限制。
 - 2026-07-12 已使用 `git-filter-repo` 重写本地和正常远程 Git 历史，并 force-push
   `main`；可达对象中已删除资产路径计数为零，当前 `main` 和正常远程分支均不含该路径。
   但 GitHub 已合并 PR #1-#15 的服务端头快照仍保留该历史路径，普通 Git 重写无法删除。

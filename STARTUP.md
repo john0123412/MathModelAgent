@@ -3,7 +3,7 @@
 ## 环境要求
 - Docker Desktop
 - Python 3.12 + uv
-- Node.js + pnpm
+- Node.js 24 LTS + pnpm（Docker 前端同样使用 Node 24 LTS）
 
 > Agent 操作注意：Windows 本机前端 Node 工具链曾异常派生大量 `node.exe`，导致系统卡死。除非用户明确授权，agent 不应主动运行 `pnpm i`、`pnpm run build`、`vue-tsc`、`vite build`、`biome`、`npx biome` 或 `node_modules\.bin\*`。前端验证优先使用 Docker Compose 服务或由用户手动运行命令后回传结果。
 
@@ -15,9 +15,9 @@
 
 ```powershell
 cd D:\workspace\MathModelAgent
-docker compose up --build -d   # 首次启动、改了依赖/Dockerfile 后，重建并后台运行
-docker compose up -d           # 之后正常启动（有缓存）
-docker compose ps              # 查看服务状态
+docker compose build --pull            # 首次启动、改了依赖/Dockerfile 或更新基础镜像后执行
+docker compose up -d --wait            # 等待服务健康；正常启动时可直接执行这一行
+docker compose ps                      # 查看服务状态，应显示 healthy
 ```
 
 ### 停止
@@ -30,6 +30,8 @@ docker compose down -v      # 停止并删除数据卷（⚠️ 清空 Redis 数
 
 启动后访问 http://localhost:5173。Compose 将 `5173` 和 `8000` 都绑定到
 `127.0.0.1`，默认只适合本机单用户使用；不要直接把开发 Compose 反向代理或暴露到公网。
+`--wait` 会等待 Redis、后端和前端的本地健康检查通过，避免容器刚启动时 HTTP 探测出现
+短暂的连接重置或代理 `500`。
 
 ### 启动后检查
 

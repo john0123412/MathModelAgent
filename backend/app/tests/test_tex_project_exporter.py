@@ -8,7 +8,8 @@
 import json
 import os
 import shutil
-import subprocess
+# Test fixtures use subprocess.CompletedProcess only.
+import subprocess  # nosec B404
 import tempfile
 import unittest
 from unittest import mock
@@ -121,7 +122,7 @@ class TestTexProjectExporterHappyPath(unittest.TestCase):
             self.assertTrue(result["success"], msg=result)
             self.assertFalse(result["compile_attempted"])
             self.assertIn(
-                "markdown+tex_math_dollars+tex_math_single_backslash+pipe_tables+raw_tex",
+                "markdown-raw_tex+tex_math_dollars+tex_math_single_backslash+pipe_tables",
                 result["command"],
             )
 
@@ -146,6 +147,33 @@ class TestTexProjectExporterHappyPath(unittest.TestCase):
                 status = json.load(f)
             self.assertTrue(status["success"])
             self.assertTrue(status["main_uses_structured_sections"])
+
+    def test_raw_tex_command_is_not_passed_to_latex_compiler(self):
+        real_which = shutil.which
+
+        def which_side_effect(cmd, *args, **kwargs):
+            if cmd == "pandoc":
+                return real_which(cmd)
+            return None
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            md_path = os.path.join(work_dir, "res.md")
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write("# 标题\n\n\\input{/etc/passwd}\n")
+
+            with mock.patch(
+                "app.tools.tex_project_exporter.shutil.which",
+                side_effect=which_side_effect,
+            ):
+                result = export_markdown_to_latex_project(md_path, work_dir)
+
+            self.assertTrue(result["success"], msg=result)
+            section_path = os.path.join(
+                work_dir, "latex_project", "sections", "01_section.tex"
+            )
+            with open(section_path, encoding="utf-8") as f:
+                generated_tex = f.read()
+            self.assertNotIn(r"\input{/etc/passwd}", generated_tex)
 
 
 @unittest.skipUnless(shutil.which("pandoc"), "本机未安装 pandoc，跳过真实转换用例")
@@ -528,6 +556,7 @@ class TestLatexCompileHelpers(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertEqual(result.stdout, "second")
             self.assertEqual(run_mock.call_count, 2)
+            self.assertIn("-no-shell-escape", run_mock.call_args.args[0])
 
     def test_run_xelatex_twice_stops_after_first_failure(self):
         with tempfile.TemporaryDirectory() as work_dir:

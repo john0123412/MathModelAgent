@@ -25,8 +25,8 @@ Automatically generate an award-level modeling paper
 
 - 🔍 Automatic problem analysis, mathematical modeling, code writing, error correction, and paper writing
 - 💻 Code Interpreter
-    - Local Interpreter: Based on Jupyter, code saved as notebook for easy editing
-    - Cloud Code Interpreter: [E2B](https://e2b.dev/) when `E2B_API_KEY` is configured; Daytona is not wired into the current codebase
+    - Cloud Code Interpreter: [E2B](https://e2b.dev/) is the required default; missing `E2B_API_KEY` fails closed instead of falling back
+    - Local Interpreter: Jupyter-based and available only with explicit `ALLOW_LOCAL_CODE_EXECUTION=true` in a trusted isolated development environment
 - 📝 Generate Markdown / DOCX / PDF / LaTeX sidecar candidate papers and audit reports
 - 🤝 Multi-agents: modeling expert, coding expert, paper expert, etc.
 - 🔄 Multi-LLMs: Different models for each agent
@@ -35,10 +35,10 @@ Automatically generate an award-level modeling paper
 - 🧩 Custom templates: prompt inject for setting requirements for each subtask separately
 - 🌐 Literature and web search: Writer `search_papers` aggregates OpenAlex, Semantic Scholar, Crossref, and arXiv; Tavily is only used when `SEARCH_ENABLED=true` and `TAVILY_API_KEY` is configured
 
-## Current Implementation Status (Code Audit: 2026-07-10)
+## Current Implementation Status (Code Audit: 2026-07-11)
 
-- Implemented: FastAPI/Vue WebUI workflow, local Jupyter interpreter, optional E2B, OpenAI/Responses/Anthropic providers, checkpoint resume, variable snapshots, live user-message injection, multi-source literature search, modeling approval, filtered task archive downloads, aggregate token tracking, CUMCM2026 exports, and submission audits.
-- Explicit boundaries: `/save-api-config` changes runtime settings only; `/track` is best-effort single-process aggregation, not provider billing.
+- Implemented: FastAPI/Vue WebUI workflow, default isolated E2B execution, OpenAI/Responses/Anthropic providers, checkpoint resume, variable snapshots, live user-message injection, multi-source literature search, modeling approval, filtered task archive downloads, aggregate token tracking, CUMCM2026 exports, and submission audits.
+- Explicit boundaries: `/save-api-config` changes runtime settings only; browser-entered keys are not persisted; task artifacts use controlled downloads; `/track` is best-effort single-process aggregation, not provider billing.
 - Not wired into the main workflow: RAG, generic six-action HIL, Fallback Hand Off, Evaluator Shadow Mode, Feedback Rerun, Daytona, LiteLLM runtime, vision models, and R/MATLAB execution.
 
 ## 🚀 Current Status and Future Plans
@@ -48,7 +48,7 @@ Automatically generate an award-level modeling paper
 - [x] Literature search: OpenAlex, Semantic Scholar, Crossref, arXiv, plus optional Tavily web search.
 - [x] Checkpoint resume and variable snapshots.
 - [x] Markdown, DOCX, PDF, LaTeX sidecar, manifest, preflight, visual check, and submission audit exports.
-- [x] Optional E2B cloud interpreter.
+- [x] E2B cloud interpreter as the default code-execution boundary.
 - [ ] Hosted web service operations.
 - [ ] Full English/MCM/ICM delivery templates and validation rules.
 - [x] Modeling-plan approval through `waiting_review`, frontend approval, and checkpoint resume.
@@ -103,6 +103,8 @@ docker-compose up -d
 You can now access:
 - Frontend interface: http://localhost:5173
 - Backend API: http://localhost:8000
+
+Compose binds both ports to `127.0.0.1`; this development deployment must not be exposed directly to the public Internet.
 
 ### 💻 Option 2: Local Deployment
 

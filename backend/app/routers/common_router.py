@@ -253,8 +253,10 @@ async def list_tasks():
                                     try:
                                         data = json.loads(content)
                                         title = data.get("title", title)
-                                    except Exception:
-                                        pass
+                                    except Exception as exc:
+                                        logger.debug(
+                                            f"任务标题 JSON 解析失败，保留原始标题: {exc}"
+                                        )
                                 task_info["title"] = title
                                 break
 
@@ -302,8 +304,8 @@ async def list_tasks():
             mtime = os.path.getmtime(task_path)
             dt = datetime.fromtimestamp(mtime)
             task_info["created_at"] = dt.strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"读取任务目录修改时间失败: {task_id}, {exc}")
 
         tasks.append(task_info)
 

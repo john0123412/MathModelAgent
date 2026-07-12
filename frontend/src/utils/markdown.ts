@@ -1,6 +1,7 @@
 import katex from "katex";
 import { marked } from "marked";
-import type { Renderer, RendererObject, Token } from "marked";
+import type { Renderer, RendererObject } from "marked";
+import { sanitizeHtml } from "@/utils/sanitizeHtml";
 
 // 默认的markdown渲染配置
 const defaultOptions = {
@@ -8,7 +9,6 @@ const defaultOptions = {
 	gfm: true, // 启用GitHub风格的Markdown
 	headerIds: true, // 为标题添加id
 	mangle: false, // 不转义标题中的HTML
-	sanitize: false, // 不净化HTML
 };
 
 // 处理数学公式
@@ -86,12 +86,17 @@ marked.use({
  * @param options 可选的marked配置项
  * @returns 渲染后的HTML
  */
-export const renderMarkdown = async (content: string, options = {}) => {
+export const renderMarkdown = (content: string, options = {}) => {
 	// 预处理内容，确保数学公式正确换行
 	const normalized = content
 		.replace(/\\\[\s*\n/g, "\\[")
 		.replace(/\n\s*\\\]/g, "\\]");
-	return marked.parse(normalized, { ...defaultOptions, ...options });
+	const rendered = marked.parse(normalized, {
+		...defaultOptions,
+		...options,
+		async: false,
+	});
+	return sanitizeHtml(typeof rendered === "string" ? rendered : "");
 };
 
 /**

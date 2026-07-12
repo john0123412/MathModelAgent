@@ -4,6 +4,7 @@ import unittest
 from unittest import mock
 
 from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.config.setting import settings
@@ -16,7 +17,7 @@ class TestSaveApiConfig(unittest.IsolatedAsyncioTestCase):
         request = SaveApiConfigRequest(
             coordinator={
                 "apiKey": "secret-key",
-                "baseUrl": "https://example.test/v1",
+                "baseUrl": "https://8.8.8.8/v1",
                 "modelId": "model-a",
                 "apiType": "openai-chat",
                 "contextWindow": 4096,
@@ -80,6 +81,26 @@ class TestSaveApiConfig(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(settings.COORDINATOR_CONTEXT_WINDOW, 8192)
             self.assertEqual(settings.OPENALEX_EMAIL, "old@example.test")
 
+    async def test_save_api_config_rejects_private_llm_base_url(self):
+        request = SaveApiConfigRequest(
+            coordinator={
+                "apiKey": "secret-key",
+                "baseUrl": "http://127.0.0.1:8000/v1",
+                "modelId": "model-a",
+                "apiType": "openai-chat",
+            },
+            modeler={},
+            coder={},
+            writer={},
+            openalex_email="",
+        )
+
+        with self.assertRaises(HTTPException) as context:
+            await save_api_config(request)
+
+        self.assertEqual(context.exception.status_code, 422)
+        self.assertNotIn("127.0.0.1", str(context.exception.detail))
+
 
 class TestSaveApiConfigHttp(unittest.TestCase):
     def test_save_api_config_http_response_is_runtime_only_and_redacted(self):
@@ -90,7 +111,7 @@ class TestSaveApiConfigHttp(unittest.TestCase):
         payload = {
             "coordinator": {
                 "apiKey": "secret-key",
-                "baseUrl": "https://example.test/v1",
+                "baseUrl": "https://8.8.8.8/v1",
                 "modelId": "model-a",
                 "apiType": "openai-chat",
                 "contextWindow": 4096,

@@ -24,18 +24,6 @@ export function getTaskMessages(task_id: string) {
 }
 
 /**
- * 打开工作目录
- * @param task_id 任务ID
- */
-export function openFolderAPI(task_id: string) {
-	return request.get<{ message: string }>("/open_folder", {
-		params: {
-			task_id,
-		},
-	});
-}
-
-/**
  * 提交样例任务
  * @param example_id 样例ID
  * @param source 来源

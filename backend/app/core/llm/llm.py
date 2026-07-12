@@ -13,13 +13,14 @@ from app.schemas.response import (
 )
 from app.services.redis_manager import redis_manager
 from app.schemas.enums import AgentType
-from app.config.setting import ApiType
+from app.config.setting import ApiType, settings
 from app.core.llm.types import StandardResponse
 from app.core.llm.providers.base import BaseProvider
 from app.core.llm.providers.openai_chat import OpenAIChatProvider
 from app.core.llm.providers.openai_responses import OpenAIResponsesProvider
 from app.core.llm.providers.anthropic import AnthropicProvider
 from app.services.token_usage import record_token_usage
+from app.utils.security import validate_llm_base_url
 
 DEFAULT_LLM_MAX_RETRIES = 3
 
@@ -75,6 +76,10 @@ class LLM:
             raise ValueError(f"{agent_name} 未配置模型 ID，请设置对应的 *_MODEL")
         if not self.api_key or not str(self.api_key).strip():
             raise ValueError(f"{agent_name} 未配置 API Key，请设置对应的 *_API_KEY")
+        self.base_url = validate_llm_base_url(
+            self.base_url,
+            allow_private_hosts=settings.ALLOW_PRIVATE_LLM_BASE_URLS,
+        )
 
     async def chat(
         self,
@@ -215,6 +220,7 @@ class LLM:
 
 async def simple_chat(model: LLM, history: list) -> str:
     """使用 LLM 进行简单的单轮对话。"""
+    model._validate_config("simple_chat")
     response = await model.provider.call(
         messages=history,
         model=model.model,  # type: ignore[arg-type]

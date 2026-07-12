@@ -385,7 +385,8 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
     async def download_all_files_from_sandbox(self) -> None:
         """从沙箱中下载所有文件并与本地同步"""
         try:
-            assert self.sbx is not None
+            if self.sbx is None:
+                raise RuntimeError("沙箱环境未初始化")
             # 获取沙箱中的文件列表
             sandbox_files = await self.sbx.files.list("/home/user")
             sandbox_files_dict = {f.name: f for f in sandbox_files}  # noqa: F841

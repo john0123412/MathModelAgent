@@ -44,7 +44,12 @@ const { toast } = useToast();
 const fileListVisible = ref(false);
 
 /** 文件列表数据 */
-const fileList = ref<Record<string, unknown>[]>([]);
+interface WorkspaceFile {
+	filename: string;
+	file_type: string;
+}
+
+const fileList = ref<WorkspaceFile[]>([]);
 
 /** 加载状态 */
 const loadingFiles = ref(false);
@@ -64,7 +69,7 @@ const openFolder = async () => {
 		const res = await getFiles(taskId as string);
 
 		if (res.data) {
-			fileList.value = Array.isArray(res.data) ? res.data : [res.data];
+			fileList.value = res.data;
 			fileListVisible.value = true;
 		} else {
 			toast({
@@ -94,22 +99,6 @@ const getFileIcon = (fileName: string) => {
 		return FileText;
 	}
 	return File;
-};
-
-/** 格式化文件大小显示 */
-const formatFileSize = (size: number | undefined) => {
-	if (!size) return "";
-
-	const units = ["B", "KB", "MB", "GB"];
-	let unitIndex = 0;
-	let fileSize = size;
-
-	while (fileSize >= 1024 && unitIndex < units.length - 1) {
-		fileSize /= 1024;
-		unitIndex++;
-	}
-
-	return `${fileSize.toFixed(1)} ${units[unitIndex]}`;
 };
 
 /** 下载单个文件 */
@@ -230,26 +219,23 @@ const downloadAll = async () => {
           <div v-else class="space-y-2">
             <div v-for="(file, index) in fileList" :key="index"
               class="flex items-center gap-3 p-3 rounded-lg border hover:bg-gray-50 transition-colors">
-              <component :is="getFileIcon(file.name || file.filename || '')"
+              <component :is="getFileIcon(file.filename)"
                 class="w-5 h-5 text-gray-600 flex-shrink-0" />
               <div class="flex-1 min-w-0">
                 <div class="font-medium text-sm truncate">
-                  {{ file.name || file.filename || 'Unknown' }}
+                  {{ file.filename }}
                 </div>
                 <div class="text-xs text-gray-500 flex gap-2">
-                  <span v-if="file.size">{{ formatFileSize(file.size) }}</span>
-                  <span v-if="file.modified_time">{{ new Date(file.modified_time).toLocaleDateString()
-                    }}</span>
-                  <span v-if="file.type">{{ file.type }}</span>
+                  <span>{{ file.file_type }}</span>
                 </div>
               </div>
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger as-child>
-                    <Button @click="downloadSingleFile(file.name || file.filename || '')"
-                      :disabled="downloadingFile === (file.name || file.filename || '')" size="sm" variant="ghost"
+                    <Button @click="downloadSingleFile(file.filename)"
+                      :disabled="downloadingFile === file.filename" size="sm" variant="ghost"
                       class="flex-shrink-0">
-                      <RefreshCw v-if="downloadingFile === (file.name || file.filename || '')"
+                      <RefreshCw v-if="downloadingFile === file.filename"
                         class="w-4 h-4 animate-spin" />
                       <Download v-else class="w-4 h-4" />
                     </Button>

@@ -67,8 +67,8 @@ Windows 本机工具读取 res.md -> Pandoc + XeLaTeX 用真实系统字体重�
 官方站和知网提交系统；如果新增 Word/DOCX 或 LaTeX 模板，按
 `docs/md/CUMCM2026模板替换指南.md` 替换。
 
-最近一次真实链路烟雾任务 `20260706-161231-080acfb7` 使用 `mimo-v2.5` 和
-`export_profile=cumcm2026` 重新导出并通过主交付验收：
+最近一次完成的真实轻量线性规划任务 `20260711-133616-38439fe3` 使用有效的
+OpenAI Responses 兼容运行配置和 `export_profile=cumcm2026`，通过主交付与严格字体验收：
 
 - `paper_preflight_report.json`：`PASS`
 - `pdf_visual_check.json`：`PASS`，A4、非空、文本可提取、20MB 文件大小、摘要首页、
@@ -76,7 +76,11 @@ Windows 本机工具读取 res.md -> Pandoc + XeLaTeX 用真实系统字体重�
 - `res.md`、`res.pdf`、`res.docx`、`res.json`、`candidate_manifest.json` 均生成
 - `tex_export_status.json`：`compile_success=true`，`missing_assets=[]`
 - `latex_project/main.pdf` 已生成且非空
+- `submission_audit --require-official-fonts`：`PASS`；实际 PDF 字体命中
+  `SimSun`、`SimHei`、`Times New Roman`
 - 真实产物包含 PNG 图片、CSV 表格数据和 `notebook.ipynb` 源码附录
+- 人工数值复核：最优方案 `A=40`、`B=20`、利润 `2200`；机器时间增加 10 小时后
+  利润约为 `2366.67`
 - 本次复核确认 `pdf_visual_check.json -> checks.abstract_first_page` 通过，第一页只包含
   标题、摘要和关键词，不再混入正文“问题重述”。
 - Docker 中官方 Windows 字体缺失时，`SimSun/SimHei/Times New Roman` 会 fallback 到
@@ -95,10 +99,14 @@ Windows 本机工具读取 res.md -> Pandoc + XeLaTeX 用真实系统字体重�
   `uv run python -m app.tools.submission_audit --work-dir project\work_dir\<task_id> --require-official-fonts`
   作为严格门禁，若 PDF 仍有 fallback/未知字体来源则返回 `FAIL`。
 
-`cumcm2026` 主 PDF 导出现在显式关闭 pandoc raw TeX，并支持 `\( ... \)` 内联数学；
+`cumcm2026` 主 PDF 和 LaTeX sidecar 都显式关闭 pandoc raw TeX，并支持 `\( ... \)` 内联数学；
 附录代码会防止源码中的 `\end{lstlisting}` 提前结束 LaTeX 代码环境，避免 notebook
 里嵌套的 LaTeX 模板字符串把 `\begin{table}[H]` 等内容泄漏成正文 LaTeX，从而造成
 PDF 编译失败或代码越界。
+
+PDF/sidecar 自动编译会显式禁用 XeLaTeX shell escape；模型或 Markdown 中的 `\input`、
+`\write18` 等 raw TeX 命令不会透传到候选工程。手动复编也应带
+`-no-shell-escape`。
 
 `cumcm2026` 主 PDF 页边距当前使用 `left=3.17cm,right=3.17cm,top=3cm,bottom=2.8cm`。
 底边距高于规范最低 2.5cm，是为了给实际字体字形 bbox 留出安全余量，避免正文末行
@@ -117,7 +125,7 @@ PDF 编译失败或代码越界。
   20MB 文件大小、摘要首页、无目录、正文 30 页以内、物理边缘越界和 CUMCM
   2.5cm 内容边距风险（允许少量字形 bbox 容差），并阻断 `承诺书`、`编号专用页`、
   `参赛队号` 等匿名电子稿不应出现的身份/封面字段，但仍不替代人工翻阅 PDF。
-- raw TeX 已在主 PDF 导出中关闭，正文不要依赖 `\begin{table}`、`\begin{align}`
+- raw TeX 已在主 PDF 与 LaTeX sidecar 导出中关闭，正文不要依赖 `\begin{table}`、`\begin{align}`
   等 raw LaTeX 环境；标准 Markdown 表格与 `$...$`、`\(...\)` 数学公式仍可用。
 - `paper_preflight_report.json` 只说明格式门禁和基本证据链通过，不证明数学模型和论文论证正确。
   预检会额外检查正文引用编号是否都有文末参考文献条目、Markdown 表格是否有
@@ -280,7 +288,8 @@ D:\texlive\2026\bin\windows\pdfinfo.exe backend\project\work_dir\<task_id>\res.p
   生成的安全副本。
 - `tex_export_status.json` 中 `compile_attempted=true` 时，重点看 `compile_success`、
   `compile_reason`、`compile_failure_summary`。当前自动编译优先尝试 `latexmk -xelatex`，
-  失败后会 fallback 到连续两次 `xelatex`；如果 `compile_success=false`，该失败仍是
+  并向 XeLaTeX 传入 `-no-shell-escape`，失败后会 fallback 到连续两次同样禁用 shell
+  escape 的 `xelatex`；如果 `compile_success=false`，该失败仍是
   sidecar 风险，不代表主 PDF/DOCX 导出失败。
 
 如需视觉检查前几页，可渲染为 PNG：

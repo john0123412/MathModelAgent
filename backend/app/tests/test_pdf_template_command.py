@@ -34,6 +34,7 @@ class TestPdfTemplateCommand(unittest.TestCase):
         self.assertIn("--standalone", command)
         self.assertIn("--listings", command)
         self.assertIn("--pdf-engine=xelatex", command)
+        self.assertIn("--pdf-engine-opt=-no-shell-escape", command)
         self.assertIn(
             "markdown-raw_tex+tex_math_dollars+tex_math_single_backslash+pipe_tables",
             command,

@@ -12,7 +12,7 @@ from typing import Any
 from app.core.llm.types import Usage
 from app.utils import common_utils
 
-TOKEN_USAGE_FILENAME = "token_usage.json"
+USAGE_REPORT_FILENAME = "token_usage.json"
 _VERSION = 1
 _LOCK = threading.Lock()
 
@@ -40,7 +40,7 @@ def _empty_report(task_id: str, usage_available: bool = False) -> dict[str, Any]
 
 def _usage_path(task_id: str) -> str:
     work_dir = common_utils.get_work_dir(task_id)
-    return os.path.join(work_dir, TOKEN_USAGE_FILENAME)
+    return os.path.join(work_dir, USAGE_REPORT_FILENAME)
 
 
 def _load_existing(path: str, task_id: str) -> dict[str, Any]:
@@ -65,7 +65,7 @@ def _load_existing(path: str, task_id: str) -> dict[str, Any]:
 def _write_atomic(path: str, data: dict[str, Any]) -> None:
     directory = os.path.dirname(path)
     fd, temp_path = tempfile.mkstemp(
-        prefix=f"{TOKEN_USAGE_FILENAME}.",
+        prefix=f"{USAGE_REPORT_FILENAME}.",
         suffix=".tmp",
         dir=directory,
     )

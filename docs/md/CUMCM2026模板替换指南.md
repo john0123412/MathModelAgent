@@ -3,7 +3,7 @@
 ## 当前状态
 
 - 当前 `cumcm2026` 是基于《全国大学生数学建模竞赛论文格式规范（2026年修订稿）》实现的暂定模板，不是官方最终 DOCX/LaTeX 模板包。
-- 主 PDF 按 2026 修订稿口径实现：电子版不生成目录，摘要页作为第一页，主 PDF 禁 raw TeX，支持 `$...$` 和 `\(...\)` 数学公式。
+- 主 PDF 按 2026 修订稿口径实现：电子版不生成目录，摘要页作为第一页；主 PDF 与 LaTeX sidecar 均禁 raw TeX，支持 `$...$` 和 `\(...\)` 数学公式，自动编译禁用 shell escape。
 - 主 PDF 会在摘要/关键词后做 PDF-only 分页，保证摘要页独占第一页、正文从第二页开始；该分页不写回 `res.md`，也不影响 DOCX 或 LaTeX sidecar。
 - 当前 DOCX reference 暂时复用 2025：
   `backend/app/templates/export_profiles/cumcm2025_docx/format2025_reference.docx`
@@ -135,8 +135,8 @@ uv run ruff check app
 uv run python -m unittest app/tests/test_tex_project_exporter.py app/tests/test_export_profiles.py
 uv run python -m app.tools.export_cli latex --input examples\pdf_export_sample\res.md --work-dir examples\pdf_export_sample --profile cumcm2026
 cd examples\pdf_export_sample\latex_project
-xelatex -interaction=nonstopmode main.tex
-xelatex -interaction=nonstopmode main.tex
+xelatex -no-shell-escape -interaction=nonstopmode main.tex
+xelatex -no-shell-escape -interaction=nonstopmode main.tex
 ```
 
 ## 比赛前 10 分钟快速定位清单

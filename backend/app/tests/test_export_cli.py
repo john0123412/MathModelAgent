@@ -79,3 +79,29 @@ class TestExportCliPdf(unittest.TestCase):
             self.assertEqual(status["pdf_visual_check"], {"status": "PASS"})
             audit_mock.assert_called_once_with(work_dir)
             manifest_mock.assert_called_once_with(work_dir, "task-1")
+
+
+class TestExportCliLatex(unittest.TestCase):
+    def test_manual_latex_instructions_disable_shell_escape(self):
+        stdout = io.StringIO()
+        args = mock.Mock(input="res.md", work_dir="work", profile="cumcm2026")
+        result = {
+            "success": True,
+            "latex_project_dir": "latex_project",
+            "main_tex": "latex_project/main.tex",
+            "compile_attempted": False,
+            "compile_success": False,
+            "compile_reason": "未检测到编译器",
+        }
+        with (
+            mock.patch("app.tools.export_cli.shutil.which", return_value="pandoc"),
+            mock.patch(
+                "app.tools.export_cli.export_markdown_to_latex_project",
+                return_value=result,
+            ),
+            redirect_stdout(stdout),
+        ):
+            exit_code = export_cli.cmd_latex(args)
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("xelatex -no-shell-escape", stdout.getvalue())

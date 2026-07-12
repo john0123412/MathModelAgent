@@ -12,6 +12,7 @@ from app.services.redis_manager import redis_manager
 from app.services.ws_manager import ws_manager
 from app.utils.common_utils import ensure_safe_task_id
 from app.utils.log_util import logger
+from app.config.setting import settings
 
 router = APIRouter()
 
@@ -31,8 +32,23 @@ def _is_closed_send_error(error: Exception) -> bool:
     )
 
 
+def _is_allowed_websocket_origin(origin: str | None) -> bool:
+    """Reject cross-site WebSocket connections; CORS middleware does not cover WS."""
+    allowed_origins = (
+        settings.CORS_ALLOW_ORIGINS
+        if isinstance(settings.CORS_ALLOW_ORIGINS, list)
+        else [settings.CORS_ALLOW_ORIGINS]
+    )
+    return origin in allowed_origins
+
+
 @router.websocket("/task/{task_id}")
 async def websocket_endpoint(websocket: WebSocket, task_id: str):
+    if not _is_allowed_websocket_origin(websocket.headers.get("origin")):
+        logger.warning("拒绝未受信任 Origin 的 WebSocket 连接")
+        await websocket.close(code=1008, reason="Untrusted origin")
+        return
+
     try:
         safe_task_id = ensure_safe_task_id(task_id)
     except ValueError:

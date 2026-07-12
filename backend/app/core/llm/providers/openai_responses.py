@@ -4,6 +4,7 @@ from openai import AsyncOpenAI
 from app.config.setting import settings
 from app.core.llm.providers.base import BaseProvider
 from app.core.llm.types import StandardResponse, ToolCall, Usage
+from app.utils.outbound_http import llm_http_client
 
 
 class OpenAIResponsesProvider(BaseProvider):
@@ -20,49 +21,51 @@ class OpenAIResponsesProvider(BaseProvider):
         max_tokens: int | None = None,
         top_p: float | None = None,
     ) -> StandardResponse:
-        client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=base_url,
-            timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS,
-        )
+        async with llm_http_client(settings.LLM_REQUEST_TIMEOUT_SECONDS) as http_client:
+            client = AsyncOpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS,
+                http_client=http_client,
+            )
 
-        input_items = self._messages_to_input(messages)
+            input_items = self._messages_to_input(messages)
 
-        kwargs: dict = {"model": model, "input": input_items}
-        if max_tokens:
-            kwargs["max_output_tokens"] = max_tokens
-        if top_p is not None:
-            kwargs["top_p"] = top_p
-        if tools:
-            kwargs["tools"] = self._convert_tools(tools)
-            if tool_choice:
-                kwargs["tool_choice"] = self._convert_tool_choice(tool_choice)
+            kwargs: dict = {"model": model, "input": input_items}
+            if max_tokens:
+                kwargs["max_output_tokens"] = max_tokens
+            if top_p is not None:
+                kwargs["top_p"] = top_p
+            if tools:
+                kwargs["tools"] = self._convert_tools(tools)
+                if tool_choice:
+                    kwargs["tool_choice"] = self._convert_tool_choice(tool_choice)
 
-        response = await client.responses.create(**kwargs)
+            response = await client.responses.create(**kwargs)
 
-        content_parts: list[str] = []
-        tool_calls: list[ToolCall] = []
+            content_parts: list[str] = []
+            tool_calls: list[ToolCall] = []
 
-        for item in response.output:
-            if item.type == "message":
-                for part in item.content:
-                    if part.type == "output_text":
-                        content_parts.append(part.text)
-            elif item.type == "function_call":
-                tool_calls.append(ToolCall(
-                    id=item.call_id,
-                    name=item.name,
-                    arguments=item.arguments,
-                ))
+            for item in response.output:
+                if item.type == "message":
+                    for part in item.content:
+                        if part.type == "output_text":
+                            content_parts.append(part.text)
+                elif item.type == "function_call":
+                    tool_calls.append(ToolCall(
+                        id=item.call_id,
+                        name=item.name,
+                        arguments=item.arguments,
+                    ))
 
-        content = "".join(content_parts) if content_parts else None
+            content = "".join(content_parts) if content_parts else None
 
-        usage = Usage(
-            prompt_tokens=response.usage.input_tokens if response.usage else 0,
-            completion_tokens=response.usage.output_tokens if response.usage else 0,
-        )
+            usage = Usage(
+                prompt_tokens=response.usage.input_tokens if response.usage else 0,
+                completion_tokens=response.usage.output_tokens if response.usage else 0,
+            )
 
-        return StandardResponse(content=content, tool_calls=tool_calls, usage=usage)
+            return StandardResponse(content=content, tool_calls=tool_calls, usage=usage)
 
     def _messages_to_input(self, messages: list[dict]) -> list[dict]:
         """将 Chat Completions messages 格式转为 Responses input 格式。"""

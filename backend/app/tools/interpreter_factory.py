@@ -10,7 +10,7 @@ from app.utils.log_util import logger
 
 
 async def create_interpreter(
-    kind: Literal["remote", "local"] = "local",
+    kind: Literal["remote", "local"] | None = None,
     *,
     task_id: str,
     work_dir: str,
@@ -32,15 +32,16 @@ async def create_interpreter(
     Raises:
         ValueError: 未知的解释器类型时抛出。
     """
-    if not settings.E2B_API_KEY:
-        logger.info("默认使用本地解释器")
-        kind = "local"
-    else:
-        logger.info("使用远程解释器")
-        kind = "remote"
+    selected_kind = kind or settings.CODE_INTERPRETER_KIND
 
     interp: BaseCodeInterpreter
-    if kind == "remote":
+    if selected_kind == "remote":
+        if not settings.E2B_API_KEY:
+            raise RuntimeError(
+                "远程代码沙箱未配置 E2B_API_KEY；为避免执行不可信代码，"
+                "不会自动降级到本地解释器"
+            )
+        logger.info("使用远程代码沙箱")
         interp = await E2BCodeInterpreter.create(
             task_id=task_id,
             work_dir=work_dir,
@@ -48,7 +49,13 @@ async def create_interpreter(
         )
         await interp.initialize(timeout=timeout)  # type: ignore[reportCallIssue]
         return interp
-    elif kind == "local":
+    elif selected_kind == "local":
+        if not settings.ALLOW_LOCAL_CODE_EXECUTION:
+            raise RuntimeError(
+                "本地代码执行默认禁用；仅在受信任的隔离开发环境中显式设置 "
+                "ALLOW_LOCAL_CODE_EXECUTION=true 后才能启用"
+            )
+        logger.warning("已显式启用本地代码执行；仅限受信任的隔离开发环境")
         interp = LocalCodeInterpreter(
             task_id=task_id,
             work_dir=work_dir,
@@ -57,4 +64,4 @@ async def create_interpreter(
         await interp.initialize()
         return interp
     else:
-        raise ValueError(f"未知 interpreter 类型：{kind}")
+        raise ValueError(f"未知 interpreter 类型：{selected_kind}")

@@ -37,10 +37,12 @@ from app.core.llm.providers.openai_chat import OpenAIChatProvider
 from app.core.llm.providers.openai_responses import OpenAIResponsesProvider
 from app.core.llm.providers.anthropic import AnthropicProvider
 from app.core.llm.providers.base import BaseProvider
+from app.utils.security import validate_llm_base_url
 import requests
 
 router = APIRouter()
 EXAMPLE_ROOT = os.path.abspath(os.path.join("app", "example", "example"))
+UPLOAD_CHUNK_SIZE_BYTES = 1024 * 1024
 
 # 任务注册表: task_id -> (asyncio.Task, asyncio.Event)
 _active_tasks: Dict[str, Tuple[asyncio.Task, asyncio.Event]] = {}
@@ -104,6 +106,39 @@ def _require_safe_task_id(task_id: str) -> str:
         raise HTTPException(status_code=400, detail="非法任务ID") from exc
 
 
+def _validated_llm_base_url(base_url: str | None) -> str | None:
+    return validate_llm_base_url(
+        base_url,
+        allow_private_hosts=settings.ALLOW_PRIVATE_LLM_BASE_URLS,
+    )
+
+
+async def _save_uploaded_file(
+    upload: UploadFile,
+    destination: str,
+    *,
+    total_uploaded_bytes: int,
+) -> int:
+    """Stream an upload to disk while enforcing per-file and aggregate limits."""
+    file_size = 0
+    try:
+        with open(destination, "xb") as output:
+            while chunk := await upload.read(UPLOAD_CHUNK_SIZE_BYTES):
+                file_size += len(chunk)
+                if file_size > settings.MAX_UPLOAD_FILE_SIZE_BYTES:
+                    raise HTTPException(status_code=413, detail="单个上传文件超过大小上限")
+                if total_uploaded_bytes + file_size > settings.MAX_UPLOAD_TOTAL_SIZE_BYTES:
+                    raise HTTPException(status_code=413, detail="上传文件总大小超过上限")
+                output.write(chunk)
+        return file_size
+    except Exception:
+        if os.path.exists(destination):
+            os.remove(destination)
+        raise
+    finally:
+        await upload.close()
+
+
 def _resolve_example_dir(source: str) -> str:
     """根据示例目录名解析示例路径，拒绝路径遍历。"""
     try:
@@ -133,7 +168,7 @@ async def save_api_config(request: SaveApiConfigRequest):
             if model_id := request.coordinator.get("modelId"):
                 settings.COORDINATOR_MODEL = model_id
             if base_url := request.coordinator.get("baseUrl"):
-                settings.COORDINATOR_BASE_URL = base_url
+                settings.COORDINATOR_BASE_URL = _validated_llm_base_url(base_url)
             if api_type := request.coordinator.get("apiType"):
                 settings.COORDINATOR_API_TYPE = api_type
             if cw := request.coordinator.get("contextWindow"):
@@ -145,7 +180,7 @@ async def save_api_config(request: SaveApiConfigRequest):
             if model_id := request.modeler.get("modelId"):
                 settings.MODELER_MODEL = model_id
             if base_url := request.modeler.get("baseUrl"):
-                settings.MODELER_BASE_URL = base_url
+                settings.MODELER_BASE_URL = _validated_llm_base_url(base_url)
             if api_type := request.modeler.get("apiType"):
                 settings.MODELER_API_TYPE = api_type
             if cw := request.modeler.get("contextWindow"):
@@ -157,7 +192,7 @@ async def save_api_config(request: SaveApiConfigRequest):
             if model_id := request.coder.get("modelId"):
                 settings.CODER_MODEL = model_id
             if base_url := request.coder.get("baseUrl"):
-                settings.CODER_BASE_URL = base_url
+                settings.CODER_BASE_URL = _validated_llm_base_url(base_url)
             if api_type := request.coder.get("apiType"):
                 settings.CODER_API_TYPE = api_type
             if cw := request.coder.get("contextWindow"):
@@ -169,7 +204,7 @@ async def save_api_config(request: SaveApiConfigRequest):
             if model_id := request.writer.get("modelId"):
                 settings.WRITER_MODEL = model_id
             if base_url := request.writer.get("baseUrl"):
-                settings.WRITER_BASE_URL = base_url
+                settings.WRITER_BASE_URL = _validated_llm_base_url(base_url)
             if api_type := request.writer.get("apiType"):
                 settings.WRITER_API_TYPE = api_type
             if cw := request.writer.get("contextWindow"):
@@ -184,9 +219,11 @@ async def save_api_config(request: SaveApiConfigRequest):
             "scope": "runtime",
             "persisted": False,
         }
-    except Exception as e:
-        logger.error(f"保存配置失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"保存配置失败: {str(e)}")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="LLM Base URL 配置不合法") from exc
+    except Exception:
+        logger.exception("保存配置失败")
+        raise HTTPException(status_code=500, detail="保存配置失败")
 
 
 @router.post("/validate-api-key", response_model=ValidateApiKeyResponse)
@@ -194,6 +231,11 @@ async def validate_api_key(request: ValidateApiKeyRequest):
     """
     验证 API Key 的有效性
     """
+    try:
+        base_url = _validated_llm_base_url(request.base_url)
+    except ValueError:
+        return ValidateApiKeyResponse(valid=False, message="✗ Base URL 不安全或格式不合法")
+
     try:
         provider: BaseProvider
         match request.api_type:
@@ -208,9 +250,7 @@ async def validate_api_key(request: ValidateApiKeyRequest):
             messages=[{"role": "user", "content": "Hi"}],
             model=request.model_id,
             api_key=request.api_key,
-            base_url=request.base_url
-            if request.base_url != "https://api.openai.com/v1"
-            else None,
+            base_url=base_url if base_url != "https://api.openai.com/v1" else None,
             max_tokens=1,
         )
 
@@ -233,10 +273,9 @@ async def validate_api_key(request: ValidateApiKeyRequest):
             return ValidateApiKeyResponse(
                 valid=False, message="✗ API 权限不足或账户余额不足"
             )
-        else:
-            return ValidateApiKeyResponse(
-                valid=False, message=f"✗ 验证失败: {error_msg[:50]}..."
-            )
+        return ValidateApiKeyResponse(
+            valid=False, message="✗ 验证失败，请检查网络、Base URL 和模型配置"
+        )
 
 
 @router.post("/validate-openalex-email", response_model=ValidateOpenalexEmailResponse)
@@ -306,37 +345,45 @@ async def modeling(
     export_profile: ExportProfile = Form(DEFAULT_MODELING_EXPORT_PROFILE),  # 从表单获取
     files: list[UploadFile] = File(default=None),
 ):
+    if len(ques_all) > settings.MAX_PROBLEM_TEXT_CHARS:
+        raise HTTPException(status_code=413, detail="题目文本超过大小上限")
+
     task_id = create_task_id()
     work_dir = create_work_dir(task_id)
 
-    # 如果有上传文件，保存文件
-    if files:
-        logger.info(f"开始处理上传的文件，工作目录: {work_dir}")
-        for file in files:
-            try:
+    try:
+        # 如果有上传文件，流式保存，避免将不受信任内容整体读入进程内存。
+        if files:
+            logger.info(f"开始处理上传的文件，工作目录: {work_dir}")
+            total_uploaded_bytes = 0
+            uploaded_filenames: set[str] = set()
+            for file in files:
                 if not file.filename:
                     logger.warning("跳过空文件名")
+                    await file.close()
                     continue
                 safe_filename = ensure_safe_filename(file.filename)
+                if safe_filename in uploaded_filenames:
+                    await file.close()
+                    raise HTTPException(status_code=400, detail="不允许重复上传同名文件")
+                uploaded_filenames.add(safe_filename)
                 data_file_path = safe_join_work_dir(task_id, safe_filename)
-                logger.info(f"保存文件: {safe_filename} -> {data_file_path}")
-
-                content = await file.read()
-                if not content:
-                    logger.warning(f"文件 {safe_filename} 内容为空")
-                    continue
-
-                with open(data_file_path, "wb") as f:
-                    f.write(content)
-                logger.info(f"成功保存文件: {data_file_path}")
-
-            except Exception as e:
-                logger.error(f"保存文件 {file.filename} 失败: {str(e)}")
-                raise HTTPException(
-                    status_code=400, detail=f"保存文件 {file.filename} 失败: {str(e)}"
+                file_size = await _save_uploaded_file(
+                    file,
+                    data_file_path,
+                    total_uploaded_bytes=total_uploaded_bytes,
                 )
-    else:
-        logger.warning("没有上传文件")
+                total_uploaded_bytes += file_size
+                logger.info(f"上传文件已保存: {safe_filename} ({file_size} bytes)")
+        else:
+            logger.warning("没有上传文件")
+    except HTTPException:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise
+    except Exception:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        logger.exception("保存上传文件失败")
+        raise HTTPException(status_code=400, detail="保存上传文件失败")
 
     # 存储任务ID
     await redis_manager.set(f"task_id:{task_id}", task_id)

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { cn } from "@/lib/utils";
 import type { AgentType } from "@/utils/enum";
-import { marked } from "marked";
+import { renderMarkdown } from "@/utils/markdown";
 import type { HTMLAttributes } from "vue";
 import { computed } from "vue";
 
@@ -22,7 +22,7 @@ const props = withDefaults(defineProps<BubbleProps>(), {
 
 /** 渲染 Markdown 内容 */
 const renderedContent = computed(() => {
-	return marked.parse(props.content);
+	return renderMarkdown(props.content);
 });
 </script>
 

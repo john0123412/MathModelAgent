@@ -181,9 +181,11 @@ class WriterAgent(Agent):
                     WriterMessage(content=query),
                 )
 
+                scholar = self.scholar
                 try:
-                    assert self.scholar is not None, "scholar 未初始化"
-                    papers = await self.scholar.search_papers(
+                    if scholar is None:
+                        raise RuntimeError("scholar 未初始化")
+                    papers = await scholar.search_papers(
                         query=query,
                         limit=arguments.get("limit", 8),
                         year_from=arguments.get("year_from"),
@@ -197,8 +199,7 @@ class WriterAgent(Agent):
                     logger.error(error_msg)
                     papers_str = error_msg
                 else:
-                    assert self.scholar is not None, "scholar 未初始化"
-                    papers_str = self.scholar.papers_to_str(papers)
+                    papers_str = scholar.papers_to_str(papers)
                 # TODO: pass to frontend
                 logger.info(f"搜索文献结果\n{papers_str}")
                 await self.append_chat_history(

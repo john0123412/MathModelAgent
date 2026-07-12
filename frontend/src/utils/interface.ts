@@ -22,5 +22,5 @@ export interface ModelConfig {
 	modelId: string;
 	apiType: string;
 	/** 上下文窗口大小（token），用于记忆压缩阈值 */
-	contextWindow?: number;
+	contextWindow: number;
 }

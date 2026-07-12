@@ -3,7 +3,7 @@
 import os
 import shutil
 import datetime
-import hashlib
+import secrets
 import tomllib
 from pathlib import Path
 from app.schemas.enums import CompTemplate, ExportProfile
@@ -24,10 +24,10 @@ WORK_DIR_ROOT = os.path.join("project", "work_dir")
 
 def create_task_id() -> str:
     """生成基于时间戳和随机哈希的唯一任务 ID。"""
-    # 生成时间戳和随机hash
+    # 任务目录名是工作区文件的 capability URL 组成部分，使用 128 位随机后缀
+    # 避免其他本机浏览器页面或进程通过枚举时间戳猜测任务产物。
     timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    random_hash = hashlib.md5(str(datetime.datetime.now()).encode()).hexdigest()[:8]
-    return f"{timestamp}-{random_hash}"
+    return f"{timestamp}-{secrets.token_hex(16)}"
 
 
 def ensure_safe_task_id(task_id: str) -> str:

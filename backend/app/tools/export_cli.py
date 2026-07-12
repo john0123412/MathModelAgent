@@ -266,8 +266,8 @@ def cmd_latex(args: argparse.Namespace) -> int:
         print(f"未尝试自动编译（{result['compile_reason']}）；请按下面命令手动编译：")
 
     print(f"\n  cd {latex_project_dir}")
-    print("  xelatex -interaction=nonstopmode main.tex")
-    print("  xelatex -interaction=nonstopmode main.tex   # 再跑一次以生成正确的目录/交叉引用")
+    print("  xelatex -no-shell-escape -interaction=nonstopmode main.tex")
+    print("  xelatex -no-shell-escape -interaction=nonstopmode main.tex   # 再跑一次以生成正确的目录/交叉引用")
     print("\n（该模板未使用 bibtex/biber，无需额外的参考文献编译步骤）")
     return 0
 

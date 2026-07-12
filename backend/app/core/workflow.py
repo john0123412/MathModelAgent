@@ -90,7 +90,6 @@ class MathModelWorkFlow(WorkFlow):
 
         notebook_serializer = NotebookSerializer(work_dir=self.work_dir)
         code_interpreter = await create_interpreter(
-            kind="local",
             task_id=self.task_id,
             work_dir=self.work_dir,
             notebook_serializer=notebook_serializer,

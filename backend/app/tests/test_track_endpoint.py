@@ -116,7 +116,7 @@ class TestLLMUsageRecording(unittest.IsolatedAsyncioTestCase):
             model = LLM(
                 api_key="secret-key",
                 model="test-model",
-                base_url="https://example.test/v1",
+                base_url="https://8.8.8.8/v1",
                 task_id="task-1",
             )
             model.provider = FakeProvider()
@@ -138,7 +138,7 @@ class TestLLMUsageRecording(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report["agents"]["WriterAgent"]["total_tokens"], 18)
         self.assertNotIn("secret-key", raw)
         self.assertNotIn("do not persist me", raw)
-        self.assertNotIn("https://example.test/v1", raw)
+        self.assertNotIn("https://8.8.8.8/v1", raw)
 
     async def test_chat_returns_response_when_usage_recording_fails(self):
         model = LLM(api_key="secret-key", model="test-model", task_id="task-1")

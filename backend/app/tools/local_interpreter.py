@@ -219,8 +219,8 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         return "\n".join(text_to_gpt), error_occurred, error_message
 
     def execute_code_(self, code) -> list[tuple[str, str]]:
-        assert self.kc is not None
-        assert self.km is not None
+        if self.kc is None or self.km is None:
+            raise RuntimeError("本地 Jupyter 内核未初始化")
         self.kc.execute(code)
         logger.info(f"执行代码: {code}")
         # Get the output of the code
@@ -301,8 +301,9 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
 
     async def cleanup(self):
         # 关闭内核
-        assert self.kc is not None
-        assert self.km is not None
+        if self.kc is None or self.km is None:
+            logger.warning("本地 Jupyter 内核未初始化，跳过清理")
+            return
         self.kc.shutdown()
         logger.info("关闭内核")
         self.km.shutdown_kernel()
@@ -312,7 +313,8 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
 
     def restart_jupyter_kernel(self):
         """Restart the Jupyter kernel and recreate the work directory."""
-        assert self.kc is not None
+        if self.kc is None:
+            raise RuntimeError("本地 Jupyter 内核未初始化")
         self.kc.shutdown()
         # 设置 UTF-8 编码环境，避免 Windows 中文环境下 GBK 编码导致的乱码问题
         kernel_env = os.environ.copy()

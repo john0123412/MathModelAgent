@@ -5,7 +5,14 @@ from enum import Enum
 from pydantic import BeforeValidator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import os
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
+
+
+DEFAULT_CORS_ALLOW_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+DEFAULT_TRUSTED_HOSTS = ["localhost", "127.0.0.1", "backend"]
 
 
 class ApiType(str, Enum):
@@ -15,20 +22,37 @@ class ApiType(str, Enum):
     ANTHROPIC = "anthropic"
 
 
-def parse_cors(value: str) -> list[str]:
+def parse_cors(value: str | list[str]) -> list[str]:
     """将 CORS 配置字符串解析为 URL 列表。
 
     Args:
-        value: 逗号分隔的 URL 字符串，或 "*" 表示允许所有来源。
+        value: 逗号分隔的 URL 字符串或 URL 列表。
 
     Returns:
         解析后的 URL 列表。
     """
-    if value == "*":
-        return ["*"]
-    if "," in value:
-        return [url.strip() for url in value.split(",")]
-    return [value]
+    if isinstance(value, list):
+        origins = [str(url).strip() for url in value]
+    else:
+        origins = [url.strip() for url in value.split(",")]
+
+    origins = [url for url in origins if url]
+    if not origins or "*" in origins:
+        raise ValueError("CORS_ALLOW_ORIGINS 必须是明确的受信任 Origin，不能使用通配符")
+    return origins
+
+
+def parse_trusted_hosts(value: str | list[str]) -> list[str]:
+    """Parse explicit Host header allowlist without accepting a wildcard."""
+    if isinstance(value, list):
+        hosts = [str(host).strip() for host in value]
+    else:
+        hosts = [host.strip() for host in value.split(",")]
+
+    hosts = [host for host in hosts if host]
+    if not hosts or "*" in hosts:
+        raise ValueError("TRUSTED_HOSTS 必须是明确的 Host 列表，不能使用通配符")
+    return hosts
 
 
 class Settings(BaseSettings):
@@ -69,11 +93,25 @@ class Settings(BaseSettings):
     LLM_REQUEST_TIMEOUT_SECONDS: float = 90.0
     HUMAN_MODEL_GATE_ENABLED: bool = False
     E2B_API_KEY: Optional[str] = None
+    # 代码手会执行模型生成的代码。默认只允许远程隔离环境，避免在后端进程中
+    # 直接执行不可信代码并读取服务端环境变量或项目文件。
+    CODE_INTERPRETER_KIND: Literal["remote", "local"] = "remote"
+    ALLOW_LOCAL_CODE_EXECUTION: bool = False
     LOG_LEVEL: str = "DEBUG"
     DEBUG: bool = True
     REDIS_URL: str = "redis://redis:6379/0"
     REDIS_MAX_CONNECTIONS: int = 10
-    CORS_ALLOW_ORIGINS: Annotated[list[str] | str, BeforeValidator(parse_cors)] = "*"
+    CORS_ALLOW_ORIGINS: Annotated[list[str] | str, BeforeValidator(parse_cors)] = (
+        DEFAULT_CORS_ALLOW_ORIGINS
+    )
+    TRUSTED_HOSTS: Annotated[list[str] | str, BeforeValidator(parse_trusted_hosts)] = (
+        DEFAULT_TRUSTED_HOSTS
+    )
+    ALLOW_PRIVATE_LLM_BASE_URLS: bool = False
+    MAX_UPLOAD_FILE_SIZE_BYTES: int = 50 * 1024 * 1024
+    MAX_UPLOAD_TOTAL_SIZE_BYTES: int = 200 * 1024 * 1024
+    MAX_PROBLEM_TEXT_CHARS: int = 100_000
+    MAX_REQUEST_BODY_BYTES: int = 210 * 1024 * 1024
     SERVER_HOST: str = "http://localhost:8003"
     DEEPSEEK_MODEL: Optional[str] = None
     DEEPSEEK_BASE_URL: Optional[str] = None

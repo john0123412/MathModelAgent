@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { CodeCell, NoteCell, ResultCell } from "@/utils/interface";
 import { renderMarkdown } from "@/utils/markdown";
-import type { CodeExecutionResult } from "@/utils/response";
+import { sanitizeHtml } from "@/utils/sanitizeHtml";
+import type { OutputItem, ResultExecution } from "@/utils/response";
 
 // ---- Props ----
 
@@ -12,7 +13,7 @@ defineProps<{
 // ---- Methods ----
 
 /** 获取结果格式对应的 CSS 类 */
-const getResultClass = (result: CodeExecutionResult) => {
+const getResultClass = (result: OutputItem) => {
 	switch (result.res_type) {
 		case "stdout":
 			return "text-gray-600";
@@ -26,21 +27,20 @@ const getResultClass = (result: CodeExecutionResult) => {
 };
 
 /** 判断结果是否为图片格式 */
-const isImageResult = (result: CodeExecutionResult) => {
-	return (
-		result.res_type === "result" &&
-		["png", "jpeg", "svg"].includes(result.format as string)
-	);
+const getResultFormat = (result: OutputItem): ResultExecution["format"] | null => {
+	return result.res_type === "result" ? result.format : null;
+};
+
+const isImageResult = (result: OutputItem) => {
+	return ["png", "jpeg"].includes(getResultFormat(result) ?? "");
 };
 
 /** 判断结果是否为 LaTeX 格式 */
-const isLatexResult = (result: CodeExecutionResult) => {
-	return result.res_type === "result" && result.format === "latex";
-};
-
-/** 判断结果是否为 JSON 格式 */
-const isJsonResult = (result: CodeExecutionResult) => {
-	return result.res_type === "result" && result.format === "json";
+const hasResultFormat = (
+	result: OutputItem,
+	format: ResultExecution["format"],
+) => {
+	return getResultFormat(result) === format;
 };
 
 /** 格式化 JSON 显示 */
@@ -57,6 +57,9 @@ const formatJson = (jsonString: string) => {
 const renderMarkdownContent = (content: string) => {
 	return renderMarkdown(content);
 };
+
+/** Notebook HTML is code output and therefore must not be trusted. */
+const sanitizeNotebookHtml = (content: string) => sanitizeHtml(content);
 
 /** 类型守卫：判断是否为代码单元格 */
 const isCodeCell = (cell: NoteCell): cell is CodeCell => {
@@ -119,29 +122,29 @@ const isResultCell = (cell: NoteCell): cell is ResultCell => {
               </div>
             </template>
             
-            <!-- 执行结果 - 图片 (PNG, JPEG, SVG) -->
+            <!-- 执行结果 - 图片 (PNG, JPEG；SVG 保持为文本，避免主动内容执行) -->
             <template v-else-if="isImageResult(result)">
-              <img :src="`data:image/${result.format};base64,${result.msg}`" 
+              <img :src="`data:image/${getResultFormat(result)};base64,${result.msg}`"
                    class="max-w-full rounded-lg shadow-sm" />
             </template>
             
             <!-- 执行结果 - HTML -->
-            <template v-else-if="result.res_type === 'result' && result.format === 'html'">
-              <div class="prose prose-sm max-w-none" v-html="result.msg || ''"></div>
+            <template v-else-if="hasResultFormat(result, 'html')">
+              <div class="prose prose-sm max-w-none" v-html="sanitizeNotebookHtml(result.msg || '')"></div>
             </template>
             
             <!-- 执行结果 - Markdown -->
-            <template v-else-if="result.res_type === 'result' && result.format === 'markdown'">
+            <template v-else-if="hasResultFormat(result, 'markdown')">
               <div class="prose prose-sm max-w-none" v-html="renderMarkdownContent(result.msg || '')"></div>
             </template>
             
             <!-- 执行结果 - LaTeX -->
-            <template v-else-if="isLatexResult(result)">
-              <div class="katex-display" v-html="result.msg || ''"></div>
+            <template v-else-if="hasResultFormat(result, 'latex')">
+              <div class="katex-display" v-html="sanitizeNotebookHtml(result.msg || '')"></div>
             </template>
             
             <!-- 执行结果 - JSON -->
-            <template v-else-if="isJsonResult(result)">
+            <template v-else-if="hasResultFormat(result, 'json')">
               <pre class="text-sm bg-gray-50 p-2 rounded overflow-x-auto">{{ formatJson(result.msg || '') }}</pre>
             </template>
             

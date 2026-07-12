@@ -31,7 +31,8 @@ from __future__ import annotations
 import platform
 import re
 import shutil
-import subprocess
+# subprocess is limited to the controlled fc-match probe below.
+import subprocess  # nosec B404
 
 from app.utils.log_util import logger
 
@@ -71,11 +72,14 @@ def _fc_match_family(font_name: str) -> str | None:
     if fc_match is None:
         return None
     try:
-        proc = subprocess.run(
+        # fc-match comes from PATH lookup and receives a single font family argument;
+        # no shell is involved, so a font name cannot become a command.
+        proc = subprocess.run(  # noqa: S603  # nosec B603
             [fc_match, "--format=%{family}", font_name],
             capture_output=True,
             text=True,
             timeout=5,
+            shell=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         logger.warning(f"fc-match 调用异常，跳过字体检测: {exc}")

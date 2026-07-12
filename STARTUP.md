@@ -28,7 +28,8 @@ docker compose stop         # 仅停止（保留容器）
 docker compose down -v      # 停止并删除数据卷（⚠️ 清空 Redis 数据）
 ```
 
-启动后访问 http://localhost:5173
+启动后访问 http://localhost:5173。Compose 将 `5173` 和 `8000` 都绑定到
+`127.0.0.1`，默认只适合本机单用户使用；不要直接把开发 Compose 反向代理或暴露到公网。
 
 ### 启动后检查
 
@@ -54,6 +55,7 @@ WebSocket 请求 `ws://localhost:5173/ws/task/<task_id>` 会被转发到后端
 ```powershell
 docker compose exec backend uv run python -m unittest app.tests.test_security_utils app.tests.test_variable_snapshot_resume app.tests.test_message_history app.tests.test_user_output_and_tasks
 docker compose exec backend uv run python -m ruff check app
+docker compose exec backend uv run python -m ruff check app --select S
 ```
 
 > 不要持续 `docker compose logs -f`。排查时默认 `--tail=200`，最多临时扩大到 `--tail=2000`。
@@ -65,8 +67,18 @@ docker compose exec backend uv run python -m ruff check app
 WebUI 侧边栏的 API Key 配置会通过 `/save-api-config` 应用到当前后端进程，
 接口响应会标记 `scope=runtime`、`persisted=false`。它不会写回
 `backend/.env.dev`；后端或容器重启后仍以 `.env.dev` 或系统环境变量为准。
-注意：前端 Pinia store 仍会在浏览器本地持久化用户填写的 API key；这里的
-`persisted=false` 只表示后端没有把配置写入服务器文件。
+前端不会持久化 API Key：页面刷新后需要重新填写，升级后的页面会清理旧版
+`localStorage.apiKeys`。`persisted=false` 同时表示后端和浏览器都不会把该配置写入
+持久化存储。
+
+### 代码执行隔离
+
+`CODE_INTERPRETER_KIND=remote` 是默认值，建模任务需要有效的 `E2B_API_KEY` 才会执行
+模型生成代码。缺少密钥时任务会安全失败，**不会**自动降级为后端容器或宿主机 Jupyter。
+
+`CODE_INTERPRETER_KIND=local` 仅限完全受信任、已独立隔离的开发环境，且还必须显式设置
+`ALLOW_LOCAL_CODE_EXECUTION=true`。该模式可读取同一进程环境，不得用于共享服务、公开部署
+或正式验收环境。
 
 ### 构建说明
 
@@ -79,6 +91,12 @@ WebUI 侧边栏的 API Key 配置会通过 `/save-api-config` 应用到当前后
 - **backend**（:8000）→ 支持 checkpoint/resume
 - **frontend**（:5173）→ 通过 `/api` 和 `/ws` 代理连接 Compose 内部 backend:8000
 - **redis**（内部网络）
+
+后端的 CORS 与 WebSocket Origin 默认仅允许 `http://localhost:5173` 和
+`http://127.0.0.1:5173`；若需要其他受信任 Origin，设置明确的
+`CORS_ALLOW_ORIGINS` 列表，不能使用 `*`。`TRUSTED_HOSTS` 默认只允许
+`localhost`、`127.0.0.1` 和 Compose 内部 `backend`，用于拒绝伪造 Host/DNS rebinding；
+部署到其他受信任域名时必须同时显式扩展这两项。
 
 ### Restart 策略
 所有容器配置了 `restart: unless-stopped`：
@@ -128,7 +146,7 @@ pnpm run dev
 | 服务 | Docker Compose | 本地开发 |
 |------|----------------|----------|
 | Frontend | 5173 | 5173 |
-| Backend | 内部 8000；前端代理入口 5173/api；宿主直连 8000 取决于 Docker Desktop 端口发布状态 | 8003 |
+| Backend | 内部 8000；前端代理入口 5173/api；宿主直连 `127.0.0.1:8000`（仅本机） | 8003 |
 | Redis | 内部网络 | 6379 |
 
 ---
@@ -141,6 +159,10 @@ pnpm run dev
 会在对应任务目录内按需生成 `all.zip`，然后返回 `/static/<task_id>/all.zip`
 下载链接。压缩包会排除已有 `all.zip`、临时文件和常见缓存目录，并限制单文件和
 总打包大小，避免意外打包过大的工作目录。
+
+`/static/<task_id>/<filename>` 不是目录直出：只允许单层安全文件名，PNG/JPEG/GIF/WebP/BMP
+可供页面预览，其余产物一律以附件下载。这样任务中上传或生成的 HTML/SVG 不能在后端
+Origin 中作为网页执行。
 
 ### 无外部数据题目的 EDA 边界
 
@@ -346,6 +368,10 @@ LaTeX sidecar 现在生成两类正文文件：
 `\pandocbounded`、`\passthrough` 图片/inline 片段，并把图片搜索路径设为
 `./`、`../`、`sections/`、`figures/`，以便引用任务目录根部图片。
 
+sidecar 与主 PDF 一样禁用 Markdown raw TeX；模型生成的 `\input`、`\write18` 等命令
+不会透传给 XeLaTeX。自动 PDF/sidecar 编译显式传入 `-no-shell-escape`，手动复现也应保留
+该参数。
+
 导出器会扫描 Markdown 和生成的 LaTeX 中引用的本地图片，把存在的图片复制到
 `latex_project/` 和 `latex_project/figures/`，并把缺失引用写入
 `tex_export_status.json -> missing_assets`。这样候选 LaTeX 工程脱离任务根目录后也
@@ -431,17 +457,17 @@ uv run python -m app.tools.export_cli latex --input path\to\res.md --work-dir pa
 
 ```powershell
 cd path\to\workdir\latex_project
-xelatex -interaction=nonstopmode main.tex
-xelatex -interaction=nonstopmode main.tex
+xelatex -no-shell-escape -interaction=nonstopmode main.tex
+xelatex -no-shell-escape -interaction=nonstopmode main.tex
 ```
 
 跑两遍是为了让目录（`\tableofcontents`）和交叉引用正确生成。当前 `default`/`cumcm2025` 两个模板都没有用 `bibtex`/`biber`（没有独立的 `.bib` 参考文献库，参考文献是手写在正文里的 `thebibliography` 环境），所以不需要额外的 `bibtex main` / `biber main` 步骤；如果你自己往模板里加了 `.bib` 文件，编译顺序需要改成：
 
 ```powershell
-xelatex -interaction=nonstopmode main.tex
+xelatex -no-shell-escape -interaction=nonstopmode main.tex
 bibtex main          # 或者 biber main，取决于用 bibtex 还是 biblatex
-xelatex -interaction=nonstopmode main.tex
-xelatex -interaction=nonstopmode main.tex
+xelatex -no-shell-escape -interaction=nonstopmode main.tex
+xelatex -no-shell-escape -interaction=nonstopmode main.tex
 ```
 
 **手动指定字体**：不想用 profile 默认的字体名，或者本机装的是变体名称（比如公司电脑上中文字体被替换过），可以显式覆盖，用户指定的值总是优先且不会被静默替换：

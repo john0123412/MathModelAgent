@@ -7,6 +7,7 @@ from anthropic import AsyncAnthropic
 from app.config.setting import settings
 from app.core.llm.providers.base import BaseProvider
 from app.core.llm.types import StandardResponse, ToolCall, Usage
+from app.utils.outbound_http import llm_http_client
 
 
 class AnthropicProvider(BaseProvider):
@@ -24,51 +25,53 @@ class AnthropicProvider(BaseProvider):
         top_p: float | None = None,
     ) -> StandardResponse:
         auth_kwargs = self._build_auth_kwargs(api_key, base_url)
-        client = AsyncAnthropic(
-            **auth_kwargs,
-            base_url=base_url,
-            timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS,
-        )
+        async with llm_http_client(settings.LLM_REQUEST_TIMEOUT_SECONDS) as http_client:
+            client = AsyncAnthropic(
+                **auth_kwargs,
+                base_url=base_url,
+                timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS,
+                http_client=http_client,
+            )
 
-        system_prompt, anthropic_messages = self._convert_messages(messages)
+            system_prompt, anthropic_messages = self._convert_messages(messages)
 
-        kwargs: dict = {
-            "model": model,
-            "messages": anthropic_messages,
-            "max_tokens": max_tokens or 4096,
-        }
-        if system_prompt:
-            kwargs["system"] = system_prompt
-        if top_p is not None:
-            kwargs["top_p"] = top_p
-        if tools:
-            kwargs["tools"] = self._convert_tools(tools)
-            if tool_choice:
-                kwargs["tool_choice"] = self._convert_tool_choice(tool_choice)
+            kwargs: dict = {
+                "model": model,
+                "messages": anthropic_messages,
+                "max_tokens": max_tokens or 4096,
+            }
+            if system_prompt:
+                kwargs["system"] = system_prompt
+            if top_p is not None:
+                kwargs["top_p"] = top_p
+            if tools:
+                kwargs["tools"] = self._convert_tools(tools)
+                if tool_choice:
+                    kwargs["tool_choice"] = self._convert_tool_choice(tool_choice)
 
-        response = await client.messages.create(**kwargs)
+            response = await client.messages.create(**kwargs)
 
-        content_parts: list[str] = []
-        tool_calls: list[ToolCall] = []
+            content_parts: list[str] = []
+            tool_calls: list[ToolCall] = []
 
-        for block in response.content:
-            if block.type == "text":
-                content_parts.append(block.text)
-            elif block.type == "tool_use":
-                tool_calls.append(ToolCall(
-                    id=block.id,
-                    name=block.name,
-                    arguments=_json.dumps(block.input),
-                ))
+            for block in response.content:
+                if block.type == "text":
+                    content_parts.append(block.text)
+                elif block.type == "tool_use":
+                    tool_calls.append(ToolCall(
+                        id=block.id,
+                        name=block.name,
+                        arguments=_json.dumps(block.input),
+                    ))
 
-        content = "".join(content_parts) if content_parts else None
+            content = "".join(content_parts) if content_parts else None
 
-        usage = Usage(
-            prompt_tokens=response.usage.input_tokens,
-            completion_tokens=response.usage.output_tokens,
-        )
+            usage = Usage(
+                prompt_tokens=response.usage.input_tokens,
+                completion_tokens=response.usage.output_tokens,
+            )
 
-        return StandardResponse(content=content, tool_calls=tool_calls, usage=usage)
+            return StandardResponse(content=content, tool_calls=tool_calls, usage=usage)
 
     def _convert_messages(self, messages: list[dict]) -> tuple[str | None, list[dict]]:
         """将 OpenAI 格式 messages 转为 Anthropic 格式。"""
@@ -141,5 +144,5 @@ class AnthropicProvider(BaseProvider):
         """Anthropic 官方使用 api_key，部分兼容网关使用 Bearer auth_token。"""
         hostname = urlparse(base_url).hostname if base_url else None
         if hostname and hostname.lower() != "api.anthropic.com":
-            return {"api_key": None, "auth_token": api_key}
-        return {"api_key": api_key, "auth_token": None}
+            return {"auth_token": api_key}
+        return {"api_key": api_key}

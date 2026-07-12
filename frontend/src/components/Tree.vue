@@ -10,8 +10,11 @@ import {
 	SidebarMenuSub,
 } from "@/components/ui/sidebar";
 import { ChevronRight, File, Folder } from "lucide-vue-next";
+
+type TreeItem = string | [string, ...TreeItem[]];
+
 const props = defineProps<{
-	item: string | unknown[];
+	item: TreeItem;
 }>();
 const [name, ...items] = Array.isArray(props.item) ? props.item : [props.item];
 </script>

@@ -23,8 +23,8 @@
 
 - 🔍 自动分析问题，数学建模，编写代码，纠正错误，撰写论文
 - 💻 Code Interpreter
-    - local Interpreter: 基于 jupyter , 代码保存为 notebook 方便再编辑
-    - 云端 code interpreter: [E2B](https://e2b.dev/)（配置 `E2B_API_KEY` 后启用；Daytona 尚未接入当前代码）
+    - 云端 code interpreter: [E2B](https://e2b.dev/)（默认且必需；缺少 `E2B_API_KEY` 时安全失败，不自动降级）
+    - local Interpreter: 基于 Jupyter，仅在显式 `ALLOW_LOCAL_CODE_EXECUTION=true` 的受信任隔离开发环境使用
 - 📝 生成 Markdown / DOCX / PDF / LaTeX sidecar 候选论文与审计报告
 - 🤝 multi-agents: 建模手，代码手，论文手等
 - 🔄 multi-llms: 每个 agent 设置不同的、合适的模型
@@ -36,12 +36,12 @@
 - 🤝 HIL 人机协作：当前只实现 `HUMAN_MODEL_GATE_ENABLED` 的建模方案确认门禁；通用 6 种动作尚未接入前端/工作流
 - 🛡️ 容错与续传：已实现基础重试、错误反思、断点续传和变量快照；Fallback Hand Off / Evaluator Shadow Mode / Feedback Rerun 尚未形成完整闭环
 
-## 当前代码实现状态（2026-07-10 审计）
+## 当前代码实现状态（2026-07-11 审计）
 
-- 已实现：FastAPI/Vue WebUI 主流程、本地 Jupyter interpreter、可选 E2B、OpenAI/Responses/Anthropic provider、断点续传、变量快照、实时消息注入、多源文献检索、建模方案审批、任务文件打包下载、token 聚合统计、CUMCM2026 导出和提交审计。
-- 有明确边界：`/save-api-config` 只修改当前进程配置，不持久化 `.env`；`/track` 是 best-effort 单进程聚合，不是供应商账单。
+- 已实现：FastAPI/Vue WebUI 主流程、默认 E2B 隔离代码执行、OpenAI/Responses/Anthropic provider、断点续传、变量快照、实时消息注入、多源文献检索、建模方案审批、任务文件打包下载、token 聚合统计、CUMCM2026 导出和提交审计。
+- 有明确边界：`/save-api-config` 只修改当前进程配置，前后端都不持久化浏览器填写的密钥；`/track` 是 best-effort 单进程聚合，不是供应商账单。Docker 默认仅监听本机，任务文件下载受单文件名和附件策略限制。
 - 未接入主流程：RAG、通用 HIL 6 种动作、Fallback Hand Off、Evaluator Shadow Mode、Feedback Rerun、Daytona、LiteLLM runtime、视觉模型、R/MATLAB 执行链路。
-- 最近验证：2026-07-10 的完整非 E2B 后端单测 `191 tests` 通过，`ruff check app` 通过；本机前端构建未运行（Windows 本机 Node 工具链有已知风险）；本轮 10-PR 集成按测试范围未重跑 Docker 运行态验收。
+- 最近验证：Docker 容器内后端单测、Ruff（含安全规则）、Bandit、pip-audit、前端 TypeScript/生产构建和生产依赖审计均已运行；Windows 本机 Node 工具链仍不主动使用。
 
 
 
@@ -146,7 +146,7 @@ Harness SKILL 的优化需要大量黑盒测试和调优.
 - [x] 文献检索：OpenAlex、Semantic Scholar、Crossref、arXiv 聚合；Tavily 作为可选网页补充。
 - [x] 断点续传：`checkpoint.json`、变量快照、notebook 重放和增量恢复。
 - [x] 导出链路：Markdown、DOCX、PDF、LaTeX sidecar、manifest、preflight、PDF 视觉检查、submission audit。
-- [x] 云端代码解释器：E2B 可通过 `E2B_API_KEY` 启用；无 key 时使用本地 Jupyter。
+- [x] 云端代码解释器：E2B 为默认执行环境；无 key 时拒绝执行模型代码，不自动使用本地 Jupyter。
 - [ ] Web 服务运营化：线上托管、账号、配额、隔离和运维策略仍需独立确认。
 - [ ] 英文支持（MCM/ICM）：英文 README 存在，但 MCM/ICM 交付模板和验收口径未形成完整闭环。
 - [x] 建模方案确认门禁：`waiting_review`、前端审批按钮和 checkpoint/resume 续跑已闭环。
@@ -204,6 +204,8 @@ docker-compose up
 现在你可以访问：
 - 前端界面：http://localhost:5173
 - 后端API：http://localhost:8000
+
+Compose 端口仅绑定 `127.0.0.1`，该开发部署不应直接公开到公网。
 
 3. 配置
 

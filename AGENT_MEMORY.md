@@ -23,7 +23,8 @@
   `copied_assets` / `missing_assets`；若图片文件名包含 `%`、中文、`±` 等
   LaTeX 高风险字符，sidecar 会复制为 `figures/figure_XX.ext` 并重写
   `sections/*.tex` 内的 `\includegraphics` 引用，不改 `res.md` 和主 PDF/DOCX。
-  自动编译时若 `latexmk` 失败，会 fallback 到连续两次 `xelatex`，并记录
+  sidecar 与主 PDF 都禁用 raw TeX，自动编译向 XeLaTeX 传入 `-no-shell-escape`；
+  若 `latexmk` 失败，会 fallback 到连续两次同样受限的 `xelatex`，并记录
   `compile_reason` / `compile_failure_summary`。
 - CUMCM sidecar 模板字体 fallback 已覆盖 `KaiTi` / `STXinwei` / `LiSu`；Docker
   中缺少 Windows 字体或 `AR PL KaitiM GB` 时，会继续 fallback 到 Noto CJK 字体，
@@ -141,7 +142,16 @@
 - `/save-api-config` 只把验证后的模型配置应用到当前后端进程的 `settings`，
   不写回 `.env.dev`，响应中会明确 `scope=runtime`、`persisted=false`；
   空字段不会覆盖 `.env.dev` 已加载的默认值，且响应不回显 API key。前端 Pinia
-  store 仍会在浏览器本地持久化用户填写的 API key，这是浏览器侧行为，不代表后端落盘。
+  store 不再持久化用户填写的 API key，页面升级时会清理旧版 `localStorage.apiKeys`。
+- 2026-07-11 安全默认值：Docker Compose 前后端端口只绑定 `127.0.0.1`；CORS、
+  WebSocket Origin 和 Host 均为明确 allowlist（防 DNS rebinding）；工作区文件不再以任意静态目录直出，
+  只有安全单层文件名可下载，非栅格图片附件强制下载。新 task_id 使用 128 位随机
+  capability 后缀；上传按单文件/总量流式限额写入。
+- 模型生成代码默认必须通过 E2B 远程沙箱执行（`CODE_INTERPRETER_KIND=remote`）；缺少
+  `E2B_API_KEY` 时失败而不降级。`local` 仅在 `ALLOW_LOCAL_CODE_EXECUTION=true` 的
+  受信任隔离开发环境可用，不能当作共享/正式环境的默认执行方式。
+- LLM Base URL 默认要求 HTTPS、公开 IP/DNS 解析结果，且 SDK 请求禁用重定向与环境代理；
+  私有地址必须显式设置 `ALLOW_PRIVATE_LLM_BASE_URLS=true`。
 - LLM 成功调用后会在任务目录写入 `token_usage.json`，只保存按 agent 聚合的
   `chat_count`、`prompt_tokens`、`completion_tokens`、`total_tokens` 和模型名，
   不保存 prompt、completion、tool args、API key 或 base_url；`GET /track`
@@ -186,6 +196,16 @@
   LaTeX 编译均为 `PASS`/成功。正文经人工数值核验为 `A=40`、`B=20`、利润 `2200`，
   机器时间增加 10 小时后利润 `2366.67`；`/track` 返回四个 Agent 的聚合统计，
   `/download_all_url` 生成并成功下载 ZIP 归档。
+- 2026-07-11 安全收尾验证：Docker 重建后，容器内全量非 E2B 单测 `214 tests`、
+  Ruff（含 `--select S`）、Bandit、pip-audit、前端 TypeScript/生产构建和生产依赖
+  audit 均通过；前后端仅监听 `127.0.0.1`，未受信任 Host 分别被后端 `400`、前端
+  `403` 拒绝。对任务 `20260711-133616-38439fe3` 重新执行
+  `submission_audit --require-official-fonts` 为 `PASS`。这轮没有另起真实模型/E2B
+  任务，严格审核复用的是已完成真实任务的交付物。
+- 当前 Git 跟踪文件的无回显凭据模式扫描为零命中；但已删除的
+  `frontend/src/assets/jupyter copy.json` 仍存在于历史提交 `236d158` 与 `190dc98`。
+  该资产曾含 token 形态内容，正式公开发布前应轮换相关凭据并在获得明确 force-push
+  授权后重写远程 Git 历史；不要读取或回显其内容。
 - 2026-07-11 已核验 PR #1-#14 全部合并到 `main`，随后删除其历史本地/远程
   `codex/*` 分支、六个不再使用的 worktree 以及一个失效 worktree 注册。后续工作应
   从干净的 `main` 创建新分支；归档计划中的 PR 编号可用于追溯历史实现。

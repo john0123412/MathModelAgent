@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import math
 import re
-import xml.etree.ElementTree as ET
+from defusedxml import ElementTree as ET
 from typing import Any
 
 import httpx
@@ -591,7 +591,8 @@ class OpenAlexScholar:
                 last_error = exc
                 if attempt < retries:
                     await asyncio.sleep(0.5 * (attempt + 1))
-        assert last_error is not None
+        if last_error is None:
+            raise RuntimeError("文献接口未返回结果")
         raise last_error
 
     def _dedupe_and_rank(

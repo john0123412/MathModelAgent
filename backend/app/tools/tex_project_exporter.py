@@ -10,7 +10,8 @@ math-modeling-skills 导入继续精修的 LaTeX 项目（latex_project/），
 
 import os
 import shutil
-import subprocess
+# subprocess is limited to controlled Pandoc/XeLaTeX export invocations below.
+import subprocess  # nosec B404
 import json
 import re
 from app.utils.log_util import logger
@@ -18,7 +19,9 @@ from app.schemas.enums import ExportProfile
 from app.tools.export_profiles import HUASHUBEI_PAGE_MARGIN, get_export_profile_config
 
 SECTION_INPUTS_PLACEHOLDER = "% MMA_SECTION_INPUTS"
-PANDOC_LATEX_MARKDOWN_FORMAT = "markdown+tex_math_dollars+tex_math_single_backslash+pipe_tables+raw_tex"
+# Do not pass model-generated raw TeX through to the compiler. Math delimiters
+# remain supported, while commands such as \\input and \\write18 are rendered as text.
+PANDOC_LATEX_MARKDOWN_FORMAT = "markdown-raw_tex+tex_math_dollars+tex_math_single_backslash+pipe_tables"
 FENCED_CODE_RE = re.compile(r"^\s*(```+|~~~+)")
 NOTEBOOK_CELL_HEADING_RE = re.compile(r"^#\s+Cell\s+\d+\s*$")
 MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
@@ -585,7 +588,14 @@ def _run_pandoc_to_latex(
         "--resource-path",
         work_dir,
     ]
-    return subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+    # Command is fixed; task paths are created under the controlled work directory.
+    return subprocess.run(  # noqa: S603  # nosec B603
+        command,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        shell=False,
+    )
 
 
 def _run_pandoc_markdown_to_latex(
@@ -641,25 +651,28 @@ def _run_xelatex_twice(
     """Run xelatex twice so references/toc-like side effects can settle."""
     cmd = [
         "xelatex",
+        "-no-shell-escape",
         "-interaction=nonstopmode",
         "-halt-on-error",
         "main.tex",
     ]
-    first_proc = subprocess.run(
+    first_proc = subprocess.run(  # noqa: S603  # nosec B603
         cmd,
         cwd=latex_project_dir,
         capture_output=True,
         text=True,
         timeout=timeout,
+        shell=False,
     )
     if first_proc.returncode != 0:
         return first_proc
-    second_proc = subprocess.run(
+    second_proc = subprocess.run(  # noqa: S603  # nosec B603
         cmd,
         cwd=latex_project_dir,
         capture_output=True,
         text=True,
         timeout=timeout,
+        shell=False,
     )
     if second_proc.returncode != 0:
         second_proc.stdout = first_proc.stdout + "\n" + second_proc.stdout
@@ -915,6 +928,7 @@ def export_markdown_to_latex_project(
             compile_cmd = [
                 "latexmk",
                 "-xelatex",
+                "-latexoption=-no-shell-escape",
                 "-interaction=nonstopmode",
                 "-halt-on-error",
                 "main.tex",
@@ -922,6 +936,7 @@ def export_markdown_to_latex_project(
         else:
             compile_cmd = [
                 "xelatex",
+                "-no-shell-escape",
                 "-interaction=nonstopmode",
                 "-halt-on-error",
                 "main.tex",
@@ -931,12 +946,13 @@ def export_markdown_to_latex_project(
             if compiler == "xelatex":
                 compile_proc = _run_xelatex_twice(latex_project_dir)
             else:
-                compile_proc = subprocess.run(
+                compile_proc = subprocess.run(  # noqa: S603  # nosec B603
                     compile_cmd,
                     cwd=latex_project_dir,
                     capture_output=True,
                     text=True,
                     timeout=180,
+                    shell=False,
                 )
             if compile_proc.returncode == 0:
                 result["compile_success"] = True
@@ -952,6 +968,7 @@ def export_markdown_to_latex_project(
                 if compiler == "latexmk" and shutil.which("xelatex"):
                     fallback_cmd = [
                         "xelatex",
+                        "-no-shell-escape",
                         "-interaction=nonstopmode",
                         "-halt-on-error",
                         "main.tex",

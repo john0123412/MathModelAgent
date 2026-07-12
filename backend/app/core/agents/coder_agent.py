@@ -109,7 +109,8 @@ class CoderAgent(Agent):
             CoderToWriter 对象，包含代码执行结果和生成的图片列表。
         """
         logger.info(f"{self.__class__.__name__}:开始:执行子任务: {subtask_title}")
-        assert self.code_interpreter is not None, "code_interpreter 未初始化"
+        if self.code_interpreter is None:
+            raise RuntimeError("code_interpreter 未初始化")
         self.code_interpreter.add_section(subtask_title)
 
         # 根据 api_type 选择 tools 格式

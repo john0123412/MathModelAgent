@@ -3,7 +3,8 @@
 import os
 import re
 import shutil
-import subprocess
+# subprocess is limited to the controlled Pandoc export invocation below.
+import subprocess  # nosec B404
 import tempfile
 from app.utils.log_util import logger
 from app.utils import font_utils
@@ -314,6 +315,7 @@ def export_markdown_to_pdf(
         "-o",
         pdf_path,
         "--pdf-engine=xelatex",
+        "--pdf-engine-opt=-no-shell-escape",
         "--from",
         PANDOC_MARKDOWN_FORMAT,
         "--standalone",
@@ -335,7 +337,14 @@ def export_markdown_to_pdf(
     result["command"] = command
 
     try:
-        proc = subprocess.run(command, capture_output=True, text=True, timeout=120)
+        # 命令、引擎和选项均由本模块固定构造，任务路径已由工作目录边界约束。
+        proc = subprocess.run(  # noqa: S603  # nosec B603
+            command,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            shell=False,
+        )
     except subprocess.TimeoutExpired:
         result["reason"] = "PDF 生成超时（120秒）"
         logger.error(f"PDF 导出超时: {md_path}")

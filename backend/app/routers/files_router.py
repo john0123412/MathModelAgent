@@ -1,6 +1,7 @@
 """文件管理路由模块，提供文件下载、列表和目录打开等接口。"""
 
 from fastapi import APIRouter
+from fastapi.responses import FileResponse
 from app.config.setting import settings
 from app.utils.common_utils import (
     ensure_safe_filename,
@@ -10,10 +11,8 @@ from app.utils.common_utils import (
     safe_join_work_dir,
 )
 import os
-import subprocess
 import tempfile
 import zipfile
-from icecream import ic  # type: ignore[import-unresolved]
 from fastapi import HTTPException
 
 router = APIRouter()
@@ -32,6 +31,7 @@ EXCLUDED_ARCHIVE_SUFFIXES = (
     ".part",
     ".lock",
 )
+INLINE_RASTER_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 
 
 def _require_safe_task_id(task_id: str) -> str:
@@ -139,6 +139,44 @@ async def get_download_url(task_id: str, filename: str):
     }
 
 
+@router.get("/static/{task_id}/{filename}")
+async def serve_task_file(task_id: str, filename: str):
+    """Serve a single task artifact without exposing the whole work directory.
+
+    Only raster images are rendered inline for the Markdown preview. Every other
+    artifact is downloaded with an octet-stream media type so an uploaded or model-
+    generated HTML/SVG file cannot execute in the backend origin.
+    """
+    safe_task_id = _require_safe_task_id(task_id)
+    safe_filename = _require_safe_filename(filename)
+    file_path = safe_join_work_dir(safe_task_id, safe_filename)
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    suffix = os.path.splitext(safe_filename)[1].lower()
+    if suffix in INLINE_RASTER_IMAGE_SUFFIXES:
+        media_type = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+            ".bmp": "image/bmp",
+        }[suffix]
+        return FileResponse(
+            file_path,
+            media_type=media_type,
+            headers={"Content-Security-Policy": "default-src 'none'; sandbox"},
+        )
+
+    return FileResponse(
+        file_path,
+        media_type="application/octet-stream",
+        filename=safe_filename,
+        headers={"Content-Security-Policy": "default-src 'none'; sandbox"},
+    )
+
+
 @router.get("/download_all_url")
 async def get_download_all_url(task_id: str):
     safe_task_id = _require_safe_task_id(task_id)
@@ -164,23 +202,3 @@ async def get_files(task_id: str):
         file_all.append({"filename": i, "file_type": file_type})
 
     return file_all
-
-
-@router.get("/open_folder")
-async def open_folder(task_id: str):
-    if settings.ENV.lower() != "dev":
-        raise HTTPException(status_code=403, detail="仅开发环境允许打开本地目录")
-    safe_task_id = _require_safe_task_id(task_id)
-    ic(safe_task_id)
-    # 打开工作目录
-    work_dir = get_work_dir(safe_task_id)
-
-    # 打开工作目录
-    if os.name == "nt":
-        subprocess.run(["explorer", work_dir])
-    elif os.name == "posix":
-        subprocess.run(["open", work_dir])
-    else:
-        raise HTTPException(status_code=500, detail=f"不支持的操作系统: {os.name}")
-
-    return {"message": "打开工作目录成功", "work_dir": work_dir}

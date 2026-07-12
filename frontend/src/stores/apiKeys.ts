@@ -3,6 +3,13 @@ import type { ModelConfig } from "@/utils/interface";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
+const API_KEY_STORE_STORAGE_KEY = "apiKeys";
+
+// Versions before the security hardening persisted all keys in localStorage.
+if (typeof window !== "undefined") {
+	window.localStorage.removeItem(API_KEY_STORE_STORAGE_KEY);
+}
+
 /** API Key 和模型配置 Store */
 export const useApiKeyStore = defineStore(
 	"apiKeys",
@@ -81,7 +88,6 @@ export const useApiKeyStore = defineStore(
 
 		/** 设置 OpenAlex 邮箱 */
 		function setOpenalexEmail(email: string) {
-			console.log("setOpenalexEmail", email);
 			openalexEmail.value = email;
 		}
 
@@ -146,8 +152,5 @@ export const useApiKeyStore = defineStore(
 			getAllAgentConfigs,
 			resetAll,
 		};
-	},
-	{
-		persist: true, // 启用持久化存储
 	},
 );

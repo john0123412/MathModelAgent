@@ -4,6 +4,12 @@ services:
   redis:
     image: redis:alpine
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
     # 不映射端口到宿主机——后端通过 compose 内部网络以服务名 redis 连接，
     # 本地开发用宿主机的 redis-mma（端口 6379），两者互不冲突。
     volumes:
@@ -17,6 +23,18 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:8000:8000" # 仅允许本机通过前端代理或调试端口访问后端
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8000/docs', timeout=2).status == 200 else 1)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
     env_file:
       - ./backend/.env.dev #从此文件加载环境变量
     environment:
@@ -29,7 +47,8 @@ services:
       - backend_venv:/app/.venv # 可选：持久化 venv 以在依赖不变时加快后续构建速度
       - "${MMA_OFFICIAL_FONTS_DIR:-./backend/fonts}:/usr/local/share/fonts/mma-extra:ro" # 可选：挂载宿主机合法安装的正式字体；Windows 可在根目录 .env 设置 MMA_OFFICIAL_FONTS_DIR=C:\Windows\Fonts
     depends_on:
-      - redis # 确保 Redis 在后端启动前启动
+      redis:
+        condition: service_healthy
     stdin_open: true # 保持标准输入打开
     tty: true      # 分配一个伪终端
 
@@ -41,13 +60,26 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:5173:5173" # WebUI 仅绑定本机，避免默认暴露到局域网
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:5173/').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
     env_file:
       - ./frontend/.env.docker # 加载前端的环境变量（docker-compose 场景下后端映射在宿主机 8000，与本地开发用的 .env.development(8003) 区分）
     volumes:
       - ./frontend:/app # 挂载前端代码以实现热重载 (开发环境)
       - /app/node_modules # 匿名卷，防止主机的 node_modules 覆盖容器内的
     depends_on:
-      - backend # 确保后端可用 (尽管前端通常只需要其 URL)
+      backend:
+        condition: service_healthy
     stdin_open: true
     tty: true
 

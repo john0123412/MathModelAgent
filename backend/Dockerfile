@@ -24,7 +24,7 @@ ARG UV_VERSION=0.11.14
 #     可合法分发的安装包，INSTALL_MS_FONTS 对中文字体没有作用。
 # lmodern：pandoc 默认 LaTeX 模板依赖 lmodern.sty，texlive-latex-recommended
 # 未包含该包，缺失会导致直接 PDF 导出（pdf_exporter.py）编译失败
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     fonts-noto-cjk \
     fontconfig \
     fonts-liberation \

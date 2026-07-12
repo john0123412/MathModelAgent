@@ -42,7 +42,7 @@ def write_task_status(
             json.dump(payload, f, ensure_ascii=False, indent=2)
         os.replace(tmp_path, status_path)
     except Exception as e:
-        logger.warning(f"写入任务状态失败: {task_id}, {e}")
+        logger.warning(f"写入任务状态失败: {task_id}, {type(e).__name__}")
 
 
 def read_task_status(work_dir: str) -> dict | None:
@@ -55,5 +55,5 @@ def read_task_status(work_dir: str) -> dict | None:
             data = json.load(f)
         return data if isinstance(data, dict) else None
     except Exception as e:
-        logger.warning(f"读取任务状态失败: {status_path}, {e}")
+        logger.warning(f"读取任务状态失败: {status_path}, {type(e).__name__}")
         return None

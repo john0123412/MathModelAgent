@@ -85,7 +85,10 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
                     try:
                         msg_dict = json.loads(msg["data"])
                     except Exception as e:
-                        logger.error(f"Error parsing websocket payload: {e}")
+                        logger.error(
+                            "Error parsing websocket payload: "
+                            f"{type(e).__name__}"
+                        )
                         if _is_websocket_closed(websocket):
                             break
                         try:
@@ -126,7 +129,7 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
                 if _is_closed_send_error(e) or _is_websocket_closed(websocket):
                     logger.info(f"WebSocket 发送通道已关闭，结束循环 task_id: {safe_task_id}")
                     break
-                logger.error(f"Error in websocket loop: {e}")
+                logger.error(f"Error in websocket loop: {type(e).__name__}")
                 await asyncio.sleep(1)
                 continue
 
@@ -143,7 +146,10 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
             except Exception as e:
                 if _is_websocket_closed(websocket):
                     break
-                logger.warning(f"WebSocket 接收消息解析失败 task_id: {safe_task_id}: {e}")
+                logger.warning(
+                    "WebSocket 接收消息解析失败 "
+                    f"task_id={safe_task_id}: {type(e).__name__}"
+                )
                 continue
 
             if not isinstance(data, dict):
@@ -164,10 +170,10 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
         for task in done:
             exc = task.exception()
             if exc:
-                logger.error(f"WebSocket 循环异常: {exc}")
+                logger.error(f"WebSocket 循环异常: {type(exc).__name__}")
 
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+        logger.error(f"WebSocket error: {type(e).__name__}")
     finally:
         await pubsub.unsubscribe(f"task:{safe_task_id}:messages")
         ws_manager.disconnect(websocket)

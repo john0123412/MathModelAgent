@@ -2,6 +2,7 @@
 
 # Node modules
 node_modules/
+.pnpm-store/
 
 # Build output
 dist/
@@ -19,9 +20,7 @@ yarn-error.log*
 pnpm-debug.log*
 
 # Environment files (通常通过 docker-compose volumes 或 env_file 管理)
-.env
-.env*.local
-.env*.production
+.env*
 # (除非你有特定的 .env 文件是用于构建过程且不含敏感信息)
 
 # IDE settings

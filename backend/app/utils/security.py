@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+import time
 from collections.abc import Callable
 from urllib.parse import urlparse
 
 _PRIVATE_HOST_SUFFIXES = (".local", ".internal", ".localhost")
 _PRIVATE_HOSTNAMES = {"localhost", "localhost.localdomain"}
+_DNS_RESOLUTION_ATTEMPTS = 3
+_DNS_RETRY_DELAY_SECONDS = 0.1
 
 
 def validate_llm_base_url(
@@ -76,10 +79,20 @@ def _require_public_dns_resolution(
             raise ValueError("LLM Base URL 不能指向本地或内网主机")
         return
 
-    try:
-        addresses = resolver(hostname, port, type=socket.SOCK_STREAM)
-    except OSError as exc:
-        raise ValueError("LLM Base URL 主机无法解析") from exc
+    addresses: list[tuple] | None = None
+    last_error: OSError | None = None
+    for attempt in range(_DNS_RESOLUTION_ATTEMPTS):
+        try:
+            addresses = resolver(hostname, port, type=socket.SOCK_STREAM)
+        except OSError as exc:
+            last_error = exc
+            if attempt + 1 < _DNS_RESOLUTION_ATTEMPTS:
+                time.sleep(_DNS_RETRY_DELAY_SECONDS * (attempt + 1))
+            continue
+        break
+
+    if addresses is None:
+        raise ValueError("LLM Base URL 主机无法解析") from last_error
 
     if not addresses:
         raise ValueError("LLM Base URL 主机无法解析")

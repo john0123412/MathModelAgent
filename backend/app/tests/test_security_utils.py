@@ -101,6 +101,25 @@ class TestNetworkSecurityUtils(unittest.TestCase):
                 resolver=failing_resolver,
             )
 
+    def test_llm_base_url_retries_transient_dns_failure(self):
+        calls = 0
+
+        def flaky_resolver(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise OSError("temporary DNS failure")
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443))]
+
+        self.assertEqual(
+            validate_llm_base_url(
+                "https://gateway.example.test/v1",
+                resolver=flaky_resolver,
+            ),
+            "https://gateway.example.test/v1",
+        )
+        self.assertEqual(calls, 2)
+
 
 class TestWebSocketSecurityUtils(unittest.TestCase):
     def test_websocket_origin_must_be_allowlisted(self):

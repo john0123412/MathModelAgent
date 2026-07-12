@@ -108,7 +108,10 @@ class CoderAgent(Agent):
         Returns:
             CoderToWriter 对象，包含代码执行结果和生成的图片列表。
         """
-        logger.info(f"{self.__class__.__name__}:开始:执行子任务: {subtask_title}")
+        logger.info(
+            f"{self.__class__.__name__}:开始执行子任务: "
+            f"title_chars={len(subtask_title)}"
+        )
         if self.code_interpreter is None:
             raise RuntimeError("code_interpreter 未初始化")
         self.code_interpreter.add_section(subtask_title)
@@ -133,7 +136,7 @@ class CoderAgent(Agent):
             )
 
         # 添加 sub_task
-        logger.info(f"添加子任务提示: {prompt}")
+        logger.info(f"添加子任务提示: chars={len(prompt)}")
         await self.append_chat_history({"role": "user", "content": prompt})
 
         retry_count = 0
@@ -148,7 +151,11 @@ class CoderAgent(Agent):
                     self.task_id,
                     SystemMessage(content="超过最大尝试次数", type="error"),
                 )
-                logger.warning(f"任务失败，超过最大尝试次数{self.max_retries}, 最后错误信息: {last_error_message}")
+                logger.warning(
+                    "任务失败，超过最大尝试次数: "
+                    f"max_retries={self.max_retries}, "
+                    f"last_error_chars={len(last_error_message)}"
+                )
                 return CoderToWriter(
                     code_response=f"任务失败，超过最大尝试次数{self.max_retries}, 最后错误信息: {last_error_message}",
                     created_images=[])
@@ -198,7 +205,7 @@ class CoderAgent(Agent):
                         code = json.loads(tool_call.arguments)["code"]
                         unsafe_path = _find_cross_task_path(code)
                         if unsafe_path is not None:
-                            logger.warning(f"拒绝跨任务目录文件访问: {unsafe_path}")
+                            logger.warning("拒绝跨任务目录文件访问")
                             assistant_msg: dict = {
                                 "role": "assistant",
                                 "content": response.content,
@@ -281,7 +288,9 @@ class CoderAgent(Agent):
                                 }
                             )
 
-                            logger.warning(f"代码执行错误: {error_message}")
+                            logger.warning(
+                                f"代码执行错误: error_chars={len(error_message)}"
+                            )
                             retry_count += 1
                             logger.info(f"当前尝试次:{retry_count} / {self.max_retries}")
                             last_error_message = error_message
@@ -386,9 +395,12 @@ class CoderAgent(Agent):
                         ),
                     )
                     
-            except Exception as e:
-                logger.error(f"执行过程中发生异常: {str(e)}")
+            except Exception as exc:
+                logger.error(f"执行过程中发生异常: {type(exc).__name__}")
                 retry_count += 1
-                last_error_message = str(e)
+                last_error_message = str(exc)
                 continue
-            logger.info(f"{self.__class__.__name__}:完成:执行子任务: {subtask_title}")
+            logger.info(
+                f"{self.__class__.__name__}:完成执行子任务: "
+                f"title_chars={len(subtask_title)}"
+            )

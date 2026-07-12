@@ -157,7 +157,9 @@ class OpenAlexScholar:
         papers: list[dict[str, Any]] = []
         for source_name, result in zip(task_names, results):
             if isinstance(result, Exception):
-                logger.warning(f"{source_name} 搜索失败（query={query!r}）: {result}")
+                logger.warning(
+                    f"{source_name} 搜索失败: result_type={type(result).__name__}"
+                )
                 continue
             papers.extend(result)
 
@@ -182,7 +184,7 @@ class OpenAlexScholar:
         )
 
         if not ranked:
-            logger.warning(f"所有文献源均未返回可用结果（query={query!r}）")
+            logger.warning("所有文献源均未返回可用结果")
         return ranked
 
     async def _search_openalex(

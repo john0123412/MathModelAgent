@@ -35,7 +35,10 @@ def _record_token_usage_best_effort(
     try:
         record_token_usage(task_id, agent_name, model, response.usage)
     except Exception as exc:
-        logger.warning(f"Token usage 统计写入失败，已跳过: {exc}")
+        logger.warning(
+            "Token usage 统计写入失败，已跳过: "
+            f"{type(exc).__name__}"
+        )
 
 
 class LLM:
@@ -104,17 +107,26 @@ class LLM:
         attempt = 0
         while True:
             try:
-                response = await self.provider.call(
-                    messages=messages,
-                    model=self.model,  # type: ignore[arg-type]
-                    api_key=self.api_key,  # type: ignore[arg-type]
-                    base_url=self.base_url,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    max_tokens=self.max_tokens,
-                    top_p=top_p,
+                # Providers also set their HTTP client timeout, but this outer bound
+                # prevents SDK retry policies from extending a single LLM attempt.
+                response = await asyncio.wait_for(
+                    self.provider.call(
+                        messages=messages,
+                        model=self.model,  # type: ignore[arg-type]
+                        api_key=self.api_key,  # type: ignore[arg-type]
+                        base_url=self.base_url,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        max_tokens=self.max_tokens,
+                        top_p=top_p,
+                    ),
+                    timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS,
                 )
-                logger.info(f"API返回: content={response.content!r}, tool_calls={len(response.tool_calls)}")
+                logger.info(
+                    "API 响应已接收: "
+                    f"content_chars={len(response.content or '')}, "
+                    f"tool_calls={len(response.tool_calls)}"
+                )
                 self.chat_count += 1
                 _record_token_usage_best_effort(
                     self.task_id,
@@ -126,7 +138,7 @@ class LLM:
                 return response
             except Exception as e:
                 attempt += 1
-                logger.error(f"第{attempt}次重试: {str(e)}")
+                logger.error(f"第{attempt}次重试: {type(e).__name__}")
                 if attempt >= max_attempts:
                     raise
                 await asyncio.sleep(retry_delay * min(attempt, 10))
@@ -221,11 +233,14 @@ class LLM:
 async def simple_chat(model: LLM, history: list) -> str:
     """使用 LLM 进行简单的单轮对话。"""
     model._validate_config("simple_chat")
-    response = await model.provider.call(
-        messages=history,
-        model=model.model,  # type: ignore[arg-type]
-        api_key=model.api_key,  # type: ignore[arg-type]
-        base_url=model.base_url,
+    response = await asyncio.wait_for(
+        model.provider.call(
+            messages=history,
+            model=model.model,  # type: ignore[arg-type]
+            api_key=model.api_key,  # type: ignore[arg-type]
+            base_url=model.base_url,
+        ),
+        timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS,
     )
     _record_token_usage_best_effort(
         model.task_id,

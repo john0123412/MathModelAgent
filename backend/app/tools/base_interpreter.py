@@ -62,7 +62,10 @@ class BaseCodeInterpreter(abc.ABC):
         agent_msg = InterpreterMessage(
             output=content_to_display,
         )
-        logger.debug(f"发送消息: {agent_msg.model_dump_json()}")
+        logger.debug(
+            "发送 WebSocket 解释器消息: "
+            f"output_items={len(content_to_display or [])}"
+        )
         await redis_manager.publish_message(
             self.task_id,
             agent_msg,

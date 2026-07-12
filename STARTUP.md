@@ -33,6 +33,13 @@ docker compose down -v      # 停止并删除数据卷（⚠️ 清空 Redis 数
 `--wait` 会等待 Redis、后端和前端的本地健康检查通过，避免容器刚启动时 HTTP 探测出现
 短暂的连接重置或代理 `500`。
 
+默认 Compose 不再挂载整个前后端源码目录，避免运行配置被容器内模型代码读取；如需可信
+本机热重载，显式增加开发覆盖文件：
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.dev.yml up -d --wait
+```
+
 ### 启动后检查
 
 ```powershell
@@ -75,12 +82,26 @@ WebUI 侧边栏的 API Key 配置会通过 `/save-api-config` 应用到当前后
 
 ### 代码执行隔离
 
-`CODE_INTERPRETER_KIND=remote` 是默认值，建模任务需要有效的 `E2B_API_KEY` 才会执行
-模型生成代码。缺少密钥时任务会安全失败，**不会**自动降级为后端容器或宿主机 Jupyter。
+`CODE_INTERPRETER_KIND=remote` 是默认值，建模任务需要有效的 `E2B_API_KEY`。当 E2B
+不可用但必须在单用户可信 Docker 环境中继续开发时，使用本地执行覆盖文件：
 
-`CODE_INTERPRETER_KIND=local` 仅限完全受信任、已独立隔离的开发环境，且还必须显式设置
-`ALLOW_LOCAL_CODE_EXECUTION=true`。该模式可读取同一进程环境，不得用于共享服务、公开部署
-或正式验收环境。
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.local-execution.yml build --pull
+docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.local-execution.yml up -d --wait
+```
+
+该覆盖文件设置 `CODE_INTERPRETER_KIND=auto` 和 `ALLOW_LOCAL_CODE_EXECUTION=true`：有 E2B
+时仍优先远程沙箱；没有 E2B 时才使用本地 Jupyter。该模式只支持受控 Linux Docker：内核只
+继承最小运行环境，并在 exec 前降权到镜像内专用的非 root `mma-runner` 用户；后端只临时保留
+`CHOWN`、`DAC_OVERRIDE`、`SETGID`、`SETUID` 和 `KILL` 五项能力，分别用于准备/持久化共享
+任务目录、完成降权和终止该降权子内核，另以不可 dump 保护作为纵深防护。`DAC_OVERRIDE` 只保留
+在受信任 backend 进程中，runner 在 exec 前降权后不继承该能力。为兼容 Windows Docker 共享目录，
+不强制修改 POSIX mode 位；降权、环境保护或内核生命周期管理不可用时会拒绝启动本地内核，随后会
+剥离凭据并限制单元执行时长。
+控制台日志只记录消息长度、类型和数量，不回显 Agent 正文、提示词、代码或图像 Base64。
+
+这仍不是多租户/公开部署级隔离：本地 Jupyter 与后端共享容器文件系统和网络，仅适用于可信
+单用户恢复开发，不能与 `docker-compose.dev.yml` 同时使用，也不得用于正式验收环境。
 
 ### 构建说明
 
@@ -354,8 +375,9 @@ curl.exe -X POST http://127.0.0.1:8000/modeling/<task_id>/approve-modeling `
 
 OpenAI-compatible、Responses 和 Anthropic provider 会使用
 `LLM_REQUEST_TIMEOUT_SECONDS` 控制单次请求超时，默认 `90` 秒。部分兼容端点或较慢模型
-在建模手/写作手阶段响应时间可能超过 SDK 默认值；如连续出现 `Request timed out`，
-可在 `backend/.env.dev` 中临时调大该值后重启后端。
+在建模手/写作手阶段响应时间可能超过 SDK 默认值；项目同时以 `asyncio.wait_for` 强制该上限，
+并关闭 SDK 内部重试，避免隐式重试把单次上限放大。LLM 层默认最多重试 3 次；如连续出现
+`Request timed out`，可在 `backend/.env.dev` 中临时调大该值后重启后端。
 
 ### 结构化 LaTeX Sidecar
 

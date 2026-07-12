@@ -58,7 +58,7 @@ def _finalize_docx_and_manifest(
     try:
         write_submission_audit_report(work_dir)
     except Exception as e:
-        logger.error(f"submission_audit_report 刷新失败: {e}")
+        logger.error(f"submission_audit_report 刷新失败: {type(e).__name__}")
     write_candidate_manifest(work_dir, task_id)
 
 
@@ -291,7 +291,10 @@ async def validate_openalex_email(request: ValidateOpenalexEmailRequest):
         response = requests.get(
             "https://api.openalex.org/works", params=params, timeout=10
         )
-        logger.debug(f"OpenAlex Email 验证响应: {response}")
+        logger.debug(
+            "OpenAlex Email 验证响应已接收: "
+            f"status_code={response.status_code}"
+        )
         response.raise_for_status()
         return ValidateOpenalexEmailResponse(
             valid=True, message="✓ OpenAlex Email 验证成功"
@@ -474,7 +477,7 @@ async def run_modeling_task_async(
         )
         write_task_status(task_id, "cancelled", "任务已停止")
     except Exception as e:
-        logger.error(f"任务 {task_id} 执行失败: {e}")
+        logger.error(f"任务 {task_id} 执行失败: {type(e).__name__}")
         await redis_manager.publish_message(
             task_id,
             SystemMessage(content=f"任务执行失败: {str(e)}", type="error"),
@@ -489,7 +492,7 @@ async def run_modeling_task_async(
             try:
                 _finalize_docx_and_manifest(task_id, export_profile)
             except Exception as e:
-                logger.error(f"任务 {task_id} DOCX 转换失败: {e}")
+                logger.error(f"任务 {task_id} DOCX 转换失败: {type(e).__name__}")
                 await redis_manager.publish_message(
                     task_id,
                     SystemMessage(
@@ -661,7 +664,7 @@ async def run_resume_task_async(task_id: str):
         )
         write_task_status(task_id, "cancelled", "任务已停止")
     except Exception as e:
-        logger.error(f"任务 {task_id} 续传失败: {e}")
+        logger.error(f"任务 {task_id} 续传失败: {type(e).__name__}")
         await redis_manager.publish_message(
             task_id,
             SystemMessage(content=f"任务续传失败: {str(e)}", type="error"),
@@ -680,7 +683,7 @@ async def run_resume_task_async(task_id: str):
                 )
                 _finalize_docx_and_manifest(task_id, export_profile)
             except Exception as e:
-                logger.error(f"任务 {task_id} DOCX 转换失败: {e}")
+                logger.error(f"任务 {task_id} DOCX 转换失败: {type(e).__name__}")
                 await redis_manager.publish_message(
                     task_id,
                     SystemMessage(

@@ -63,19 +63,19 @@ class CoordinatorAgent(Agent):
 
                 questions = json.loads(json_str)
                 ques_count = questions["ques_count"]
-                logger.info(f"questions:{questions}")
+                logger.info(f"题目拆分已完成: ques_count={ques_count}")
                 return CoordinatorToModeler(questions=questions, ques_count=ques_count)
 
-            except (json.JSONDecodeError, ValueError, KeyError) as e:
+            except (json.JSONDecodeError, ValueError, KeyError) as exc:
                 attempt += 1
-                logger.warning(f"解析失败 (尝试 {attempt}): {str(e)}")
+                logger.warning(f"解析失败 (尝试 {attempt}): {type(exc).__name__}")
                 if attempt >= MAX_JSON_REPAIR_ATTEMPTS:
                     raise ValueError(
-                        f"CoordinatorAgent 连续 {attempt} 次返回无效 JSON: {e}"
-                    ) from e
+                        f"CoordinatorAgent 连续 {attempt} 次返回无效 JSON: {exc}"
+                    ) from exc
 
                 # 添加错误反馈提示
-                error_prompt = f"⚠️ 上次响应格式错误: {str(e)}。请严格输出JSON格式"
+                error_prompt = f"⚠️ 上次响应格式错误: {type(exc).__name__}。请严格输出JSON格式"
                 await self.append_chat_history(
                     {
                         "role": "system",

@@ -82,7 +82,7 @@ class DataRecorder:
                 with open(json_path, "w", encoding="utf-8") as f:
                     json.dump(to_save, f, ensure_ascii=False, indent=4)
             except Exception as e:
-                logger.error(f"写入json文件失败: {e}")
+                logger.error(f"写入json文件失败: {type(e).__name__}")
 
     def append_chat_history(self, msg: dict, agent_name: str) -> None:
         """添加聊天历史记录"""

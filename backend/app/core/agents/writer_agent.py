@@ -100,7 +100,7 @@ class WriterAgent(Agent):
             available_images: 可用的图片相对路径列表（如 20250420-173744-9f87792c/编号_分布.png）
             sub_title: 子任务标题
         """
-        logger.info(f"subtitle是:{sub_title}")
+        logger.info(f"写作子任务已开始: title_chars={len(sub_title or '')}")
 
         # 根据 api_type 选择 tools 格式
         api_type = self.model.api_type
@@ -125,7 +125,10 @@ class WriterAgent(Agent):
                 f"{image_lines}\n"
                 f"插入格式为独占一行的 ![描述](文件名)，每张图片后需配3行以上的分析解读。\n"
             )
-            logger.info(f"image_prompt是:{image_prompt}")
+            logger.info(
+                "写作图片提示已添加: "
+                f"image_count={len(available_images)}, chars={len(image_prompt)}"
+            )
             prompt = prompt + image_prompt
 
         logger.info(f"{self.__class__.__name__}:开始:执行对话")
@@ -194,14 +197,14 @@ class WriterAgent(Agent):
                         source_types=arguments.get("source_types"),
                         include_web=arguments.get("include_web"),
                     )
-                except Exception as e:
-                    error_msg = f"搜索文献失败: {str(e)}"
+                except Exception as exc:
+                    error_msg = f"搜索文献失败: {type(exc).__name__}"
                     logger.error(error_msg)
                     papers_str = error_msg
                 else:
                     papers_str = scholar.papers_to_str(papers)
                 # TODO: pass to frontend
-                logger.info(f"搜索文献结果\n{papers_str}")
+                logger.info(f"搜索文献结果已获取: count={len(papers)}")
                 await self.append_chat_history(
                     {
                         "role": "tool",
@@ -239,9 +242,12 @@ class WriterAgent(Agent):
                         include_web=pseudo_arguments.get("include_web"),
                     )
                     papers_str = self.scholar.papers_to_str(papers)
-                except Exception as e:
-                    logger.error(f"文本形式 search_papers 兼容检索失败: {e}")
-                    papers_str = f"文献检索失败: {e}"
+                except Exception as exc:
+                    logger.error(
+                        "文本形式 search_papers 兼容检索失败: "
+                        f"{type(exc).__name__}"
+                    )
+                    papers_str = f"文献检索失败: {type(exc).__name__}"
 
                 await self.append_chat_history(
                     {"role": "assistant", "content": response_content}
@@ -307,7 +313,7 @@ class WriterAgent(Agent):
                 summary_msg["reasoning_content"] = response.reasoning_content
             await self.append_chat_history(summary_msg)
             return response_content
-        except Exception as e:
-            logger.error(f"总结生成失败: {str(e)}")
+        except Exception as exc:
+            logger.error(f"总结生成失败: {type(exc).__name__}")
             # 返回一个基础总结，避免完全失败
             return "由于网络原因无法生成详细总结，但已完成主要任务处理。"

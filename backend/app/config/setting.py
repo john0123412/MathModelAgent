@@ -94,9 +94,11 @@ class Settings(BaseSettings):
     HUMAN_MODEL_GATE_ENABLED: bool = False
     E2B_API_KEY: Optional[str] = None
     # 代码手会执行模型生成的代码。默认只允许远程隔离环境，避免在后端进程中
-    # 直接执行不可信代码并读取服务端环境变量或项目文件。
-    CODE_INTERPRETER_KIND: Literal["remote", "local"] = "remote"
+    # 直接执行不可信代码并读取服务端环境变量或项目文件。auto 仅在显式允许
+    # 本地执行时才会在 E2B 不可用后降级。
+    CODE_INTERPRETER_KIND: Literal["remote", "local", "auto"] = "remote"
     ALLOW_LOCAL_CODE_EXECUTION: bool = False
+    LOCAL_CODE_EXECUTION_TIMEOUT_SECONDS: int = 300
     LOG_LEVEL: str = "DEBUG"
     DEBUG: bool = True
     REDIS_URL: str = "redis://redis:6379/0"

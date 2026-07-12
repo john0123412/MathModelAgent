@@ -1,0 +1,11 @@
+# 仅用于可信本机开发的热重载覆盖文件。不要与本地代码执行覆盖文件同时使用，
+# 否则模型生成代码会看到宿主机挂载的后端源码和 .env.dev。
+services:
+  backend:
+    volumes:
+      - ./backend:/app
+      - backend_venv:/app/.venv
+
+  frontend:
+    volumes:
+      - ./frontend:/app

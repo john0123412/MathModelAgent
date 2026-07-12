@@ -113,7 +113,7 @@ class VariableSnapshot:
             logger.info(f"变量快照已保存: {self.snapshot_path}, 变量数: {count}")
             return True
         except Exception as e:
-            logger.warning(f"变量快照保存失败: {e}")
+            logger.warning(f"变量快照保存失败: {type(e).__name__}")
             self._remove_if_exists(tmp_snapshot_path)
             self._remove_if_exists(tmp_meta_path)
             return False
@@ -150,7 +150,7 @@ class VariableSnapshot:
             logger.info(f"变量快照已恢复: {count} 个变量")
             return True
         except Exception as e:
-            logger.warning(f"变量快照恢复失败: {e}")
+            logger.warning(f"变量快照恢复失败: {type(e).__name__}")
             return False
 
     def exists(self) -> bool:
@@ -168,7 +168,7 @@ class VariableSnapshot:
             logger.info("变量快照已删除")
             return True
         except Exception as e:
-            logger.error(f"删除快照失败: {e}")
+            logger.error(f"删除快照失败: {type(e).__name__}")
             return False
 
     def get_size(self) -> int:
@@ -185,7 +185,7 @@ class VariableSnapshot:
             with open(self.meta_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
-            logger.warning(f"读取变量快照元数据失败: {e}")
+            logger.warning(f"读取变量快照元数据失败: {type(e).__name__}")
             return {}
 
     def write_meta(

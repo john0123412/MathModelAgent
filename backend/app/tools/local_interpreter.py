@@ -2,9 +2,13 @@
 
 from app.tools.base_interpreter import BaseCodeInterpreter
 from app.tools.notebook_serializer import NotebookSerializer
+import ctypes
 import jupyter_client
 from app.utils.log_util import logger
 import os
+import stat
+import tempfile
+import time
 from app.services.redis_manager import redis_manager
 from app.schemas.response import (
     OutputItem,
@@ -12,6 +16,79 @@ from app.schemas.response import (
     StdErrModel,
     SystemMessage,
 )
+
+
+_KERNEL_ENV_ALLOWLIST = ("PATH", "LANG", "LC_ALL", "TZ")
+_SENSITIVE_ENV_SUFFIXES = (
+    "_API_KEY",
+    "_AUTH_TOKEN",
+    "_SECRET",
+    "_TOKEN",
+    "_PASSWORD",
+)
+_PR_SET_DUMPABLE = 4
+# Must match the dedicated account created in backend/Dockerfile.
+_LOCAL_KERNEL_UID = 10001
+_LOCAL_KERNEL_GID = 10001
+_KERNEL_CONNECTION_ROOT = "/tmp/mathmodelagent-kernel-connections"
+
+
+def _is_sensitive_environment_variable(name: str) -> bool:
+    """Identify credentials that model-generated local code must not inherit."""
+    return name.upper().endswith(_SENSITIVE_ENV_SUFFIXES)
+
+
+def _disable_parent_process_dumpability() -> None:
+    """Prevent the local kernel from reading the backend's initial environment via /proc.
+
+    The local execution fallback is only supported in trusted Linux Docker deployments.
+    Removing variables from ``os.environ`` alone is insufficient because ``/proc/<pid>/environ``
+    can retain the process environment inherited at exec time.
+    """
+    if os.name != "posix":
+        raise RuntimeError("本地代码执行仅支持受控 Linux Docker 环境")
+
+    try:
+        prctl = ctypes.CDLL(None, use_errno=True).prctl
+    except (AttributeError, OSError) as exc:
+        raise RuntimeError("无法启用本地代码执行的进程环境保护") from exc
+
+    if prctl(_PR_SET_DUMPABLE, 0, 0, 0, 0) != 0:
+        error_number = ctypes.get_errno()
+        raise RuntimeError(
+            f"无法启用本地代码执行的进程环境保护（errno={error_number}）"
+        )
+
+
+def _drop_kernel_privileges() -> None:
+    """Run the Jupyter kernel under a dedicated unprivileged account.
+
+    ``PR_SET_DUMPABLE`` is defense in depth, but a UID boundary is the primary
+    protection against same-container access to the backend process and its initial
+    environment. This function runs in the kernel child immediately before exec.
+    """
+    if os.name != "posix" or not hasattr(os, "geteuid") or os.geteuid() != 0:
+        raise RuntimeError("本地代码执行需要受控 Linux Docker root 后端进程")
+
+    try:
+        os.setgroups([])
+        os.setgid(_LOCAL_KERNEL_GID)
+        os.setuid(_LOCAL_KERNEL_UID)
+    except OSError as exc:
+        raise RuntimeError("无法降权本地 Jupyter 内核") from exc
+
+    if os.geteuid() != _LOCAL_KERNEL_UID or os.getegid() != _LOCAL_KERNEL_GID:
+        raise RuntimeError("本地 Jupyter 内核降权校验失败")
+
+
+class _UnprivilegedKernelManager(jupyter_client.KernelManager):
+    """Hand the Jupyter connection file to the unprivileged kernel before exec."""
+
+    def write_connection_file(self, **kwargs) -> None:
+        super().write_connection_file(**kwargs)
+        # The backend and kernel only need to read these connection details.
+        os.chmod(self.connection_file, 0o440)
+        os.chown(self.connection_file, _LOCAL_KERNEL_UID, 0)
 
 
 class LocalCodeInterpreter(BaseCodeInterpreter):
@@ -22,22 +99,157 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         task_id: str,
         work_dir: str,
         notebook_serializer: NotebookSerializer,
+        execution_timeout: int = 300,
     ):
         super().__init__(task_id, work_dir, notebook_serializer)
         self.km, self.kc = None, None
+        self._kernel_connection_dir: str | None = None
+        self._kernel_connection_file: str | None = None
         self.interrupt_signal = False
+        self.execution_timeout = max(0, int(execution_timeout))
+
+    def _strip_sensitive_parent_environment(self) -> None:
+        """Remove credentials from the backend process before starting a local kernel.
+
+        Settings retain the values required by the application, while a same-container
+        Jupyter kernel can no longer recover them from its parent process environment.
+        """
+        for name in list(os.environ):
+            if _is_sensitive_environment_variable(name):
+                os.environ.pop(name, None)
+
+    def _prepare_kernel_work_dir(self) -> None:
+        """Assign this task directory to the dedicated kernel account."""
+        if os.name != "posix" or not hasattr(os, "geteuid") or os.geteuid() != 0:
+            raise RuntimeError("本地代码执行需要受控 Linux Docker root 后端进程")
+
+        task_home = os.path.abspath(self.work_dir)
+        os.makedirs(task_home, exist_ok=True)
+        for runtime_dir in (".jupyter_runtime", ".ipython", ".matplotlib"):
+            os.makedirs(os.path.join(task_home, runtime_dir), exist_ok=True)
+        for root, directories, filenames in os.walk(task_home, followlinks=False):
+            for name in directories:
+                path = os.path.join(root, name)
+                if os.path.islink(path):
+                    raise RuntimeError("本地代码执行不支持任务目录中的符号链接")
+                os.chown(path, _LOCAL_KERNEL_UID, _LOCAL_KERNEL_GID)
+            for name in filenames:
+                path = os.path.join(root, name)
+                if os.path.islink(path):
+                    raise RuntimeError("本地代码执行不支持任务目录中的符号链接")
+                os.chown(path, _LOCAL_KERNEL_UID, _LOCAL_KERNEL_GID)
+
+        os.chown(task_home, _LOCAL_KERNEL_UID, _LOCAL_KERNEL_GID)
+
+    def _create_kernel_connection_file(self) -> str:
+        """Create a root-managed directory for the kernel's immutable connection file.
+
+        The task directory belongs to the unprivileged kernel user, so the root backend
+        deliberately cannot write there after dropping ``DAC_OVERRIDE``. Keeping the
+        connection file outside that directory also prevents kernel code from replacing
+        it while the backend client is connected.
+        """
+        if os.name != "posix" or not hasattr(os, "geteuid") or os.geteuid() != 0:
+            raise RuntimeError("本地代码执行需要受控 Linux Docker root 后端进程")
+
+        try:
+            os.makedirs(_KERNEL_CONNECTION_ROOT, mode=0o711, exist_ok=True)
+            root_stat = os.lstat(_KERNEL_CONNECTION_ROOT)
+            if (
+                not stat.S_ISDIR(root_stat.st_mode)
+                or root_stat.st_uid != 0
+                or root_stat.st_mode & 0o022
+            ):
+                raise RuntimeError("本地 Jupyter 连接目录不安全")
+            os.chmod(_KERNEL_CONNECTION_ROOT, 0o711)
+            connection_dir = tempfile.mkdtemp(
+                prefix="kernel-", dir=_KERNEL_CONNECTION_ROOT
+            )
+            os.chown(connection_dir, 0, 0)
+            os.chmod(connection_dir, 0o711)
+        except OSError as exc:
+            raise RuntimeError("无法创建受保护的本地 Jupyter 连接目录") from exc
+
+        self._kernel_connection_dir = connection_dir
+        self._kernel_connection_file = os.path.join(connection_dir, "kernel.json")
+        return self._kernel_connection_file
+
+    def _cleanup_kernel_connection_file(self) -> None:
+        """Remove only the connection file and directory created for this kernel."""
+        connection_file = self._kernel_connection_file
+        connection_dir = self._kernel_connection_dir
+        self._kernel_connection_file = None
+        self._kernel_connection_dir = None
+
+        try:
+            if connection_file and os.path.lexists(connection_file):
+                if os.path.islink(connection_file):
+                    raise RuntimeError("本地 Jupyter 连接文件异常")
+                os.unlink(connection_file)
+            if connection_dir:
+                os.rmdir(connection_dir)
+        except (OSError, RuntimeError) as exc:
+            logger.warning(
+                "清理本地 Jupyter 连接文件失败: error_type={}", type(exc).__name__
+            )
+
+    def _start_kernel(self) -> None:
+        _disable_parent_process_dumpability()
+        self._prepare_kernel_work_dir()
+        self._strip_sensitive_parent_environment()
+        connection_file = self._create_kernel_connection_file()
+        self.km = _UnprivilegedKernelManager(
+            kernel_name="python3",
+            connection_file=connection_file,
+        )
+        try:
+            self.km.start_kernel(
+                env=self._build_kernel_env(),
+                preexec_fn=_drop_kernel_privileges,
+            )
+            self.kc = self.km.client()
+            self.kc.start_channels()
+            self.kc.wait_for_ready(timeout=60)
+        except Exception:
+            try:
+                self.km.shutdown_kernel(now=True)
+            except Exception:
+                pass
+            self.km, self.kc = None, None
+            self._cleanup_kernel_connection_file()
+            raise
+
+    def _build_kernel_env(self) -> dict[str, str]:
+        """Build a minimal per-task environment for model-generated code."""
+        kernel_env = {
+            name: os.environ[name]
+            for name in _KERNEL_ENV_ALLOWLIST
+            if name in os.environ
+        }
+        task_home = os.path.abspath(self.work_dir)
+        runtime_dir = os.path.join(task_home, ".jupyter_runtime")
+        ipython_dir = os.path.join(task_home, ".ipython")
+        matplotlib_dir = os.path.join(task_home, ".matplotlib")
+
+        kernel_env.update(
+            {
+                "PATH": kernel_env.get("PATH", os.defpath),
+                "HOME": task_home,
+                "IPYTHONDIR": ipython_dir,
+                "JUPYTER_RUNTIME_DIR": runtime_dir,
+                "MPLCONFIGDIR": matplotlib_dir,
+                "PYTHONIOENCODING": "utf-8",
+                "PYTHONUTF8": "1",
+                "PYTHONNOUSERSITE": "1",
+            }
+        )
+        return kernel_env
 
     async def initialize(self):
         # 本地内核一般不需异步上传文件，直接切换目录即可
         # 初始化 Jupyter 内核管理器和客户端
         logger.info("初始化本地内核")
-        # 设置 UTF-8 编码环境，避免 Windows 中文环境下 GBK 编码导致的乱码问题
-        kernel_env = os.environ.copy()
-        kernel_env["PYTHONIOENCODING"] = "utf-8"
-        kernel_env["PYTHONUTF8"] = "1"
-        self.km, self.kc = jupyter_client.manager.start_new_kernel(
-            kernel_name="python3", env=kernel_env
-        )
+        self._start_kernel()
         self._pre_execute_code()
 
     def _pre_execute_code(self):
@@ -115,7 +327,7 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         self.execute_code_(init_code)
 
     async def execute_code(self, code: str) -> tuple[str, bool, str]:
-        logger.info(f"执行代码: {code}")
+        logger.info(f"执行代码: chars={len(code)}")
         #  添加代码到notebook
         self.notebook_serializer.add_code_cell_to_notebook(code)
 
@@ -174,13 +386,17 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
                 error_occurred = True
                 error_message = self.delete_color_control_char(out_str)
                 error_message = self._truncate_text(error_message)
-                logger.error(f"执行错误: {error_message}")
+                logger.error(f"本地代码执行失败: error_chars={len(error_message)}")
                 text_to_gpt.append(error_message)
                 #  添加error到notebook
                 self.notebook_serializer.add_code_cell_error_to_notebook(out_str)
                 content_to_display.append(StdErrModel(msg=out_str))
 
-        logger.info(f"text_to_gpt: {text_to_gpt}")
+        logger.info(
+            "本地代码执行结果已整理: "
+            f"text_items={len(text_to_gpt)}, chars={sum(len(item) for item in text_to_gpt)}, "
+            f"error={error_occurred}"
+        )
         combined_text = "\n".join(text_to_gpt)
 
         await self._push_to_websocket(content_to_display)
@@ -193,7 +409,7 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
 
     async def replay_code(self, code: str) -> tuple[str, bool, str]:
         """重放历史代码，只恢复内核状态，不修改 notebook 或推送前端消息。"""
-        logger.info(f"重放代码: {code}")
+        logger.info(f"重放代码: chars={len(code)}")
         execution = self.execute_code_(code)
         text_to_gpt: list[str] = []
         error_occurred = False
@@ -222,12 +438,22 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         if self.kc is None or self.km is None:
             raise RuntimeError("本地 Jupyter 内核未初始化")
         self.kc.execute(code)
-        logger.info(f"执行代码: {code}")
+        logger.info(f"执行代码: chars={len(code)}")
         # Get the output of the code
         msg_list = []
+        deadline = time.monotonic() + self.execution_timeout
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.km.interrupt_kernel()
+                return [
+                    (
+                        "error",
+                        f"本地代码执行超过 {self.execution_timeout} 秒，已中断",
+                    )
+                ]
             try:
-                iopub_msg = self.kc.get_iopub_msg(timeout=1)
+                iopub_msg = self.kc.get_iopub_msg(timeout=min(1, remaining))
                 msg_list.append(iopub_msg)
                 if (
                     iopub_msg["msg_type"] == "status"
@@ -238,6 +464,7 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
                 if self.interrupt_signal:
                     self.km.interrupt_kernel()
                     self.interrupt_signal = False
+                    return [("error", "本地代码执行已中断")]
                 continue
 
         all_output: list[tuple[str, str]] = []
@@ -303,26 +530,30 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         # 关闭内核
         if self.kc is None or self.km is None:
             logger.warning("本地 Jupyter 内核未初始化，跳过清理")
+            self._cleanup_kernel_connection_file()
             return
-        self.kc.shutdown()
-        logger.info("关闭内核")
-        self.km.shutdown_kernel()
+        try:
+            self.kc.shutdown()
+            logger.info("关闭内核")
+            self.km.shutdown_kernel()
+        finally:
+            self.km, self.kc = None, None
+            self._cleanup_kernel_connection_file()
 
     def send_interrupt_signal(self):
         self.interrupt_signal = True
 
     def restart_jupyter_kernel(self):
         """Restart the Jupyter kernel and recreate the work directory."""
-        if self.kc is None:
+        if self.kc is None or self.km is None:
             raise RuntimeError("本地 Jupyter 内核未初始化")
-        self.kc.shutdown()
-        # 设置 UTF-8 编码环境，避免 Windows 中文环境下 GBK 编码导致的乱码问题
-        kernel_env = os.environ.copy()
-        kernel_env["PYTHONIOENCODING"] = "utf-8"
-        kernel_env["PYTHONUTF8"] = "1"
-        self.km, self.kc = jupyter_client.manager.start_new_kernel(
-            kernel_name="python3", env=kernel_env
-        )
+        try:
+            self.kc.shutdown()
+            self.km.shutdown_kernel()
+        finally:
+            self.km, self.kc = None, None
+            self._cleanup_kernel_connection_file()
+        self._start_kernel()
         self.interrupt_signal = False
         self._create_work_dir()
         self._pre_execute_code()

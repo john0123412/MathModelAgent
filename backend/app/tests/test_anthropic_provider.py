@@ -35,6 +35,7 @@ class AnthropicProviderAuthenticationTest(unittest.IsolatedAsyncioTestCase):
         kwargs = create_client.call_args.kwargs
         self.assertEqual(kwargs.get("api_key"), "official-key")
         self.assertIsNone(kwargs.get("auth_token"))
+        self.assertEqual(kwargs.get("max_retries"), 0)
 
     async def test_non_official_base_url_uses_auth_token(self):
         client = self._fake_client()
@@ -53,6 +54,7 @@ class AnthropicProviderAuthenticationTest(unittest.IsolatedAsyncioTestCase):
         kwargs = create_client.call_args.kwargs
         self.assertIsNone(kwargs.get("api_key"))
         self.assertEqual(kwargs.get("auth_token"), "gateway-token")
+        self.assertEqual(kwargs.get("max_retries"), 0)
 
     def _fake_client(self):
         client = SimpleNamespace(

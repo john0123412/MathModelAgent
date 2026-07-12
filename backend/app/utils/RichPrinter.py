@@ -60,19 +60,18 @@ class RichPrinter:
 
     @staticmethod
     def print_agent_msg(message: str, agent_name: str):
-        logger.info(f"{agent_name}: {message}")
+        # Agent output is persisted for the task and delivered to the UI. Do not mirror
+        # the full payload to stdout because it may include user data or tool arguments.
+        summary = f"agent_message_chars={len(message)}"
+        logger.info(f"{agent_name}: {summary}")
         if agent_name == "CoderAgent":
-            rprint(
-                f"[bold purple on green]{agent_name}[/bold purple on green]: {message}"
-            )
+            rprint(f"[bold purple on green]{agent_name}[/bold purple on green]: {summary}")
         elif agent_name == "WriterAgent":
-            rprint(
-                f"[bold purple on yellow]{agent_name}[/bold purple on yellow]: {message}"
-            )
+            rprint(f"[bold purple on yellow]{agent_name}[/bold purple on yellow]: {summary}")
         elif agent_name == "test_agent":
-            rprint(f"[bold white on blue]{agent_name}[/bold white on blue]: {message}")
+            rprint(f"[bold white on blue]{agent_name}[/bold white on blue]: {summary}")
         else:
-            rprint(f"[bold white]{agent_name}[/bold white]: {message}")
+            rprint(f"[bold white]{agent_name}[/bold white]: {summary}")
 
     @classmethod
     def _print_panel(

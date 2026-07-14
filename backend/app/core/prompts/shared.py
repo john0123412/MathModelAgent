@@ -11,8 +11,21 @@ def get_reflection_prompt(error_message, code) -> str:
     Returns:
         反思提示词字符串。
     """
+    timeout_instruction = ""
+    if "本地代码执行超过" in str(error_message):
+        timeout_instruction = """
+This was a hard execution timeout. The local kernel was discarded; it may have
+restored durable variables only, not user-defined functions. Do not retry the
+same high-cost computation. Replace nested ODE/optimizer/grid loops with a
+traceable bounded design: at most 5--9 screening points, a short finite horizon,
+and at most one detailed validation point. Save the actual summary CSV before
+making figures. If the requested evidence cannot be computed within this budget,
+write a feasible=false validation entry rather than inventing a result.
+"""
     return f"""The code execution encountered an error:
 {error_message}
+
+{timeout_instruction}
 
 Please analyze the error, identify the cause, and provide a corrected version of the code. 
 Consider:

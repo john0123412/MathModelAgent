@@ -92,7 +92,8 @@ def write_candidate_manifest(work_dir: str, task_id: str) -> str:
     export_status.json/modeling_decision.json/modeling_decision.md/
     paper_preflight_report.json/paper_preflight_report.md/
     paper_outline.json/figure_usage.json/claim_trace.json/claim_trace.md/
-    pdf_visual_check.json/submission_audit_report.json/图片），不存在的文件字段为 None，图片列表为空数组。
+    pdf_visual_check.json/execution_validation.json/execution_validation_report.json/
+    submission_audit_report.json/图片），不存在的文件字段为 None，图片列表为空数组。
     claims 字段来自 claim_trace.json，不存在或不可读时保持空数组；本函数只记录
     已生成的可追踪结论，不自行从正文猜造额外内容。
 
@@ -122,6 +123,13 @@ def write_candidate_manifest(work_dir: str, task_id: str) -> str:
                 work_dir, "modeling_decision.md"
             ),
             "notebook": _existing_or_none(work_dir, "notebook.ipynb"),
+            "problem_contract": _existing_or_none(work_dir, "problem_contract.json"),
+            "execution_validation": _existing_or_none(
+                work_dir, "execution_validation.json"
+            ),
+            "execution_validation_report": _existing_or_none(
+                work_dir, "execution_validation_report.json"
+            ),
             "export_status": _existing_or_none(work_dir, "export_status.json"),
             "paper_preflight_report": _existing_or_none(
                 work_dir, "paper_preflight_report.json"
@@ -140,6 +148,12 @@ def write_candidate_manifest(work_dir: str, task_id: str) -> str:
             "submission_audit_report_md": _existing_or_none(
                 work_dir, "submission_audit_report.md"
             ),
+            "final_acceptance_report": _existing_or_none(
+                work_dir, "final_acceptance_report.json"
+            ),
+            "final_acceptance_report_md": _existing_or_none(
+                work_dir, "final_acceptance_report.md"
+            ),
             "latex_main": _existing_or_none(work_dir, "latex_project/main.tex"),
             "latex_project": _existing_or_none(work_dir, "latex_project"),
             "tex_export_status": _existing_or_none(work_dir, "tex_export_status.json"),
@@ -148,6 +162,7 @@ def write_candidate_manifest(work_dir: str, task_id: str) -> str:
         "claims": _load_claims(work_dir),
         "known_risks": [
             "External candidate output must be revalidated before final submission.",
+            "execution_validation_report.json must be PASS before a task is treated as completed.",
             "submission_audit_report.json is an automated gate; WARN/FAIL items must be resolved or accepted before final submission.",
             "LaTeX project is a candidate sidecar export and must be verified before final submission.",
         ],

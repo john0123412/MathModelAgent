@@ -29,6 +29,8 @@ allowed-tools: Bash(*), Read, Write, Edit, Grep, Glob, Agent, WebSearch, WebFetc
 5. 图表目录
 6. 可复现代码目录。
 7. 编译后的 PDF，或可由入口文件编译得到的输出 PDF。
+8. 可选的升级证据链工件：`reports/frozen_numbers.json`、
+   `reports/independent_audit_report.json` 和 `reports/workflow_guard_report.json`。
 
 不要假设论文目录一定叫 `paper/`，也不要假设结果文件一定在项目根。若项目使用不同命名，按实际结构传参并在 `reports/VERIFY_REPORT.md` 中说明。
 
@@ -122,6 +124,32 @@ bash "$SCRIPT_PATH" \
 
 发现数值冲突时，不要自行发明新结果；应回到结果记录或代码输出修正论文。
 
+### Step 5a: 冻结结果与独立审计（启用时必检）
+
+若工作区存在以下任一文件，视为已启用升级证据链：
+
+- `reports/METHOD_VALIDATION.md`
+- `reports/METHOD_SELECTION.md`
+- `reports/frozen_numbers.json`
+- `reports/independent_audit_report.json`
+
+启用后，在写出 `PASS` 前必须完成：
+
+1. 若已有 `reports/RESULTS_REPORT.md`，确认 `reports/frozen_numbers.json` 存在。
+2. 使用 `3a-result-freeze` 附带脚本复核来源哈希；失败说明代码、数据或结果来源已经变化，必须重新核对并冻结，不能沿用旧论文数字。
+3. 确认 `reports/independent_audit_report.json` 存在且其状态不是 `FAIL`。若为 `WARN`，在 `VERIFY_REPORT.md` 中逐项人工接受或修正；若为 `FAIL`，回到相应阶段修复。
+4. 将快照验证和独立审计结果写入 `VERIFY_REPORT.md` 的“证据链”小节，并说明它们只验证来源、格式和基本可追溯性，**不证明模型或数学推导正确**。
+
+可使用以下命令；将 `<skill-dir>` 替换为本项目实际安装路径：
+
+```bash
+python "<skill-dir>/3a-result-freeze/scripts/freeze_results.py" \
+  --workspace . --verify --output reports/frozen_numbers.json
+```
+
+旧项目若上述四个工件均不存在，保留原有验收流程，并在报告中写
+`升级证据链：未启用（WARN，不影响兼容性）`；不得因升级功能尚未使用而直接判定失败。
+
 ### Step 6: 引用和模板规范
 
 检查：
@@ -205,6 +233,8 @@ PASS / FAIL
 
 ## 数值一致性
 
+## 证据链
+
 ## 文本质量门禁
 
 ## 编译
@@ -229,6 +259,8 @@ PASS / FAIL
 - 正文泄露内部工作流文件名。
 - 引用的图片不存在。
 - 关键数值与结果记录冲突。
+- 已启用升级证据链、且已有 `RESULTS_REPORT.md` 时缺少 `frozen_numbers.json`。
+- 已启用升级证据链但冻结来源哈希复核失败，或独立审计报告为 `FAIL`。
 - 编译器可用但论文编译失败。
 - 编译后的 PDF 为空、缺页、页数异常或页面尺寸异常且无法解释。
 - 视觉检查发现正文、表格、图片、公式、页眉页脚、页码等关键元素重叠、裁切、越界或乱码。
@@ -244,3 +276,4 @@ PASS / FAIL
 - 图表后解释文字不足。
 - 视觉检查工具不可用，但已经记录原因并完成基础 PDF 元数据检查。
 - 代码完整复现耗时过长，只做了轻量检查。
+- 旧项目未启用升级证据链；记录为兼容性 `WARN`，不影响其他验收结论。

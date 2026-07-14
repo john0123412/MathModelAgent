@@ -147,6 +147,7 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
             error_message = self._truncate_text(error_message)
             logger.error(f"沙箱代码执行失败: error_chars={len(error_message)}")
             text_to_gpt.append(self.delete_color_control_char(error_message))
+            self.notebook_serializer.add_code_cell_error_to_notebook(error_message)
             content_to_display.append(
                 ErrorModel(
                     name=execution.error.name,

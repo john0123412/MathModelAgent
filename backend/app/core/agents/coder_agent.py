@@ -4,6 +4,7 @@ import asyncio
 import ast
 import json
 import re
+from pathlib import Path
 from typing import Callable
 from app.core.agents.agent import Agent
 from app.config.setting import settings, ApiType
@@ -17,6 +18,7 @@ from app.core.prompts import CODER_PROMPT
 from app.utils.common_utils import get_current_files
 from app.core.prompts import get_reflection_prompt
 from app.core.functions import coder_tools, coder_tools_anthropic
+from app.tools.execution_validation import record_execution_evidence
 
 # TODO: 时间等待过久，stop 进程
 # TODO: 支持 cuda
@@ -36,6 +38,7 @@ _PARENT_PATH_PATTERN = re.compile(r"(^|[\\/])\.\.([\\/]|$)")
 _WORK_DIR_PATH_PATTERN = re.compile(
     r"(^|[\\/])(?:backend[\\/])?project[\\/]work_dir([\\/]|$)"
 )
+_FORMAL_SUBTASK_PATTERN = re.compile(r"^(ques[1-9][0-9]*)(?:_repair)?$")
 
 
 def _looks_like_final_tool_output(output: str) -> bool:
@@ -65,6 +68,53 @@ def _find_cross_task_path(code: str) -> str | None:
         if _WORK_DIR_PATH_PATTERN.search(normalized):
             return value
     return None
+
+
+def _formal_subtask_id(subtask_title: str) -> str | None:
+    """Return the formal ``quesN`` id for a normal or directed-repair turn."""
+    matched = _FORMAL_SUBTASK_PATTERN.fullmatch(subtask_title.strip())
+    return matched.group(1) if matched else None
+
+
+def _snapshot_task_files(work_dir: str) -> dict[str, tuple[int, int]]:
+    """Return cheap fingerprints for task-local files created by this Coder turn."""
+    root = Path(work_dir).resolve()
+    if not root.is_dir():
+        return {}
+    snapshots: dict[str, tuple[int, int]] = {}
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        relative = str(path.relative_to(root)).replace("\\", "/")
+        snapshots[relative] = (stat.st_size, stat.st_mtime_ns)
+    return snapshots
+
+
+def _changed_task_files(
+    before: dict[str, tuple[int, int]], after: dict[str, tuple[int, int]]
+) -> set[str]:
+    return {path for path, fingerprint in after.items() if before.get(path) != fingerprint}
+
+
+def _evidence_source_paths(arguments: object) -> set[str]:
+    """Extract result and figure-data paths supplied to the evidence recorder."""
+    if not isinstance(arguments, dict):
+        return set()
+    paths: set[str] = set()
+    for constraint in arguments.get("constraints", []):
+        if isinstance(constraint, dict) and isinstance(constraint.get("source_path"), str):
+            paths.add(str(Path(constraint["source_path"])).replace("\\", "/"))
+    for figure in arguments.get("figures", []):
+        if not isinstance(figure, dict):
+            continue
+        for field in ("path", "data_path"):
+            if isinstance(figure.get(field), str):
+                paths.add(str(Path(figure[field])).replace("\\", "/"))
+    return paths
 
 
 class CoderAgent(Agent):
@@ -143,6 +193,10 @@ class CoderAgent(Agent):
         last_error_message = ""
         consecutive_final_outputs = 0
         successful_tool_calls = 0
+        execution_error_occurred = False
+        formal_subtask_id = _formal_subtask_id(subtask_title)
+        evidence_commit_required = False
+        evidence_changed_paths: set[str] = set()
 
         while True:
             if self.max_retries is not None and retry_count >= self.max_retries:
@@ -158,7 +212,11 @@ class CoderAgent(Agent):
                 )
                 return CoderToWriter(
                     code_response=f"任务失败，超过最大尝试次数{self.max_retries}, 最后错误信息: {last_error_message}",
-                    created_images=[])
+                    created_images=[],
+                    execution_attempted=successful_tool_calls > 0 or bool(last_error_message),
+                    execution_succeeded=False,
+                    execution_error_occurred=execution_error_occurred,
+                )
 
 
             if self.max_chat_turns is not None and self.current_chat_turns >= self.max_chat_turns:
@@ -171,20 +229,70 @@ class CoderAgent(Agent):
                     f"Reached maximum number of chat turns ({self.max_chat_turns}). Task incomplete."
                 )
 
+            active_tools = tools
+            active_tool_choice = "auto"
+            if evidence_commit_required:
+                # A code-run limit is a circuit breaker, not proof that the
+                # formal subtask is complete.  At this boundary expose only the
+                # trusted recorder, so a model cannot spend another turn on a
+                # plot, notebook narration, or a hand-written manifest.
+                active_tools = [
+                    tool
+                    for tool in tools
+                    if (
+                        tool.get("name") == "record_execution_evidence"
+                        or tool.get("function", {}).get("name")
+                        == "record_execution_evidence"
+                    )
+                ]
+                active_tool_choice = "required"
+
             self.current_chat_turns += 1
             logger.info(f"当前对话轮次: {self.current_chat_turns}")
             
             try:
                 response = await self._chat(
                     history=self.chat_history,
-                    tools=tools,
-                    tool_choice="auto",
+                    tools=active_tools,
+                    tool_choice=active_tool_choice,
                     agent_name=self.__class__.__name__,
                 )
 
                 # 如果有工具调用
                 if response.tool_calls:
                     logger.info("检测到工具调用")
+                    if len(response.tool_calls) != 1:
+                        # The legacy loop handled only the first call but still
+                        # placed every call in chat history, leaving providers
+                        # with orphaned tool-call ids.  A formal computation is
+                        # intentionally one action per turn: execute, inspect,
+                        # then record evidence.
+                        assistant_msg: dict = {"role": "assistant", "content": response.content}
+                        if response.reasoning_content:
+                            assistant_msg["reasoning_content"] = response.reasoning_content
+                        assistant_msg["tool_calls"] = [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {"name": tc.name, "arguments": tc.arguments},
+                            }
+                            for tc in response.tool_calls
+                        ]
+                        await self.append_chat_history(assistant_msg)
+                        for tool_call in response.tool_calls:
+                            await self.append_chat_history(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.id,
+                                    "name": tool_call.name,
+                                    "content": (
+                                        "每轮只能调用一个工具。请先执行或检查一个动作；"
+                                        "结果文件写完后，在下一轮单独调用 "
+                                        "record_execution_evidence。"
+                                    ),
+                                }
+                            )
+                        continue
                     tool_call = response.tool_calls[0]
                     tool_id = tool_call.id
 
@@ -192,6 +300,146 @@ class CoderAgent(Agent):
                         tool_call.name == "execute_code"
                         or tool_call.name.startswith("CompatExecuteCode")
                     )
+                    is_record_evidence_tool = tool_call.name == "record_execution_evidence"
+
+                    if evidence_commit_required and not is_record_evidence_tool:
+                        # Some compatible providers may return a stale tool
+                        # call even after the tool list has been narrowed. Do
+                        # not execute it: accepting it would bypass the
+                        # evidence boundary that the cap is meant to enforce.
+                        assistant_msg: dict = {
+                            "role": "assistant", "content": response.content
+                        }
+                        if response.reasoning_content:
+                            assistant_msg["reasoning_content"] = response.reasoning_content
+                        assistant_msg["tool_calls"] = [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.name,
+                                    "arguments": tc.arguments,
+                                },
+                            }
+                            for tc in response.tool_calls
+                        ]
+                        await self.append_chat_history(assistant_msg)
+                        await self.append_chat_history(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_id,
+                                "name": tool_call.name,
+                                "content": (
+                                    "执行次数上限已到。现在只能调用 "
+                                    "record_execution_evidence；不得继续执行代码。"
+                                ),
+                            }
+                        )
+                        continue
+
+                    if is_record_evidence_tool:
+                        logger.info("代码手提交受控执行证据")
+                        assistant_msg: dict = {"role": "assistant", "content": response.content}
+                        if response.reasoning_content:
+                            assistant_msg["reasoning_content"] = response.reasoning_content
+                        assistant_msg["tool_calls"] = [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {"name": tc.name, "arguments": tc.arguments},
+                            }
+                            for tc in response.tool_calls
+                        ]
+                        await self.append_chat_history(assistant_msg)
+                        try:
+                            arguments = json.loads(tool_call.arguments)
+                            submitted_subtask_id = (
+                                arguments.get("subtask_id")
+                                if isinstance(arguments, dict)
+                                else None
+                            )
+                            if (
+                                formal_subtask_id is not None
+                                and submitted_subtask_id != formal_subtask_id
+                            ):
+                                result = {
+                                    "ok": False,
+                                    "errors": [
+                                        "当前 Coder 回合只能记录 "
+                                        f"{formal_subtask_id}，不能改写 {submitted_subtask_id!r}。"
+                                    ],
+                                }
+                            else:
+                                source_paths = _evidence_source_paths(arguments)
+                                stale_paths = source_paths - evidence_changed_paths
+                                if formal_subtask_id is not None and not successful_tool_calls:
+                                    result = {
+                                        "ok": False,
+                                        "errors": [
+                                            "正式问题必须先成功执行代码并生成结果文件，才能提交执行证据。"
+                                        ],
+                                    }
+                                elif formal_subtask_id is not None and stale_paths:
+                                    result = {
+                                        "ok": False,
+                                        "errors": [
+                                            "证据来源必须由本轮实际代码执行新建或更新；"
+                                            f"当前未检测到更新：{', '.join(sorted(stale_paths))}。"
+                                        ],
+                                    }
+                                else:
+                                    result = record_execution_evidence(
+                                        self.work_dir, **arguments
+                                    )
+                        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                            result = {
+                                "ok": False,
+                                "errors": [f"证据记录参数无效：{type(exc).__name__}。"],
+                            }
+                        await self.append_chat_history(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_id,
+                                "name": tool_call.name,
+                                "content": json.dumps(result, ensure_ascii=False),
+                            }
+                        )
+                        await redis_manager.publish_message(
+                            self.task_id,
+                            SystemMessage(
+                                content=(
+                                    "代码手已记录可验证执行证据"
+                                    if result.get("ok")
+                                    else "代码手提交的执行证据不完整，请按错误信息修正"
+                                ),
+                                type="error" if not result.get("ok") else "info",
+                            ),
+                        )
+                        # The LLM receives the exact server-generated outcome and
+                        # can correct only the failing source/record on its next
+                        # turn.  This call never counts as code execution itself.
+                        if result.get("ok"):
+                            # A formal Coder turn owns one question.  Once its
+                            # backend-owned evidence is persisted, stop this
+                            # turn before a later model response can overwrite
+                            # result files and invalidate the fresh manifest.
+                            return CoderToWriter(
+                                code_response=(
+                                    response.content
+                                    or "已在受控收束阶段记录执行证据。"
+                                ),
+                                created_images=await self.code_interpreter.get_created_images(
+                                    subtask_title
+                                ),
+                                execution_attempted=successful_tool_calls > 0,
+                                execution_succeeded=not execution_error_occurred,
+                                execution_error_occurred=execution_error_occurred,
+                            )
+                        if evidence_commit_required and not result.get("ok"):
+                            # Let the model repair the source file or arguments,
+                            # then require another recorder call at the next cap.
+                            evidence_commit_required = False
+                        continue
 
                     if is_execute_code_tool:
                         logger.info(f"调用工具: {tool_call.name}")
@@ -270,6 +518,11 @@ class CoderAgent(Agent):
 
                         # 执行工具调用
                         logger.info("执行工具调用")
+                        before_execution_files = (
+                            _snapshot_task_files(self.work_dir)
+                            if formal_subtask_id is not None
+                            else {}
+                        )
                         (
                             text_to_gpt,
                             error_occurred,
@@ -278,6 +531,7 @@ class CoderAgent(Agent):
 
                         # 添加工具执行结果
                         if error_occurred:
+                            execution_error_occurred = True
                             # 即使发生错误也要添加tool响应
                             await self.append_chat_history(
                                 {
@@ -307,7 +561,18 @@ class CoderAgent(Agent):
                             continue
                         else:
                             # 成功执行的tool响应
+                            # Keep the historical notebook error for audit, but a
+                            # later successful execution means the current tool
+                            # state is no longer an unresolved interpreter error.
+                            execution_error_occurred = False
                             successful_tool_calls += 1
+                            if formal_subtask_id is not None:
+                                after_execution_files = _snapshot_task_files(self.work_dir)
+                                evidence_changed_paths.update(
+                                    _changed_task_files(
+                                        before_execution_files, after_execution_files
+                                    )
+                                )
                             await self.append_chat_history(
                                 {
                                     "role": "tool",
@@ -321,7 +586,7 @@ class CoderAgent(Agent):
                             else:
                                 consecutive_final_outputs = 0
 
-                            if consecutive_final_outputs >= 2:
+                            if consecutive_final_outputs >= 2 and formal_subtask_id is None:
                                 logger.info("连续检测到完成性工具输出，自动收束代码手任务")
                                 await redis_manager.publish_message(
                                     self.task_id,
@@ -332,11 +597,48 @@ class CoderAgent(Agent):
                                     created_images=await self.code_interpreter.get_created_images(
                                         subtask_title
                                     ),
+                                    execution_attempted=True,
+                                    execution_succeeded=not execution_error_occurred,
+                                    execution_error_occurred=execution_error_occurred,
                                 )
+                            if consecutive_final_outputs >= 2 and formal_subtask_id is not None:
+                                evidence_commit_required = True
+                                await self.append_chat_history(
+                                    {
+                                        "role": "user",
+                                        "content": (
+                                            "完成性文字不能替代正式题目的计算证据。现在只能调用 "
+                                            "record_execution_evidence，为当前问题 "
+                                            f"{formal_subtask_id} 提交本轮新生成的结果来源。"
+                                        ),
+                                    }
+                                )
+                                continue
                             if (
                                 self.max_successful_tool_calls is not None
                                 and successful_tool_calls >= self.max_successful_tool_calls
                             ):
+                                if formal_subtask_id:
+                                    evidence_commit_required = True
+                                    await self.append_chat_history(
+                                        {
+                                            "role": "user",
+                                            "content": (
+                                                "已达到代码执行上限。不要再运行代码、不要导入后端函数、"
+                                                "不要手写 execution_validation.json。现在请立刻调用唯一"
+                                                "可用的 record_execution_evidence，为当前正式问题 "
+                                                f"{formal_subtask_id} 提交刚刚生成的结果文件、约束、指标和图表数据来源。"
+                                            ),
+                                        }
+                                    )
+                                    await redis_manager.publish_message(
+                                        self.task_id,
+                                        SystemMessage(
+                                            content="代码执行上限已到，强制提交受控执行证据",
+                                            type="warning",
+                                        ),
+                                    )
+                                    continue
                                 logger.info(
                                     "成功工具调用达到上限，自动收束代码手任务: "
                                     f"{successful_tool_calls}"
@@ -355,6 +657,9 @@ class CoderAgent(Agent):
                                     created_images=await self.code_interpreter.get_created_images(
                                         subtask_title
                                     ),
+                                    execution_attempted=True,
+                                    execution_succeeded=not execution_error_occurred,
+                                    execution_error_occurred=execution_error_occurred,
                                 )
                             # 成功执行后继续循环，等待下一步指令
                             continue
@@ -379,13 +684,37 @@ class CoderAgent(Agent):
                                 "name": tool_call.name,
                                 "content": (
                                     f"不支持工具 {tool_call.name}。"
-                                    "请只使用 execute_code 工具完成代码执行；"
+                                    "请使用 execute_code 执行计算，完成后使用 "
+                                    "record_execution_evidence 记录该题证据；"
                                     "如无需执行代码，请直接给出最终结果，不要再调用其他工具。"
                                 ),
                             }
                         )
                         continue
                 else:
+                    if evidence_commit_required:
+                        await self.append_chat_history(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "当前正式问题尚未提交受控执行证据。请调用 "
+                                    "record_execution_evidence，不要只输出文字。"
+                                ),
+                            }
+                        )
+                        continue
+                    if formal_subtask_id is not None and successful_tool_calls:
+                        evidence_commit_required = True
+                        await self.append_chat_history(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "正式问题已执行代码但尚未记录受控证据。请调用 "
+                                    "record_execution_evidence；不要只输出完成说明。"
+                                ),
+                            }
+                        )
+                        continue
                     # 没有工具调用，表示任务完成
                     logger.info("没有工具调用，任务完成")
                     return CoderToWriter(
@@ -393,6 +722,11 @@ class CoderAgent(Agent):
                         created_images=await self.code_interpreter.get_created_images(
                             subtask_title
                         ),
+                        execution_attempted=successful_tool_calls > 0,
+                        execution_succeeded=(
+                            successful_tool_calls > 0 and not execution_error_occurred
+                        ),
+                        execution_error_occurred=execution_error_occurred,
                     )
                     
             except Exception as exc:

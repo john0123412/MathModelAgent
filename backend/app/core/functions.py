@@ -23,6 +23,77 @@ coder_tools = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "record_execution_evidence",
+            "description": (
+                "Record one completed formal quesN through the trusted evidence writer. "
+                "Use this only after execute_code has written the result/data files. "
+                "Provide task-relative source_path/data_path values; the backend computes "
+                "SHA-256 hashes, updates execution_validation.json, and determines feasible. "
+                "This is an agent tool, not a Python import or a function available in the notebook."
+            ),
+            # Constraint bounds are comparison-dependent.  Keeping this tool
+            # non-strict lets the model omit irrelevant bounds instead of
+            # inventing null-heavy fields solely to satisfy OpenAI strict-mode.
+            # The backend remains the authoritative schema/path/hash validator.
+            "strict": False,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "subtask_id": {"type": "string", "description": "Formal question id, e.g. ques1."},
+                    "constraints": {
+                        "type": "array",
+                        "description": "Verifiable constraints. source_path must name an existing task-relative result file.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "actual": {"type": "number"},
+                                "comparison": {"type": "string", "enum": ["abs_diff_lte", "lte", "gte", "gt", "lt", "between"]},
+                                "target": {"type": ["number", "null"]},
+                                "tolerance": {"type": ["number", "null"]},
+                                "lower": {"type": ["number", "null"]},
+                                "upper": {"type": ["number", "null"]},
+                                "unit": {"type": ["string", "null"]},
+                                "source_path": {"type": "string"},
+                            },
+                            "required": ["id", "actual", "comparison", "source_path"],
+                        },
+                    },
+                    "metrics": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "label": {"type": "string"},
+                                "value": {"type": "number"},
+                                "unit": {"type": "string"},
+                                "explanation": {"type": "string"},
+                                "aliases": {"type": "array", "items": {"type": "string"}},
+                            },
+                            "required": ["id", "label", "value", "unit", "explanation"],
+                        },
+                    },
+                    "figures": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "data_path": {"type": "string"},
+                                "metric_ids": {"type": "array", "items": {"type": "string"}},
+                            },
+                            "required": ["path", "data_path"],
+                        },
+                    },
+                },
+                "required": ["subtask_id", "constraints", "metrics", "figures"],
+            },
+        },
+    },
 ]
 
 writer_tools = [
@@ -102,6 +173,24 @@ coder_tools_anthropic = [
                 "code": {"type": "string", "description": "The code text"}
             },
             "required": ["code"],
+        },
+    },
+    {
+        "name": "record_execution_evidence",
+        "description": (
+            "Record one completed formal quesN using the trusted evidence writer. "
+            "Call it after execute_code has generated result files. The backend computes hashes, "
+            "updates the manifest, and determines feasibility."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "subtask_id": {"type": "string"},
+                "constraints": {"type": "array", "items": {"type": "object"}},
+                "metrics": {"type": "array", "items": {"type": "object"}},
+                "figures": {"type": "array", "items": {"type": "object"}},
+            },
+            "required": ["subtask_id", "constraints", "metrics", "figures"],
         },
     },
 ]

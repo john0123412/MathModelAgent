@@ -38,6 +38,7 @@ Automatically generate an award-level modeling paper
 ## Current Implementation Status (Code Audit: 2026-07-11)
 
 - Implemented: FastAPI/Vue WebUI workflow, default isolated E2B execution, OpenAI/Responses/Anthropic providers, checkpoint resume, variable snapshots, live user-message injection, multi-source literature search, modeling approval, filtered task archive downloads, aggregate token tracking, CUMCM2026 exports, and submission audits.
+- Important CUMCM 2026 boundary: the automatic Appendix B currently contains core code excerpts only, while complete notebooks/scripts remain listed as support material. A technical audit `PASS` does not prove compliance with the official requirement that the paper appendix contain complete runnable source; add it manually or extend and verify the export pipeline before formal submission.
 - Explicit boundaries: `/save-api-config` changes runtime settings only; browser-entered keys are not persisted; task artifacts use controlled downloads; `/track` is best-effort single-process aggregation, not provider billing.
 - Not wired into the main workflow: RAG, generic six-action HIL, Fallback Hand Off, Evaluator Shadow Mode, Feedback Rerun, Daytona, LiteLLM runtime, vision models, and R/MATLAB execution.
 
@@ -102,9 +103,26 @@ docker-compose up -d
 
 You can now access:
 - Frontend interface: http://localhost:5173
-- Backend API: http://localhost:8000
+- Docker API (recommended via frontend proxy): http://localhost:5173/api
+- Direct backend debugging API: http://localhost:8000
 
 Compose binds both ports to `127.0.0.1`; this development deployment must not be exposed directly to the public Internet.
+
+The default Docker mode uses the isolated E2B code sandbox and fails closed when
+`E2B_API_KEY` is missing. For a trusted single-user Docker host, use the explicit
+local automatic mode when E2B is unavailable:
+
+```powershell
+.\scripts\docker-local-execution.ps1 -Action Start
+# Resume an existing checkpoint:
+.\scripts\docker-local-execution.ps1 -Action Resume -TaskId <task_id>
+# Restore the default remote safety mode when finished:
+.\scripts\docker-local-execution.ps1 -Action RestoreRemote
+```
+
+This mode prefers E2B and falls back to the local interpreter only when explicitly
+enabled by the overlay. Do not put `ALLOW_LOCAL_CODE_EXECUTION=true` in the normal
+`backend/.env.dev` or use this mode for shared/public deployments.
 
 ### 💻 Option 2: Local Deployment
 

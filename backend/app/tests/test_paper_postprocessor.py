@@ -11,6 +11,7 @@ from app.tools.paper_postprocessor import (
     build_preflight_report,
     ensure_table_captions,
     normalize_bold_standalone_labels,
+    normalize_cjk_inline_spacing,
     normalize_chinese_references,
     normalize_deterministic_eda_terms,
     normalize_deterministic_random_simulation_code_terms,
@@ -51,6 +52,14 @@ class TestNormalizeChineseReferences(unittest.TestCase):
             normalized,
         )
         self.assertNotIn("[^1]:", normalized)
+
+    def test_cjk_inline_spacing_is_normalized_without_touching_code(self):
+        markdown = "正文含有 凸轮 轮廓 曲线。\n\n```python\nlabel = '凸轮 轮廓'\n```\n"
+
+        normalized = normalize_cjk_inline_spacing(markdown)
+
+        self.assertIn("凸轮轮廓曲线", normalized)
+        self.assertIn("label = '凸轮 轮廓'", normalized)
 
     def test_existing_numbered_references_are_renumbered_contiguously(self):
         markdown = (
@@ -433,7 +442,7 @@ class TestNormalizeChineseReferences(unittest.TestCase):
 
 
 class TestAppendCodeAppendix(unittest.TestCase):
-    """验证最终论文末尾会附 CUMCM 要求的支撑材料清单与核心代码。"""
+    """验证最终论文末尾会附 CUMCM 要求的支撑材料清单与完整代码。"""
 
     def test_appends_support_material_list_and_python_files_after_references(self):
         with tempfile.TemporaryDirectory() as work_dir:
@@ -458,9 +467,8 @@ class TestAppendCodeAppendix(unittest.TestCase):
         self.assertIn("| figure.png | 图片文件 |", updated)
         self.assertNotIn("test_save.png", updated)
         self.assertIn("## 附录B 源程序代码", updated)
-        self.assertIn("### B.1 problem_1.py", updated)
-        self.assertIn("```python\nx = 1\n```", updated)
-        self.assertNotIn("print('hello')", updated)
+        self.assertIn("### B.1 problem_1.py\n\nSHA-256:\n", updated)
+        self.assertIn("```python\nx = 1\nprint('hello')\n```", updated)
 
     def test_extracts_notebook_code_when_no_python_files_exist(self):
         with tempfile.TemporaryDirectory() as work_dir:
@@ -480,7 +488,7 @@ class TestAppendCodeAppendix(unittest.TestCase):
         self.assertIn("| notebook.ipynb | 源程序代码 |", updated)
         self.assertIn("# Cell 1", updated)
         self.assertIn("x = 1", updated)
-        self.assertNotIn("print(x)", updated)
+        self.assertIn("print(x)", updated)
 
     def test_code_appendix_fence_is_longer_than_embedded_backticks(self):
         with tempfile.TemporaryDirectory() as work_dir:
@@ -514,10 +522,10 @@ class TestAppendCodeAppendix(unittest.TestCase):
 
         self.assertEqual(sources, ["problem.py"])
         self.assertIn("x = 1", updated)
-        self.assertNotIn("print('ok')", updated)
+        self.assertIn("print('ok')", updated)
         self.assertNotIn(long_separator, updated)
 
-    def test_preflight_flags_print_heavy_appendix(self):
+    def test_preflight_accepts_complete_source_with_print_calls(self):
         noisy_code = "\n".join(f"print({index})" for index in range(25))
         markdown = (
             "# 基于优化模型的生产方案研究\n\n"
@@ -545,8 +553,33 @@ class TestAppendCodeAppendix(unittest.TestCase):
             code_sources=["problem.py"],
         )
 
-        self.assertEqual(report["status"], "FAIL")
-        self.assertFalse(report["checks"]["appendix_console_noise"]["passed"])
+        self.assertTrue(report["checks"]["appendix_console_noise"]["passed"])
+
+    def test_preflight_does_not_treat_future_algorithm_as_implemented_claim(self):
+        markdown = (
+            "# 标题\n\n"
+            "## 摘要\n\n"
+            "本文建立可复核的压力控制模型，并通过网格搜索得到控制参数。\n\n"
+            "关键词：压力控制；网格搜索；敏感性分析；燃油系统\n\n"
+            "# 一、问题重述\n\n正文。\n\n"
+            "# 二、问题分析\n\n正文。\n\n"
+            "# 三、模型假设\n\n正文。\n\n"
+            "# 四、符号说明\n\n正文。\n\n"
+            "# 五、模型的建立与求解\n\n正文。\n\n"
+            "# 六、模型的分析与检验\n\n正文。\n\n"
+            "# 七、模型的评价、改进与推广\n\n"
+            "后续可升级为遗传算法或粒子群优化，以提升高维参数搜索效率。\n\n"
+            "# 附录\n\n"
+            "## 附录A 支撑材料文件列表\n\n本论文没有支撑材料。\n\n"
+            "## 附录B 源程序代码\n\n本论文没有用到程序。\n"
+        )
+
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(), markdown=markdown, code_sources=[]
+        )
+
+        self.assertTrue(report["checks"]["algorithm_evidence"]["passed"])
+        self.assertEqual(report["checks"]["algorithm_evidence"]["claims"], [])
 
     def test_existing_fenced_code_separator_lines_are_shortened(self):
         markdown = "```python\n" + ("=" * 80) + "\nprint('ok')\n```\n"
@@ -568,6 +601,22 @@ class TestAppendCodeAppendix(unittest.TestCase):
         self.assertIn("## 附录A 支撑材料文件列表", updated)
         self.assertIn("| result.csv | 数据/结果文件 |", updated)
         self.assertIn("本论文没有用到程序", updated)
+
+    def test_key_appendix_mode_uses_vetted_algorithm_note_without_full_notebook(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(os.path.join(work_dir, "solver.py"), "w", encoding="utf-8") as f:
+                f.write("def solve():\n    return 1\n")
+            with open(os.path.join(work_dir, "paper_appendix_config.json"), "w", encoding="utf-8") as f:
+                json.dump({"mode": "key"}, f)
+            with open(os.path.join(work_dir, "key_algorithms.md"), "w", encoding="utf-8") as f:
+                f.write("### B.1 线性规划核心步骤\n\n```text\nsolve constraints\n```")
+
+            updated, sources = append_code_appendix("正文。", work_dir)
+
+        self.assertEqual(sources, ["solver.py"])
+        self.assertIn("精简展示模式", updated)
+        self.assertIn("solve constraints", updated)
+        self.assertNotIn("def solve", updated)
 
 
 class TestPreparePaperMarkdown(unittest.TestCase):

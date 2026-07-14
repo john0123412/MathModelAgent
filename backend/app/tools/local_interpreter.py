@@ -7,7 +7,9 @@ import jupyter_client
 from app.utils.log_util import logger
 import os
 import stat
+import subprocess
 import tempfile
+import threading
 import time
 from app.services.redis_manager import redis_manager
 from app.schemas.response import (
@@ -350,6 +352,7 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
             SystemMessage(content="代码执行完成"),
         )
 
+        timeout_occurred = False
         for mark, out_str in execution:
             if mark in ("stdout", "execute_result_text", "display_text"):
                 text_to_gpt.append(self._truncate_text(f"[{mark}]\n{out_str}"))
@@ -386,11 +389,23 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
                 error_occurred = True
                 error_message = self.delete_color_control_char(out_str)
                 error_message = self._truncate_text(error_message)
+                timeout_occurred = "本地代码执行超过" in error_message
                 logger.error(f"本地代码执行失败: error_chars={len(error_message)}")
                 text_to_gpt.append(error_message)
                 #  添加error到notebook
                 self.notebook_serializer.add_code_cell_error_to_notebook(out_str)
                 content_to_display.append(StdErrModel(msg=out_str))
+
+        if timeout_occurred:
+            restored = await self._recover_kernel_after_timeout()
+            recovery_message = (
+                "超时后的本地内核已重启，并从最近变量快照恢复；"
+                "此前定义的函数不会恢复，后续代码必须以低开销方式重新定义必要函数。"
+                if restored
+                else "超时后的本地内核重启或变量快照恢复失败；本次执行保持失败，不能继续使用旧内核。"
+            )
+            error_message = f"{error_message}\n{recovery_message}"
+            text_to_gpt.append(recovery_message)
 
         logger.info(
             "本地代码执行结果已整理: "
@@ -406,6 +421,60 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
             error_occurred,
             error_message,
         )
+
+    async def _recover_kernel_after_timeout(self) -> bool:
+        """Discard a timed-out kernel and restore only the last durable state.
+
+        A numerical extension may ignore Jupyter's interrupt message.  Continuing in
+        that kernel risks turning every reflection retry into the same timeout, so a
+        timeout is a process-boundary failure rather than a recoverable cell error.
+        """
+        previous_kc, previous_km = self.kc, self.km
+        self.kc, self.km = None, None
+        try:
+            if previous_kc is not None:
+                try:
+                    previous_kc.stop_channels()
+                except Exception as exc:
+                    logger.warning(
+                        "超时后停止本地内核通道失败: error_type={}",
+                        type(exc).__name__,
+                    )
+            if previous_km is not None:
+                previous_km.shutdown_kernel(now=True)
+        except Exception as exc:
+            logger.warning(
+                "超时后终止本地内核失败: error_type={}", type(exc).__name__
+            )
+        finally:
+            self._cleanup_kernel_connection_file()
+
+        try:
+            self._start_kernel()
+            self._pre_execute_code()
+            from app.tools.variable_snapshot import VariableSnapshot
+
+            snapshot = VariableSnapshot(self.work_dir)
+            restored = bool(
+                snapshot.exists() and self.kc is not None and await snapshot.load(self.kc)
+            )
+            logger.info("超时后本地内核已重建: snapshot_restored={}", restored)
+            return restored
+        except Exception as exc:
+            logger.error(
+                "超时后本地内核重建失败: error_type={}", type(exc).__name__
+            )
+            failed_kc, failed_km = self.kc, self.km
+            self.kc, self.km = None, None
+            try:
+                if failed_kc is not None:
+                    failed_kc.stop_channels()
+                if failed_km is not None:
+                    failed_km.shutdown_kernel(now=True)
+            except Exception:
+                pass
+            self._cleanup_kernel_connection_file()
+            return False
 
     async def replay_code(self, code: str) -> tuple[str, bool, str]:
         """重放历史代码，只恢复内核状态，不修改 notebook 或推送前端消息。"""
@@ -442,30 +511,105 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         # Get the output of the code
         msg_list = []
         deadline = time.monotonic() + self.execution_timeout
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                self.km.interrupt_kernel()
-                return [
-                    (
-                        "error",
-                        f"本地代码执行超过 {self.execution_timeout} 秒，已中断",
-                    )
-                ]
+        timed_out = threading.Event()
+
+        def interrupt_for_timeout() -> None:
+            """Interrupt independently of a stalled IOPub receive loop."""
+            timed_out.set()
+            logger.warning(
+                "本地代码执行超时，看门狗请求中断: timeout_seconds={}",
+                self.execution_timeout,
+            )
             try:
-                iopub_msg = self.kc.get_iopub_msg(timeout=min(1, remaining))
-                msg_list.append(iopub_msg)
-                if (
-                    iopub_msg["msg_type"] == "status"
-                    and iopub_msg["content"].get("execution_state") == "idle"
-                ):
-                    break
-            except Exception:
-                if self.interrupt_signal:
+                if self.km is not None:
                     self.km.interrupt_kernel()
-                    self.interrupt_signal = False
-                    return [("error", "本地代码执行已中断")]
-                continue
+            except Exception as exc:
+                logger.warning(
+                    "本地代码执行超时后中断内核失败: error_type={}",
+                    type(exc).__name__,
+                )
+
+        if self.execution_timeout <= 0:
+            interrupt_for_timeout()
+            return [("error", "本地代码执行超过 0 秒，已中断")]
+
+        watchdog: threading.Timer | None = None
+        watchdog_process: subprocess.Popen | None = None
+        returned_after_timeout = False
+        kernel_pid = getattr(getattr(self.km, "provisioner", None), "pid", None)
+        if os.name == "posix" and isinstance(kernel_pid, int) and kernel_pid > 0:
+            # Do not rely solely on a Python thread here: a numerical extension can
+            # retain the GIL and prevent threading.Timer from ever running.  This
+            # tiny OS-level watchdog has no model input and can always signal the
+            # dedicated unprivileged kernel process.
+            # Bind the watchdog to this exact process start time so a reused PID can
+            # never be signalled after the interpreter replaces a timed-out kernel.
+            script = (
+                f"kernel_start=$(awk '{{print $22}}' /proc/{kernel_pid}/stat 2>/dev/null || true); "
+                f"sleep {self.execution_timeout}; "
+                f"if [ -n \"$kernel_start\" ] && "
+                f"[ \"$(awk '{{print $22}}' /proc/{kernel_pid}/stat 2>/dev/null || true)\" = \"$kernel_start\" ]; then "
+                f"kill -INT {kernel_pid} 2>/dev/null || true; sleep 5; "
+                f"if [ \"$(awk '{{print $22}}' /proc/{kernel_pid}/stat 2>/dev/null || true)\" = \"$kernel_start\" ]; then "
+                f"kill -KILL {kernel_pid} 2>/dev/null || true; fi; fi"
+            )
+            watchdog_process = subprocess.Popen(
+                ["/bin/sh", "-c", script],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        else:
+            watchdog = threading.Timer(self.execution_timeout, interrupt_for_timeout)
+            watchdog.daemon = True
+            watchdog.start()
+        try:
+            while True:
+                if timed_out.is_set() or time.monotonic() >= deadline:
+                    if not timed_out.is_set():
+                        interrupt_for_timeout()
+                    returned_after_timeout = True
+                    return [
+                        (
+                            "error",
+                            f"本地代码执行超过 {self.execution_timeout} 秒，已中断",
+                        )
+                    ]
+                remaining = deadline - time.monotonic()
+                try:
+                    iopub_msg = self.kc.get_iopub_msg(timeout=min(1, remaining))
+                    msg_list.append(iopub_msg)
+                    if (
+                        iopub_msg["msg_type"] == "status"
+                        and iopub_msg["content"].get("execution_state") == "idle"
+                    ):
+                        break
+                except Exception:
+                    if timed_out.is_set():
+                        returned_after_timeout = True
+                        return [
+                            (
+                                "error",
+                                f"本地代码执行超过 {self.execution_timeout} 秒，已中断",
+                            )
+                        ]
+                    if self.interrupt_signal:
+                        self.km.interrupt_kernel()
+                        self.interrupt_signal = False
+                        return [("error", "本地代码执行已中断")]
+                    continue
+        finally:
+            if watchdog is not None:
+                watchdog.cancel()
+            # If execution timed out, keep the PID-bound watchdog alive while the
+            # caller tears down the old kernel.  It then becomes a last-resort kill
+            # path rather than being cancelled before its SIGKILL phase.
+            if (
+                watchdog_process is not None
+                and not returned_after_timeout
+                and watchdog_process.poll() is None
+            ):
+                watchdog_process.terminate()
 
         all_output: list[tuple[str, str]] = []
         for iopub_msg in msg_list:

@@ -1,5 +1,34 @@
 # MathModelAgent 启动说明
 
+本文面向 Windows + Docker Desktop。本项目默认通过 Docker Compose 运行；本机前端 Node
+工具链只供人工本地开发使用，agent 不应主动执行。
+
+## 先选启动路径
+
+| 目标 | 使用的命令 | 代码执行方式 | 适用边界 |
+|---|---|---|---|
+| 日常使用、验收、真实 E2B 沙箱 | `docker compose up -d --wait` | `remote`，需要 `E2B_API_KEY` | 默认且推荐 |
+| E2B 暂不可用时恢复一个已有任务 | 加载 `docker-compose.local-execution.yml` | `auto`，显式允许本地 Jupyter | 仅可信单用户本机 Docker |
+
+本地自动执行模式也提供了 Windows 一键入口。它只对当前 Compose 启动加载本地覆盖，
+不会修改 `backend/.env.dev`：
+
+```powershell
+cd D:\workspace\MathModelAgent
+.\scripts\docker-local-execution.ps1 -Action Start
+```
+
+该模式会在 E2B 可用时优先使用 E2B，缺少 E2B 时自动降级到本地解释器；后端会输出实际
+生效的 `mode`、`allow_local` 和 E2B 是否配置，但不会输出密钥。完成后恢复默认安全模式：
+
+```powershell
+.\scripts\docker-local-execution.ps1 -Action RestoreRemote
+```
+| 修改前端/后端源码的人工开发 | `win_start.bat` 或本地手动启动 | 由开发者自行配置 | 不与本机 agent 前端命令混用 |
+
+不要同时加载 `docker-compose.dev.yml` 与 `docker-compose.local-execution.yml`。完成受控本地恢复后，
+务必再执行一次默认 `docker compose up -d --wait`，把后端恢复到远程沙箱安全默认值。
+
 ## 环境要求
 - Docker Desktop
 - Python 3.12 + uv
@@ -10,6 +39,30 @@
 ---
 
 ## 方案一：Docker Compose（推荐）
+
+### 第一次启动前：配置与预检
+
+1. 如果还没有 `backend/.env.dev`，从示例创建它；只在该文件填入自己的 provider 配置，
+   不要把 key 写进 Git、聊天或日志。
+2. 默认远程代码执行还需要设置 `E2B_API_KEY`。只配置 LLM provider 而没有 E2B 时，任务会在
+   代码执行前安全停止，这是预期保护，不是需要关闭的错误。
+3. 根目录 `.env` 仅用于可选的 Docker 字体挂载；它不能替代 `backend/.env.dev`。
+
+```powershell
+cd D:\workspace\MathModelAgent
+
+# 仅首次执行；若 backend/.env.dev 已存在，保留已有配置，不要覆盖。
+if (-not (Test-Path backend\.env.dev)) {
+  Copy-Item backend\.env.example backend\.env.dev
+}
+
+# 验证 Compose 文件与变量能被解析；不会启动容器，也不会打印密钥正文。
+docker compose config -q
+```
+
+`backend/.env.dev` 至少需要四个 Agent 的 `*_API_TYPE`、`*_API_KEY`、`*_MODEL`、
+`*_BASE_URL`，以及默认远程模式所需的 `E2B_API_KEY`。可选的 `OPENALEX_EMAIL`、
+`TAVILY_API_KEY` 等不影响基础建模链路；详见后文“常见问题”。
 
 ### 启动
 
@@ -48,6 +101,15 @@ curl.exe http://127.0.0.1:5173/api/docs
 docker compose logs backend --tail=200
 ```
 
+推荐再运行下面这段无模型调用的健康检查。它只确认代理与后端状态，不读取或输出 API Key：
+
+```powershell
+$status = Invoke-RestMethod http://127.0.0.1:5173/api/status
+$status.backend | Select-Object status, feature_warnings
+Invoke-WebRequest http://127.0.0.1:5173/api/docs -UseBasicParsing |
+  Select-Object -ExpandProperty StatusCode
+```
+
 Docker 前端通过 Vite dev server 代理访问后端：浏览器请求
 `http://localhost:5173/api/*` 会被转发到 Compose 内部的 `backend:8000`，
 WebSocket 请求 `ws://localhost:5173/ws/task/<task_id>` 会被转发到后端
@@ -80,6 +142,41 @@ WebUI 侧边栏的 API Key 配置会通过 `/save-api-config` 应用到当前后
 `localStorage.apiKeys`。`persisted=false` 同时表示后端和浏览器都不会把该配置写入
 持久化存储。
 
+### 缺少 E2B 时的受控恢复与回退
+
+默认 `CODE_INTERPRETER_KIND=remote` 没有 `E2B_API_KEY` 时，已开始的任务可能留下
+`checkpoint.json`，状态为 `interrupted`。不要把 `CODE_INTERPRETER_KIND=local` 或
+`ALLOW_LOCAL_CODE_EXECUTION=true` 写入普通 `backend/.env.dev` 来绕过保护。若这是可信的
+单用户本机 Docker 恢复场景，可按以下顺序只对本次恢复加载覆盖文件：
+
+```powershell
+cd D:\workspace\MathModelAgent
+docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.local-execution.yml up -d --wait
+
+# <task_id> 来自 GET /api/tasks 或 WebUI；从已有检查点继续，不要重新提交同一题目。
+curl.exe -X POST http://127.0.0.1:5173/api/modeling/<task_id>/resume
+```
+
+也可以让脚本完成启动、checkpoint 检查和续传请求：
+
+```powershell
+.\scripts\docker-local-execution.ps1 -Action Resume -TaskId <task_id>
+```
+
+该命令只接受已有 `checkpoint.json` 的任务，不会重复提交题目；任务已经完成时会直接跳过。
+
+恢复任务完成并检查交付物后，立即切回默认模式：
+
+```powershell
+docker compose up -d --wait
+docker compose ps
+```
+
+本地恢复模式仍与后端共享文件系统和网络，不能用于共享服务、公开部署或正式远程验收。它用于
+验证恢复路径和生成可交付产物，不会把本地解释器变成项目的默认或正式执行器。本地覆盖还把
+backend healthcheck 的等待窗口放宽到适合长时间 notebook 单元的范围，避免计算期间短暂的
+`/docs` 响应超时被误判为容器故障；任务完成后仍应以 `/api/status` 和任务状态为准。
+
 ### 代码执行隔离
 
 `CODE_INTERPRETER_KIND=remote` 是默认值，建模任务需要有效的 `E2B_API_KEY`。当 E2B
@@ -91,7 +188,9 @@ docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-co
 ```
 
 该覆盖文件设置 `CODE_INTERPRETER_KIND=auto` 和 `ALLOW_LOCAL_CODE_EXECUTION=true`：有 E2B
-时仍优先远程沙箱；没有 E2B 时才使用本地 Jupyter。该模式只支持受控 Linux Docker：内核只
+时仍优先远程沙箱；没有 E2B 时才使用本地 Jupyter。受控覆盖对单次代码执行设置 120 秒硬上限，
+并由独立 OS 级看门狗中断无 IOPub 返回的数值计算；超时任务会作为代码执行失败进入反思/失败流程，
+不会继续写入冻结结果或论文。该模式只支持受控 Linux Docker：内核只
 继承最小运行环境，并在 exec 前降权到镜像内专用的非 root `mma-runner` 用户；后端只临时保留
 `CHOWN`、`DAC_OVERRIDE`、`SETGID`、`SETUID` 和 `KILL` 五项能力，分别用于准备/持久化共享
 任务目录、完成降权和终止该降权子内核，另以不可 dump 保护作为纵深防护。`DAC_OVERRIDE` 只保留
@@ -146,16 +245,16 @@ docker start redis-mma
 ```
 
 **2. 启动后端（新终端）**
-```
+```powershell
 cd D:\workspace\MathModelAgent\backend
-.venv\Scripts\activate
-set ENV=dev
-set REDIS_URL=redis://127.0.0.1:6379/0
+.venv\Scripts\Activate.ps1
+$env:ENV = 'dev'
+$env:REDIS_URL = 'redis://127.0.0.1:6379/0'
 uvicorn app.main:app --host 0.0.0.0 --port 8003 --reload
 ```
 
 **3. 启动前端（另一个新终端）**
-```
+```powershell
 cd D:\workspace\MathModelAgent\frontend
 pnpm run dev
 ```
@@ -205,10 +304,18 @@ Origin 中作为网页执行。
 **重建计算环境机制**：
 - 优先读取 `variable_snapshot.pkl`，秒级恢复内核变量
 - 读取 `variable_snapshot_meta.json`，判断快照对应的 notebook 位置
-- 快照成功时，只增量重放快照之后新增的代码单元格
+- 快照成功时，直接恢复该快照并继续未完成阶段；为避免重放已被中断的高开销单元格，不自动执行快照之后的历史单元格
 - 快照不可用时，回退到 notebook 全量重放
 - 续传重放使用 `replay_code()`，只执行代码，不写入 notebook，不向前端重复推送代码单元格
 - 重建完成后继续执行未完成阶段
+
+**执行证据收束**：每个正式 `quesN` 的计算完成后，Coder 必须调用受控
+`record_execution_evidence`，由后端计算文件 SHA-256 并生成 `execution_validation.json`。
+若连续成功代码调用达到上限，系统会停止提供 `execute_code`，只允许该证据工具；没有受控
+证据不会进入 Writer/PDF。证据引用的结果 CSV/JSON/TXT 与图表数据还必须由**当前 Coder 回合**
+的实际执行新建或更新；不能把 checkpoint 中未更新的旧文件重新登记。一个 Coder 回合只允许记录
+自己的 `quesN`，且一次只接受一个工具动作。任务在最终验证失败后最多定向回修一次；第二次真实失败即停止，
+不要反复点击续传，而应先检查 `execution_validation_report.json` 和 `checkpoint.json` 的失败记录。
 
 ### 建模方案人工确认
 
@@ -234,7 +341,7 @@ Origin 中作为网页执行。
 可通过以下接口读取：
 
 ```powershell
-curl.exe "http://127.0.0.1:8000/track?task_id=<task_id>"
+curl.exe "http://127.0.0.1:5173/api/track?task_id=<task_id>"
 ```
 
 该统计用于运行过程观察和粗略成本估算，不等同于模型供应商账单。
@@ -258,7 +365,7 @@ curl.exe "http://127.0.0.1:8000/track?task_id=<task_id>"
 curl 或旧客户端仍建议显式传入，便于审计：
 
 ```powershell
-curl.exe -X POST http://127.0.0.1:8000/modeling `
+curl.exe -X POST http://127.0.0.1:5173/api/modeling `
   -F "ques_all=..." `
   -F "comp_template=CHINA" `
   -F "format_output=Markdown" `
@@ -306,14 +413,18 @@ LaTeX 资源；2026 正式 DOCX/LaTeX 模板发布后，按
   还会阻断 `承诺书`、`编号专用页`、`参赛队号` 等身份/封面字段；不能替代人工排版
   验收。正式提交前仍需人工翻看摘要页、公式密集页、宽表、附录源码、参考文献和最后几页。
 - 主 PDF 导出显式关闭 pandoc raw TeX，避免源码中的 LaTeX 模板字符串泄漏成正文命令。正文应优先使用 Markdown 表格和标准 `$...$`、`\(...\)` 数学公式，不要依赖 `\begin{table}`、`\begin{align}` 等 raw LaTeX 环境。
-- 论文附录会自动重建：附录A列出支撑材料，附录B只保留核心建模/求解/作图代码摘录；
-  完整可运行 notebook/脚本保留在支撑材料中。这样既满足电子版论文单文件、20MB、
-  正文页数和可读性门禁，又能通过 `candidate_manifest.json` 与
-  `submission_audit_report.json` 追踪完整源程序。后处理会删除附录中的批量
-  `print(...)`/`printf`/`console.log` 控制台输出语句，并通过
-  `paper_preflight_report.json -> checks.appendix_console_noise` 阻断 print-heavy
-  正式 PDF。
+- 论文附录会自动重建：附录 A 列出支撑材料，附录 B 保留任务目录发现的完整可运行脚本及
+  notebook 代码单元（不含 notebook 运行输出）。每份源码会记录原始 SHA-256；为避免 TeX
+  `lstlisting` 分隔符冲突，极少数危险字符串和装饰性超长分隔线会采用可逆安全编码，原始哈希
+  仍用于核验。`final_acceptance_report.json -> complete_source_appendix` 会同时检查源码覆盖、
+  哈希和正文代码内容，附录 A 文件清单不能替代该检查。源码中的正常 `print(...)` 是可运行代码，
+  不会被当作控制台噪声删除或阻断。
 - `paper_preflight_report.json` 是规则/正则驱动的格式与证据链门禁，不证明模型、求解和论证一定正确；`PASS` 后仍需人工复核数学内容。
+- **数学执行与结果冻结门禁**：新任务会在工作目录写入 `problem_contract.json`，把可识别的题面固定参数和必答要求传给 Modeler/Coder。所有 solution 代码阶段先单独完成并写入 checkpoint；每个正式 `quesN` 必须通过受控 `record_execution_evidence` 写入真实执行、可行性、可计算约束、任务内结果源 SHA-256、指标与图表数据来源，模型不得手写 manifest、哈希或顶层结构。每问都必须有任务目录内的结构化数值源（通常为 `quesN_results.csv`）；manifest 的 `source.path` 必须是精确任务相对路径，数值必须有限，PNG 等图片不能单独作为数值证据。优化题还必须冻结目标值和每个实际最优决策变量（包括灵敏度情景的新决策向量），不能只记录利润差或残差。工作流仅在 `execution_validation_report.json = PASS` 后生成 `frozen_results.json`，此后才启动 Writer；摘要、正文、图题和结论中的计算数值只能使用冻结结果。缺少 manifest、notebook 有未解决执行错误、约束不满足、优化变量缺失或来源哈希变化都会阻止论文写作与任务完成；一次失败只定向回交失败题，保留已通过题的检查点。历史任务目录没有这些文件时，必须按当前版本重跑后才能作为数学验收样本。
+
+- **Writer 预检回修与导出停止条件**：冻结通过并不保证 Writer 没有误写数值。若 `paper_preflight_report.json = FAIL` 的硬错误仅能明确归属到某个 `quesN` 正文或摘要中的 `result_consistency` 等事实冲突，系统会把冲突句和冻结事实只交回该章节 Writer 一次，然后重新预检；已通过章节不会重写。无法可靠定位的来源、附录、版式等失败不会盲目调用模型。一次回修后仍为 `FAIL` 时任务会停止在预检阶段，不生成候选 PDF；请先看报告的 `checks`/`conflicts` 和 checkpoint 中的 `last_paper_preflight_failure`，修正后再续传。`CONDITIONAL_PASS` 不触发自动改写，但仍必须按提交清单人工处理。
+
+**门禁失败时不要先补导 PDF**：如果任务状态为 `failed` 且消息为“代码执行/数值可行性门禁未通过”，先打开任务目录的 `execution_validation_report.json`，逐问修复 `errors`、`constraints` 和 `source.path` 指出的证据缺口。此时 Writer 尚未运行，`res.pdf` 缺失是预期保护行为，使用 `export_cli` 强行导出也不能让任务变为可验收。相同任务在同一模型/provider 已连续两次失败时，按恢复规程停止自动重试；由指定决策人切换到已验证的备用 provider 配置后最多续传一次，或先人工确定可复核的低开销算法，再继续。
 - 对无外部数据集的确定性参数题，后处理会清理正文/支撑材料中的 Monte Carlo、蒙特卡洛、随机模拟等探索性随机模拟内容，将样本数据 EDA 用语规范为参数核验，并删除可能触发 Pandoc definition-list 误解析的孤立 `: ... DOI ...` 参考行。
 - **字体**：PDF/LaTeX sidecar 优先使用官方格式规定的 Times New Roman/SimSun 等正式字体；精简版 Docker 镜像默认不含这些 Windows/Office 专有字体，会在编译期自动检测（`fc-match` / fontspec `\IfFontExistsTF`）并回退到免费等效字体，不影响能否编译成功，但正式提交前建议人工核对排版观感是否符合要求。两类字体的 fallback 途径不同：
   - **英文/Latin 字体**（Times New Roman → Liberation Serif、Courier New → Liberation Mono、Arial → Liberation Sans）：可通过构建时开启 `INSTALL_MS_FONTS=true` 装真正的 Microsoft Core Fonts（`ttf-mscorefonts-installer`），从而不必 fallback：
@@ -364,7 +475,7 @@ HUMAN_MODEL_GATE_ENABLED=false
 任务状态会变为 `waiting_review`，不会进入 Coder。人工确认建模方案后调用：
 
 ```powershell
-curl.exe -X POST http://127.0.0.1:8000/modeling/<task_id>/approve-modeling `
+curl.exe -X POST http://127.0.0.1:5173/api/modeling/<task_id>/approve-modeling `
   -H "Content-Type: application/json" `
   -d "{\"comment\":\"建模方案确认通过\"}"
 ```
@@ -452,7 +563,7 @@ uv run python -m app.tools.export_cli check
 
 ```powershell
 cd backend
-uv run python -m app.tools.export_cli pdf --input path\to\res.md --output path\to\res.pdf --profile cumcm2025 --local --update-status
+uv run python -m app.tools.export_cli pdf --input path\to\res.md --output path\to\res.pdf --profile cumcm2026 --local --update-status
 ```
 
 - `--local` 是关键参数：不加它会走跟 Docker 一样的策略（也能跑，但检测到 Times New Roman 缺失时不会给你打印本机安装状态提示，只写日志）；加了以后会明确报告每个字体是否命中本机已安装的版本，并且——只要你没有用下面的 `--mainfont` 等参数手动指定——官方字体检测到确实已经装了才会使用，检测不到就按开源字体回退并打印原因，不会不声不响换成别的字体。
@@ -466,15 +577,15 @@ uv run python -m app.tools.export_cli pdf --input path\to\res.md --output path\t
 ```powershell
 cd backend
 uv run python -m app.tools.export_cli check
-uv run python -m app.tools.export_cli pdf --input examples\pdf_export_sample\res.md --output examples\pdf_export_sample\res.pdf --profile cumcm2025 --local --font-config examples\pdf_export_sample\fonts.json
-uv run python -m app.tools.export_cli latex --input examples\pdf_export_sample\res.md --work-dir examples\pdf_export_sample --profile cumcm2025
+uv run python -m app.tools.export_cli pdf --input examples\pdf_export_sample\res.md --output examples\pdf_export_sample\res.pdf --profile cumcm2026 --local --font-config examples\pdf_export_sample\fonts.json
+uv run python -m app.tools.export_cli latex --input examples\pdf_export_sample\res.md --work-dir examples\pdf_export_sample --profile cumcm2026
 ```
 
 **方式二：导出 LaTeX sidecar 项目后手动编译**（更稳，能看到完整编译日志，也能自己再精修排版）：
 
 ```powershell
 cd backend
-uv run python -m app.tools.export_cli latex --input path\to\res.md --work-dir path\to\workdir --profile cumcm2025
+uv run python -m app.tools.export_cli latex --input path\to\res.md --work-dir path\to\workdir --profile cumcm2026
 ```
 
 导出后会在 `path\to\workdir\latex_project\` 下生成 `main.tex` 等文件；如果本机 `latexmk`/`xelatex` 在 PATH 里，命令会自动尝试编译并直接告诉你是否成功。自动编译优先尝试 `latexmk -xelatex`，失败后 fallback 到连续两次 `xelatex`；如果仍失败，`tex_export_status.json` 会记录 `compile_reason`、`compile_failure_summary` 和日志尾部。想手动复现时，进入该目录执行：
@@ -485,7 +596,7 @@ xelatex -no-shell-escape -interaction=nonstopmode main.tex
 xelatex -no-shell-escape -interaction=nonstopmode main.tex
 ```
 
-跑两遍是为了让目录（`\tableofcontents`）和交叉引用正确生成。当前 `default`/`cumcm2025` 两个模板都没有用 `bibtex`/`biber`（没有独立的 `.bib` 参考文献库，参考文献是手写在正文里的 `thebibliography` 环境），所以不需要额外的 `bibtex main` / `biber main` 步骤；如果你自己往模板里加了 `.bib` 文件，编译顺序需要改成：
+跑两遍是为了让目录（`\tableofcontents`）和交叉引用正确生成。当前 `default`、`cumcm2025`、`cumcm2026` 三个模板都没有用 `bibtex`/`biber`（没有独立的 `.bib` 参考文献库，参考文献是手写在正文里的 `thebibliography` 环境），所以不需要额外的 `bibtex main` / `biber main` 步骤；如果你自己往模板里加了 `.bib` 文件，编译顺序需要改成：
 
 ```powershell
 xelatex -no-shell-escape -interaction=nonstopmode main.tex
@@ -497,7 +608,7 @@ xelatex -no-shell-escape -interaction=nonstopmode main.tex
 **手动指定字体**：不想用 profile 默认的字体名，或者本机装的是变体名称（比如公司电脑上中文字体被替换过），可以显式覆盖，用户指定的值总是优先且不会被静默替换：
 
 ```powershell
-uv run python -m app.tools.export_cli pdf --input res.md --output res.pdf --profile cumcm2025 --local `
+uv run python -m app.tools.export_cli pdf --input res.md --output res.pdf --profile cumcm2026 --local `
   --mainfont "Times New Roman" --cjk-mainfont "SimSun" --cjk-sansfont "SimHei" --cjk-monofont "KaiTi"
 ```
 
@@ -513,7 +624,7 @@ uv run python -m app.tools.export_cli pdf --input res.md --output res.pdf --prof
 ```
 
 ```powershell
-uv run python -m app.tools.export_cli pdf --input res.md --output res.pdf --profile cumcm2025 --local --font-config fonts.json
+uv run python -m app.tools.export_cli pdf --input res.md --output res.pdf --profile cumcm2026 --local --font-config fonts.json
 ```
 
 如果指定的字体本机检测不到已安装，CLI 会在终端打印明确提示（而不是静默换成别的字体或直接失败），例如：
@@ -554,6 +665,8 @@ docker compose exec backend uv run python -m app.tools.submission_audit --work-d
 验收要点：
 
 - `paper_preflight_report.json = PASS`，且 `checks.appendix_console_noise.passed=true`。
+- `execution_validation_report.json = PASS`，并且存在可校验的 `execution_validation.json`、`frozen_results.json`；逐问确认 `feasible=true` 和约束来源文件仍可按 SHA-256 校验。
+- `paper_preflight_report.json` 中 `freeze_integrity`、`result_consistency`、`figure_result_consistency`、`infeasible_optimality`、`algorithm_evidence` 和 `reference_relevance` 均通过；这些检查用于拦截无执行证据的算法、不可行解被写成最优、图文数值矛盾和明确跨领域引用。
 - 若 `paper_preflight_report.json = CONDITIONAL_PASS`，`submission_audit_report.json`
   会降级为 `WARN`，表示主交付已生成但仍有条件项需要人工接受或修正；正式提交前优先修到
   `PASS`。
@@ -562,8 +675,10 @@ docker compose exec backend uv run python -m app.tools.submission_audit --work-d
   conditional 风险。
 - `pdf_visual_check.json = PASS`。
 - `submission_audit_report.json = PASS`（严格字体门禁）。
-- PDF 文本中不应出现 `print(`、`printf`、`console.log` 等批量控制台输出。
+- PDF 正文和附录外不应粘贴 `print(`、`printf`、`console.log` 等批量控制台输出；附录 B 的完整源码中出现这些正常代码语句是允许的。
 - `candidate_manifest.json` 登记 `notebook.ipynb`、图片、数据文件等支撑材料。
+- 对 CUMCM 2026 正式提交：论文附录须实际包含全部完整、可运行源程序；检查
+  `final_acceptance_report.json -> complete_source_appendix = PASS`，再人工运行关键代码并复核其与正文结果一致。
 
 ### 自动提交审核门禁
 
@@ -572,7 +687,7 @@ docker compose exec backend uv run python -m app.tools.submission_audit --work-d
 - `submission_audit_report.json`
 - `submission_audit_report.md`
 
-该报告汇总主交付文件、`paper_preflight_report.json`、`pdf_visual_check.json`
+该报告汇总主交付文件、`execution_validation_report.json`、`paper_preflight_report.json`、`pdf_visual_check.json`
 和 `export_status.json -> pdf.font_resolution`。默认自动流程中，如果 PDF 使用
 Docker fallback 字体，报告为 `WARN` 而不是阻断任务；如果
 `paper_preflight_report.json = CONDITIONAL_PASS`，报告同样为 `WARN`，需要人工查看
@@ -598,6 +713,32 @@ uv run python -m app.tools.submission_audit --work-dir project\work_dir\<task_id
 ---
 
 ## 功能测试
+
+### 测试 -1：启动与代理烟雾测试（不调用模型）
+
+每次修改 Compose、启动说明、代理配置或重建镜像后，先运行这一组检查。它不会提交题目，
+因此不消耗模型额度，也不会读取配置中的密钥：
+
+```powershell
+cd D:\workspace\MathModelAgent
+docker compose config -q
+docker compose up -d --wait
+docker compose ps
+
+$frontendResponse = Invoke-WebRequest http://127.0.0.1:5173/ -UseBasicParsing
+$docsResponse = Invoke-WebRequest http://127.0.0.1:5173/api/docs -UseBasicParsing
+$status = Invoke-RestMethod http://127.0.0.1:5173/api/status
+
+if ($frontendResponse.StatusCode -ne 200 -or $docsResponse.StatusCode -ne 200 -or $status.backend.status -ne 'running') {
+  throw 'Docker 前端、/api 代理或后端健康检查未通过。'
+}
+'启动与代理烟雾测试通过'
+```
+
+通过标准：`docker compose ps` 中 redis、backend、frontend 都是 `healthy`；前端首页与
+`/api/docs` 返回 200；`/api/status` 的 `backend.status` 为 `running`。容器健康态以
+`docker compose ps` 的 `healthy` 为准。若失败，先运行
+`docker compose logs backend --tail=200`，不要持续 follow 日志。
 
 ### 测试 0：轻量真实案例
 
@@ -630,6 +771,9 @@ B 需要 1 小时机器时间、2 小时人工时间，利润 30 元；
 - `paper_preflight_report.json -> checks.extra_problem_labels.issues = []`
 - 续传相关测试应生成 `checkpoint.json`、`variable_snapshot.pkl`、`variable_snapshot_meta.json`
 - 后端日志出现 `变量快照已恢复` 或 `快照后增量重放`
+- CUMCM 2026 正式投稿前：确认论文附录实际包含完整、可运行源程序。默认自动输出会写入完整
+  脚本/notebook 代码单元及 SHA-256；只有显式启用 `paper_appendix_config.json -> mode=key` 时才是
+  关键摘录展示，且此模式不能得到 `TECHNICAL_PASS`，技术报告也不能替代人工复核。
 - 如果容器环境异常导致 `pandoc`/`xelatex` 不可用，`res.pdf` 和 LaTeX sidecar 可能被跳过；只要 Markdown/Word/JSON 成功，不视为主流程失败，但正式提交前必须补导出 PDF 并复核。
 
 ### 测试 A：断点续传
@@ -667,7 +811,7 @@ B 需要 1 小时机器时间、2 小时人工时间，利润 30 元；
 前端排版选项默认就是 `cumcm2026`；也可以用 curl 直接提交（参考"导出模板选项"一节）：
 
 ```powershell
-curl.exe -X POST http://127.0.0.1:8000/modeling `
+curl.exe -X POST http://127.0.0.1:5173/api/modeling `
   -F "ques_all=某工厂生产 A、B 两种产品……（同测试 0 案例）" `
   -F "comp_template=CHINA" `
   -F "format_output=Markdown" `

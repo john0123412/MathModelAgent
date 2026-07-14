@@ -15,6 +15,7 @@ REPORT_MD = "submission_audit_report.md"
 
 _REQUIRED_FILES = ["res.md", "res.json", "res.docx", "res.pdf"]
 _REPORT_FILES = [
+    "execution_validation_report.json",
     "paper_preflight_report.json",
     "pdf_visual_check.json",
     "export_status.json",
@@ -89,6 +90,30 @@ def _audit_reports(work_dir: str) -> list[dict[str, Any]]:
             {"missing": missing_reports},
         )
     )
+
+    execution = _read_json(os.path.join(work_dir, "execution_validation_report.json"))
+    if execution is None:
+        issues.append(
+            _issue(
+                "execution_validation",
+                False,
+                "error",
+                "无法读取 execution_validation_report.json。",
+            )
+        )
+    else:
+        passed = execution.get("status") == "PASS"
+        issues.append(
+            _issue(
+                "execution_validation",
+                passed,
+                "error",
+                "代码执行、数值可行性和结果来源验证通过。"
+                if passed
+                else "代码执行、数值可行性或结果来源验证未通过。",
+                {"status": execution.get("status")},
+            )
+        )
 
     preflight = _read_json(os.path.join(work_dir, "paper_preflight_report.json"))
     if preflight is None:

@@ -56,9 +56,18 @@ Windows 本机工具读取 res.md -> Pandoc + XeLaTeX 用真实系统字体重�
 标准化依据：官方 2026 论文格式规范页面
 `https://www.mcm.edu.cn/html_cn/node/4cd596519c9eb9fbd866398f6df0caa3.html`
 要求电子版论文为单独 PDF/Word 文件（建议 PDF、≤20MB），第一页为摘要页，
-不放承诺书和编号专用页；支撑材料另行提交，至少包含可运行源程序、数据资料和较大篇幅
-中间结果图表。项目据此把正式 PDF/DOCX 附录控制为“支撑材料清单 + 核心代码摘录”，
-完整 `notebook.ipynb`/脚本保留在支撑材料中，并通过 manifest/audit 追踪。
+不放承诺书和编号专用页；电子版应与纸质版内容和格式一致，论文附录应包含全部完整、可运行
+源程序；支撑材料另行提交，也至少包含必要源程序、数据资料和较大篇幅中间结果图表。
+
+> **完整源码与最终验收**：后处理现在会在附录 B 写入任务目录发现的完整可运行脚本及 notebook
+> 代码单元（不含 notebook 运行输出），并在每份源码标题记录原始 SHA-256。DOCX 生成并刷新
+> manifest 后会生成 `final_acceptance_report.json/md`：只有执行验证、冻结来源、预检、PDF 视觉、
+> 正式字体、主交付文件和完整源码附录均通过时才为 `TECHNICAL_PASS`。该状态仍不替代数学、引用、
+> PDF 人工翻阅及平台规则的人工复核，报告会始终标注 `PENDING_HUMAN_REVIEW`。
+
+> **TeX Live 本机复核边界**：已安装 TeX Live 的 Windows 主机可在执行验证、冻结和正文预检均通过后，
+> 用 `export_cli pdf --local --update-status` 或导出的 `latex_project/` 进行正式字体 PDF 复核。
+> TeX 编译只验证排版和字体，不能把 `execution_validation_report.json = FAIL` 的任务变为可验收论文。
 
 ## 高教社杯 `cumcm2026` 验收要点
 
@@ -67,8 +76,8 @@ Windows 本机工具读取 res.md -> Pandoc + XeLaTeX 用真实系统字体重�
 官方站和知网提交系统；如果新增 Word/DOCX 或 LaTeX 模板，按
 `docs/md/CUMCM2026模板替换指南.md` 替换。
 
-最近一次完成的真实轻量线性规划任务 `20260711-133616-38439fe3` 使用有效的
-OpenAI Responses 兼容运行配置和 `export_profile=cumcm2026`，通过主交付与严格字体验收：
+已归档的 E2B 真实轻量线性规划任务 `20260711-133616-38439fe3` 使用
+OpenAI Responses 兼容运行配置和 `export_profile=cumcm2026`，通过下列主交付与严格字体验收：
 
 - `paper_preflight_report.json`：`PASS`
 - `pdf_visual_check.json`：`PASS`，A4、非空、文本可提取、20MB 文件大小、摘要首页、
@@ -83,6 +92,10 @@ OpenAI Responses 兼容运行配置和 `export_profile=cumcm2026`，通过主交
   利润约为 `2366.67`
 - 本次复核确认 `pdf_visual_check.json -> checks.abstract_first_page` 通过，第一页只包含
   标题、摘要和关键词，不再混入正文“问题重述”。
+- 最新一次真实恢复验收为 `20260713-021852-8d8e948a7a679b5abcd5e76d25894412`：在可信单用户
+  Docker 本地执行覆盖中从 checkpoint 续传，主产物、preflight、PDF visual check、submission
+  audit 和 LaTeX sidecar 均成功。该次只验证受控恢复与技术导出链路，**不**验证远程 E2B、
+  正式字体或“论文附录含全部源码”的正式提交要求。
 - Docker 中官方 Windows 字体缺失时，`SimSun/SimHei/Times New Roman` 会 fallback 到
   `Noto Serif CJK SC`、`Noto Sans CJK SC`、`Liberation Serif`；CUMCM sidecar 中
   `KaiTi` / `STXinwei` / `LiSu` 会优先 fallback 到 `AR PL KaitiM GB`，若仍缺失则
@@ -128,6 +141,9 @@ PDF/sidecar 自动编译会显式禁用 XeLaTeX shell escape；模型或 Markdow
 - raw TeX 已在主 PDF 与 LaTeX sidecar 导出中关闭，正文不要依赖 `\begin{table}`、`\begin{align}`
   等 raw LaTeX 环境；标准 Markdown 表格与 `$...$`、`\(...\)` 数学公式仍可用。
 - `paper_preflight_report.json` 只说明格式门禁和基本证据链通过，不证明数学模型和论文论证正确。
+  对冻结结果与正文不一致这类可明确定位到 `quesN`/摘要的硬失败，工作流只允许一次定向 Writer
+  回修并重新预检；无法定位或回修后仍为 `FAIL` 时不会继续生成候选 PDF。该机制只修复可追溯的
+  文本事实冲突，不能替代人工复算或把不完整的模型结论“润色”为通过。
   预检会额外检查正文引用编号是否都有文末参考文献条目、Markdown 表格是否有
   `表n` 标题、以及两问任务中是否把扩展灵敏度分析误标为可见的 `问题3` 或
   `问题三` 段落。工作流会把原题拆出的正式题目数传入后处理，避免 Writer 自行编出
@@ -149,12 +165,17 @@ PDF/sidecar 自动编译会显式禁用 XeLaTeX shell escape；模型或 Markdow
   替换为中文表达，避免中文竞赛论文中出现突兀英文衔接词；代码块内容不处理。
 - 后处理会清理最终稿和附录代码中可见的提交痕迹词，例如 `用户`、`推断`、
   `估算`、`待验证`，改为 `题目`、`核定`、`测算`、`需核验` 等正式表达。
-- 后处理会重建附录，附录B只保留核心代码摘录，删除批量
-  `print(...)`/`printf`/`console.log` 等控制台输出语句；完整源程序仍保留在
-  附录A列出的支撑材料中。预检新增
-  `checks.appendix_console_noise`，防止控制台报告式源码污染正式 PDF。
-- 后处理会缩短代码附录中纯装饰性的超长分隔线，避免源码页的横向长文本触发
-  `pdf_visual_check.json -> checks.content_margin` 失败。
+- 后处理会重建附录；附录 B 保留全部发现的可运行源码，并为每份源码写入 SHA-256。
+  不再截断为核心代码摘录，也不删除源码中的有效 `print(...)` 等语句。notebook 只导出代码
+  单元，不导出运行输出。`final_acceptance_report.json -> complete_source_appendix` 会同时核对
+  源码标题哈希与正文中的完整代码内容，不能只凭附录 A 文件清单通过。
+- 附录外的装饰性超长代码分隔线仍会缩短；完整源码附录不做截断。若完整源码导致 PDF 页数、
+  边距或安全转义问题，应先模块化/清理源码并重新导出，不能用“以下代码略”冒充完整附录。
+- 如需按国一复刻模板的阅读方式展示算法，可由受控导出流程在任务目录设置
+  `paper_appendix_config.json` 为 `{"mode":"key"}`，并提供已验证的 `key_algorithms.md`：
+  其中只放关键伪代码和核心实现，不能放控制台输出、绝对路径或未执行的示例。此模式的完整源码
+  仍属于支撑材料，`final_acceptance_report.json` 会因 `complete_source_appendix` 不通过而保持
+  非 `TECHNICAL_PASS`；正式提交必须移除该配置或改回 `full`，让附录 B 包含全部完整可运行源码。
 - 后处理会把独占一行的加粗短标签（如 `**假设1：...**`）规范为 Markdown 小标题，
   避免后续段落被 Pandoc 误当成不可换行的 definition-list 标签。
 
@@ -184,9 +205,9 @@ Docker 后端镜像现在默认已安装 Pandoc / TeX Live（含 `fonts-liberati
 缺失时，主流程会跳过 PDF，但仍会生成 `res.md`、`res.json`、`res.docx` 和
 `candidate_manifest.json`。
 
-## 版式要求
+## 版式要求（按 export profile 区分）
 
-默认 PDF 模板约定如下：
+新建建模任务默认使用 `cumcm2026`，其主 PDF 约定如下：
 
 - A4 纸张。
 - 第一页直接为题目、摘要、关键词，摘要页独占第一页；正文从第二页开始。
@@ -200,7 +221,12 @@ Docker 后端镜像现在默认已安装 Pandoc / TeX Live（含 `fonts-liberati
 - 中文正文字体为 `SimSun`。
 - 中文标题/无衬线字体为 `SimHei`。
 - 西文字体为 `Times New Roman`。
-- 页边距为左/右 `3.17cm`，上/下 `2.6cm`。
+- 页边距为左/右 `3.17cm`、上 `3cm`、下 `2.8cm`。
+
+历史兼容的 `default` profile 才使用上/下 `2.6cm`；较早的
+`backend/scripts/export_pdf_local.py` 也是仅支持该默认参考排版的旧脚本。高教社杯/国赛应使用
+下文的 `app.tools.export_cli --profile cumcm2026`，不要把旧脚本的边距或目录选项当作
+`cumcm2026` 的正式口径。
 
 ## 导出方式
 
@@ -345,7 +371,7 @@ python backend\scripts\export_pdf_local.py <task_id>
 
 ```powershell
 cd backend
-uv run python -m app.tools.export_cli pdf --input project\work_dir\<task_id>\res.md --output project\work_dir\<task_id>\res.pdf --profile cumcm2025 --local --update-status
+uv run python -m app.tools.export_cli pdf --input project\work_dir\<task_id>\res.md --output project\work_dir\<task_id>\res.pdf --profile cumcm2026 --local --update-status
 ```
 
 `--update-status` 会同步刷新 `export_status.json`、`pdf_visual_check.json`、

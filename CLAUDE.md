@@ -81,7 +81,7 @@ backend/
         modeler_agent.py      # 数学建模
         coder_agent.py        # 代码生成与执行
         writer_agent.py       # 论文撰写
-      llm/             # LLM 调用层（LiteLLM 封装）
+      llm/             # LLM 调用层（内置 OpenAI Chat/Responses/Anthropic provider）
       prompts/         # 各 Agent 的 prompt 模板
       flows.py         # 编排逻辑（问题拆分、子任务管理）
       workflow.py      # 工作流主入口

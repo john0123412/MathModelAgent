@@ -8,6 +8,18 @@
 - 正式提交前人工复核
 
 自动预检只能检查格式门禁、基础证据链和低成本 PDF 风险，不宣称自动判断论文内容正确。
+自动附录 B 现在会写入发现的完整可运行源码及每份源码的 SHA-256；
+`final_acceptance_report.json -> complete_source_appendix` 会检查附录是否实际包含完整源码。
+但自动报告仍不能替代人工运行源码、核对结果、阅读 PDF/DOCX 或确认最终提交规则。
+
+当前 workflow 还会生成 `problem_contract.json`、`execution_validation.json`、
+`execution_validation_report.json` 与 `frozen_results.json`。这些文件只能证明题面参数、
+代码执行、可行性约束和数值来源可追溯；它们不替代人工复算、数值收敛检查或领域判断。
+
+若正文与冻结结果发生可定位冲突，工作流会最多定向回修一次相应 Writer 章节并重新预检；
+再次 `FAIL` 或无法定位的硬失败会停止 PDF 候选导出。此时先看
+`paper_preflight_report.json -> checks` 和 checkpoint 的 `last_paper_preflight_failure`，
+不要把旧 PDF 当作可提交产物。
 
 ## 摘要
 
@@ -63,6 +75,14 @@
 - 是否说明可行性条件。
 - 是否说明最优解判断依据。
 - 如果使用近似或数值算法，是否说明精度或停止条件。
+- 若题目要求“控制时长”“分阶段升压/降压”或类似策略，是否对每个指定目标时刻给出可执行的
+  控制数值、对应的压力核验值，以及过渡结束后切回/维持的稳态策略；不得只给正向仿真曲线。
+- `execution_validation_report.json` 是否为 `PASS`；每个正式问题是否存在 `executed=true`、
+  `feasible=true` 和能复核 SHA-256 的约束来源。
+- 每个约束来源和图表数据源是否由当前求解/定向回修回合实际新建或更新；不得把 checkpoint
+  中未更新的旧结果文件重新登记为本次计算证据。
+- `frozen_results.json` 中的指标是否与摘要、正文、表格和图题一致；不可行子问题是否没有被称为最优或已完成。
+- 正文声明的遗传算法、Pareto、粒子群等方法是否确实在 notebook/可运行源码中有实现证据。
 
 ## 结果与敏感性分析
 
@@ -100,6 +120,7 @@
 - 如正文引用外部背景、方法或数据来源，是否至少有基础来源；若全文无引用，是否确实没有需要支撑的外部事实。
 - 正文引用编号是否对应。
 - 自动预检会检查编号对应关系；人工仍需确认引用内容真实支撑对应句子。
+- 若论文主题明确为燃油/液压等工程控制，是否没有混入区块链、国际商务等明显跨领域且不相关的参考文献。
 - 参考文献编号是否连续。
 - 引用内容是否支撑正文背景或方法。
 - 是否避免伪造来源。
@@ -108,8 +129,11 @@
 ## 附录和支撑材料
 
 - 是否列出支撑材料。
-- 支撑材料中是否包含完整可运行源码；论文附录B是否只保留核心代码摘录，避免把大量
-  控制台输出语句排进正式 PDF。
+- 支撑材料中是否包含完整可运行源码；同时检查 `final_acceptance_report.json` 的
+  `complete_source_appendix=PASS`，并人工确认论文附录中源码可实际运行、与正文结果对应。
+  不得将附录 A 文件清单或任务目录文件当作论文附录的替代。
+- 若本次仅为阅读性而启用了 `paper_appendix_config.json -> mode=key`，附录 B 的关键伪代码/核心
+  代码摘录只能用于人工理解，不能替代完整源码附录；此状态不得标记为 `TECHNICAL_PASS` 或用于正式提交。
 - `paper_preflight_report.json -> checks.appendix_console_noise.passed` 是否为 `true`。
 - 是否避免泄露本机路径、API key、真实身份信息。
 - 论文正文/PDF 中是否没有承诺书、编号专用页、参赛队号、队员姓名、指导教师、学校名称等身份或封面字段。
@@ -141,6 +165,10 @@
 
 - `paper_preflight_report.json = PASS`；若为 `CONDITIONAL_PASS`，必须逐项查看
   `severity=conditional` 的检查，正式提交前优先修正为 `PASS`，无法修正时需人工接受风险。
+- `execution_validation_report.json = PASS`，`frozen_results.json` 的来源哈希仍有效；旧任务若缺少这些产物，不能按当前数学验收标准通过。
+- `paper_preflight_report.json` 中 `freeze_integrity`、`result_consistency`、
+  `figure_result_consistency`、`infeasible_optimality`、`algorithm_evidence` 和
+  `reference_relevance` 均为通过状态。
 - `paper_preflight_report.json -> checks.result_consistency.passed=true`；该项只覆盖
   已结构化到结果 CSV 的关键事实，不替代人工复算模型和公式。
 - `pdf_visual_check.json = PASS`
@@ -156,6 +184,12 @@
 - `res.pdf` 可打开。
 - `res.docx` 可打开。
 - `candidate_manifest.json` 登记主交付文件。
+- `final_acceptance_report.json -> technical_status = TECHNICAL_PASS`；同时明确理解其
+  `human_review.status = PENDING_HUMAN_REVIEW`，不能将技术通过表述为数学正确或可直接提交。
+- 最终论文附录实际包含全部完整、可运行源程序；不要以附录 A 的文件清单、任务目录文件或
+  `candidate_manifest.json` 代替论文附录内容。
+- 团队已按 2026 规则复核 AI 生成内容的原创性、真实性和准确性；自动工具只可辅助，
+  参赛队须对最终提交承担全部责任。
 - 没有 API key / token / 本机路径 / 真实身份泄露。
 - 如官方发布新模板，已按 `docs/md/CUMCM2026模板替换指南.md` 替换。
 - 提交系统要求的文件格式、大小限制和命名要求已人工确认。

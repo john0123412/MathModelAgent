@@ -5,7 +5,13 @@ import tempfile
 import unittest
 
 from app.core.flows import Flows
-from app.schemas.A2A import ModelerToCoder
+from app.schemas.A2A import (
+    AcceptanceMetric,
+    ExpectedArtifact,
+    ModelPlan,
+    ModelerToCoder,
+    SubtaskPlan,
+)
 
 
 class FakeCodeInterpreter:
@@ -37,6 +43,35 @@ class TestFlows(unittest.TestCase):
         self.assertIn("不得随机生成样本", eda_prompt)
         self.assertIn("不得创建“模拟数据集.csv”", eda_prompt)
         self.assertIn("约束可行性", eda_prompt)
+
+    def test_solution_prompt_carries_structured_subtask_contract(self):
+        plan = ModelPlan(
+            eda="核验题面常量和单位。",
+            subtasks={
+                "ques1": SubtaskPlan(
+                    inputs=["题面资源约束"],
+                    method="定义决策变量、目标函数和全部约束，使用线性规划后逐项回代验证。",
+                    constraints=["变量非负"],
+                    expected_artifacts=[
+                        ExpectedArtifact(path="ques1_results.csv", kind="result_table", description="最优解和目标值"),
+                    ],
+                    acceptance_metrics=[
+                        AcceptanceMetric(key="objective_value", label="最优目标值", comparator="ge", target=0, description="由目标函数计算"),
+                    ],
+                    visualization="绘制可行域边界图。",
+                )
+            },
+            sensitivity_analysis="比较资源上限变化。",
+        )
+        flows = Flows({"ques_count": 1, "ques1": "求最优生产方案。"})
+        prompt = flows.get_solution_flows(
+            flows.questions,
+            ModelerToCoder(model_plan=plan),
+        )["ques1"]["coder_prompt"]
+
+        self.assertIn("建模手结构化交接", prompt)
+        self.assertIn("ques1_results.csv", prompt)
+        self.assertIn("objective_value", prompt)
 
     def test_writer_prompt_includes_structured_result_facts(self):
         with tempfile.TemporaryDirectory() as work_dir:

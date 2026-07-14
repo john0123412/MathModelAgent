@@ -7,6 +7,7 @@ from unittest import mock
 
 from app.config.setting import settings
 from app.schemas.response import ResultModel
+from app.tools.e2b_interpreter import E2BCodeInterpreter
 from app.tools.interpreter_factory import create_interpreter
 from app.tools.local_interpreter import (
     LocalCodeInterpreter,
@@ -69,6 +70,27 @@ class TestInterpreterSecurity(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(interpreter, LocalCodeInterpreter)
         initialize.assert_awaited_once()
 
+    async def test_auto_mode_prefers_remote_when_e2b_is_configured(self):
+        with tempfile.TemporaryDirectory() as work_dir, mock.patch.object(
+            settings, "CODE_INTERPRETER_KIND", "auto"
+        ), mock.patch.object(settings, "E2B_API_KEY", "test-e2b-key"), mock.patch.object(
+            settings, "ALLOW_LOCAL_CODE_EXECUTION", True
+        ), mock.patch.object(
+            E2BCodeInterpreter, "create", new=mock.AsyncMock()
+        ) as create:
+            interpreter = mock.Mock()
+            interpreter.initialize = mock.AsyncMock()
+            create.return_value = interpreter
+            result = await create_interpreter(
+                task_id="task-1",
+                work_dir=work_dir,
+                notebook_serializer=NotebookSerializer(work_dir=work_dir),
+            )
+
+        self.assertIs(result, interpreter)
+        create.assert_awaited_once()
+        interpreter.initialize.assert_awaited_once()
+
     async def test_local_kernel_refuses_to_start_without_proc_protection(self):
         with tempfile.TemporaryDirectory() as work_dir:
             interpreter = LocalCodeInterpreter(
@@ -116,6 +138,33 @@ class TestInterpreterSecurity(unittest.IsolatedAsyncioTestCase):
             "mathmodelagent-kernel-connections",
             kernel_manager.call_args.kwargs["connection_file"],
         )
+
+    async def test_timeout_discards_kernel_and_reports_snapshot_recovery(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            interpreter = LocalCodeInterpreter(
+                task_id="task-1",
+                work_dir=work_dir,
+                notebook_serializer=NotebookSerializer(work_dir=work_dir),
+            )
+            interpreter.execute_code_ = mock.Mock(
+                return_value=[("error", "本地代码执行超过 120 秒，已中断")]
+            )
+
+            with mock.patch(
+                "app.tools.local_interpreter.redis_manager.publish_message",
+                new=mock.AsyncMock(),
+            ), mock.patch.object(
+                interpreter, "_push_to_websocket", new=mock.AsyncMock()
+            ), mock.patch.object(
+                interpreter,
+                "_recover_kernel_after_timeout",
+                new=mock.AsyncMock(return_value=True),
+            ) as recover:
+                _text, errored, error_message = await interpreter.execute_code("x = 1")
+
+        self.assertTrue(errored)
+        self.assertIn("已重启", error_message)
+        recover.assert_awaited_once()
 
 
 class TestLocalInterpreterIsolation(unittest.TestCase):
@@ -236,6 +285,68 @@ class TestLocalInterpreterIsolation(unittest.TestCase):
         self.assertEqual(output[0][0], "error")
         self.assertIn("已中断", output[0][1])
         interpreter.km.interrupt_kernel.assert_called_once()
+
+    def test_watchdog_timeout_returns_when_iopub_is_stalled(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            interpreter = LocalCodeInterpreter(
+                task_id="task-1",
+                work_dir=work_dir,
+                notebook_serializer=NotebookSerializer(work_dir=work_dir),
+                execution_timeout=5,
+            )
+            interpreter.km = mock.Mock()
+            interpreter.kc = mock.Mock()
+            timers = []
+
+            class ImmediateTimer:
+                daemon = False
+
+                def __init__(self, _seconds, callback):
+                    self.callback = callback
+                    self.cancelled = False
+                    timers.append(self)
+
+                def start(self):
+                    self.callback()
+
+                def cancel(self):
+                    self.cancelled = True
+
+            with mock.patch(
+                "app.tools.local_interpreter.threading.Timer", ImmediateTimer
+            ):
+                output = interpreter.execute_code_("while True: pass")
+
+        self.assertEqual(output[0][0], "error")
+        self.assertIn("超过 5 秒", output[0][1])
+        interpreter.km.interrupt_kernel.assert_called_once()
+        self.assertTrue(timers[0].cancelled)
+
+    def test_posix_watchdog_uses_kernel_process_and_is_cleaned_up(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            interpreter = LocalCodeInterpreter(
+                task_id="task-1",
+                work_dir=work_dir,
+                notebook_serializer=NotebookSerializer(work_dir=work_dir),
+                execution_timeout=5,
+            )
+            interpreter.km = mock.Mock()
+            interpreter.km.provisioner.pid = 4321
+            interpreter.kc = mock.Mock()
+            interpreter.kc.get_iopub_msg.return_value = {
+                "msg_type": "status",
+                "content": {"execution_state": "idle"},
+            }
+            watchdog = mock.Mock()
+            watchdog.poll.return_value = None
+
+            with mock.patch("app.tools.local_interpreter.os.name", "posix"), mock.patch(
+                "app.tools.local_interpreter.subprocess.Popen", return_value=watchdog
+            ) as popen:
+                interpreter.execute_code_("1 + 1")
+
+        self.assertIn("kill -INT 4321", popen.call_args.args[0][2])
+        watchdog.terminate.assert_called_once()
 
     def test_restart_cleans_connection_files_when_shutdown_fails(self):
         with tempfile.TemporaryDirectory() as work_dir:

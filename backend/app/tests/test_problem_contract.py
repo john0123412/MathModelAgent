@@ -1,0 +1,261 @@
+"""题面参数契约和建模输入守卫测试。"""
+
+import json
+import unittest
+
+from app.core.agents.modeler_agent import ModelerAgent
+from app.core.flows import Flows
+from app.core.llm.types import StandardResponse
+from app.schemas.A2A import (
+    AcceptanceMetric,
+    CoordinatorToModeler,
+    ExpectedArtifact,
+    ModelPlan,
+    ModelerToCoder,
+    SubtaskPlan,
+)
+from app.schemas.problem_contract import ProblemContract, build_problem_contract, validate_modeler_plan
+
+
+HIGH_PRESSURE_PIPE_PROBLEM = """
+流量系数 C=0.85。问题一：分别在 2 秒、5 秒、10 秒内完成压力调节。
+问题二：使高压油管压力稳定在 100 MPa。
+问题三：新增第二个喷油嘴，并设计减压阀控制方案。
+"""
+
+HIGH_PRESSURE_PIPE_FIXED_CONDITIONS = """
+高压油管的内腔长度为500mm，内直径为10mm，供油入口 A 处小孔的直径为1.4mm。
+单向阀每打开一次后就要关闭10ms。喷油器每秒工作10次，每次工作时喷油时间为2.4ms。
+高压油泵在入口 A 处提供的压力恒为160 MPa，高压油管内的初始压力为100 MPa。
+流量系数 C=0.85。
+"""
+
+HIGH_PRESSURE_PIPE_Q1_CONTROL = HIGH_PRESSURE_PIPE_FIXED_CONDITIONS + """
+如果要将高压油管内压力稳定在 100MPa 左右，如何设置单向阀每次开启的时长？
+如果将压力从 100MPa 增加到 150MPa，并分别经过约 2 秒、5 秒、10 秒后稳定，开启时长应如何调整？
+"""
+
+
+class TestProblemContract(unittest.TestCase):
+    def test_extracts_hard_parameter_and_required_outputs(self):
+        contract = build_problem_contract(HIGH_PRESSURE_PIPE_PROBLEM)
+        self.assertEqual(contract.immutable_parameters[0].value, 0.85)
+        self.assertFalse(contract.immutable_parameters[0].mutable)
+        self.assertTrue(
+            {"problem1_transition_times", "target_pressure_100_mpa", "two_injectors", "relief_valve_control"}
+            .issubset({item.key for item in contract.required_requirements})
+        )
+        self.assertIn(
+            "physical_simulation_evidence",
+            {item.key for item in contract.required_requirements},
+        )
+
+    def test_rejects_overridden_coefficient_and_missing_requirements(self):
+        result = validate_modeler_plan(
+            build_problem_contract(HIGH_PRESSURE_PIPE_PROBLEM),
+            {"ques1": "设流量系数 C=0.6，并只研究 2 秒方案。"},
+        )
+        self.assertFalse(result.valid)
+        self.assertIn("C=0.6", result.violations[0])
+        self.assertIn("5 秒", result.missing_requirements[0])
+
+    def test_accepts_complete_plan_that_preserves_hard_parameter(self):
+        result = validate_modeler_plan(
+            build_problem_contract(HIGH_PRESSURE_PIPE_PROBLEM),
+            {
+                "ques1": "使用题面流量系数 C=0.85，分别给出 2 秒、5 秒和 10 秒过渡控制。",
+                "ques2": "以 100 MPa 为硬约束，检验稳态均值和波动。",
+                "ques3": "按两个喷油嘴错峰建模，并给出减压阀周期控制。",
+            },
+        )
+        self.assertTrue(result.valid)
+
+    def test_coder_prompt_carries_contract_and_infeasibility_rule(self):
+        contract = build_problem_contract(HIGH_PRESSURE_PIPE_PROBLEM)
+        flows = Flows({"ques_count": 1, "ques1": "使压力稳定在 100 MPa"}, contract)
+        prompts = flows.get_solution_flows(
+            flows.questions, ModelerToCoder(questions_solution={"ques1": "求解"})
+        )
+        self.assertIn("流量系数（C） = 0.85", prompts["ques1"]["coder_prompt"])
+        self.assertIn("禁止称为最优解", prompts["ques1"]["coder_prompt"])
+
+    def test_extracts_fixed_pipe_conditions_and_rejects_wrong_frequency(self):
+        contract = build_problem_contract(HIGH_PRESSURE_PIPE_FIXED_CONDITIONS)
+        values = {item.key: item.value for item in contract.immutable_parameters}
+        self.assertEqual(values["pipe_length"], 500.0)
+        self.assertEqual(values["pipe_inner_diameter"], 10.0)
+        self.assertEqual(values["injection_frequency"], 10.0)
+        result = validate_modeler_plan(
+            contract,
+            {"ques1": "油管长度 L=500 mm，内径 D=10 mm，喷油器工作频率为100次/秒。"},
+        )
+        self.assertFalse(result.valid)
+        self.assertIn("100次/秒", " ".join(result.violations))
+
+    def test_extracts_problem_one_valve_duration_deliverables(self):
+        contract = build_problem_contract(HIGH_PRESSURE_PIPE_Q1_CONTROL)
+        self.assertIn(
+            "problem1_valve_duration_outputs",
+            {item.key for item in contract.required_requirements},
+        )
+
+
+class SequencedModel:
+    def __init__(self, responses: list[str]):
+        self.responses = iter(responses)
+
+    async def chat(self, **_kwargs):
+        return StandardResponse(content=next(self.responses))
+
+
+class TestModelerContractGuard(unittest.IsolatedAsyncioTestCase):
+    async def test_modeler_retries_when_plan_overrides_hard_parameter(self):
+        contract = build_problem_contract(HIGH_PRESSURE_PIPE_PROBLEM)
+        agent = ModelerAgent(
+            task_id="contract-test",
+            model=SequencedModel(
+                [
+                    '{"ques1": "设流量系数 C=0.6，仅研究2秒"}',
+                    json.dumps(
+                        {
+                            "schema_version": "mathmodel.model-plan.v1",
+                            "eda": "核验题设参数与单位。",
+                            "subtasks": {
+                                "ques1": {
+                                    "inputs": ["题面流量系数 C=0.85", "题设压力目标"],
+                                    "method": "以质量守恒状态方程进行数值仿真，分别计算2秒、5秒和10秒；并按两个喷油嘴和减压阀控制验证100 MPa目标。",
+                                    "constraints": ["使用 C=0.85", "压力目标为100 MPa"],
+                                    "expected_artifacts": [
+                                        {"path": "ques1_results.csv", "kind": "result_table", "description": "稳态和过渡控制结果"},
+                                        {"path": "ques1_series.csv", "kind": "time_series", "description": "压力时序和流量平衡"},
+                                    ],
+                                    "acceptance_metrics": [
+                                        {"key": "pressure_error", "label": "压力目标误差", "comparator": "le", "target": 1, "unit": "MPa", "description": "与100 MPa目标比较"},
+                                        {"key": "mass_balance_residual", "label": "质量守恒残差", "comparator": "le", "target": 0.01, "description": "由供回油流量平衡计算"},
+                                    ],
+                                    "visualization": "压力时序图。",
+                                }
+                            },
+                            "sensitivity_analysis": "扰动阀门时长并比较压力误差。",
+                        },
+                        ensure_ascii=False,
+                    ),
+                ]
+            ),
+        )
+
+        result = await agent.run(
+            CoordinatorToModeler(
+                questions={"ques_count": 3, "ques1": "题目一"},
+                ques_count=3,
+                problem_contract=contract,
+            )
+        )
+
+        self.assertIn("C=0.85", result.questions_solution["ques1"])
+        self.assertTrue(
+            any("不是可执行的完整 ModelPlan" in msg.get("content", "") for msg in agent.chat_history)
+        )
+
+
+class TestStructuredModelPlan(unittest.TestCase):
+    def _linear_plan(self) -> ModelPlan:
+        return ModelPlan(
+            eda="核验题设资源参数、单位和可行域边界。",
+            subtasks={
+                "ques1": SubtaskPlan(
+                    inputs=["题面机器时间、人工时间和单位利润"],
+                    method="定义决策变量，写出目标函数和全部资源约束，采用线性规划求解并逐项回代约束。",
+                    constraints=["产品数量非负", "机器与人工资源不得超过题设上限"],
+                    expected_artifacts=[
+                        ExpectedArtifact(path="ques1_results.csv", kind="result_table", description="最优决策变量与目标函数值"),
+                        ExpectedArtifact(path="ques1_constraints.csv", kind="constraint_table", description="各资源约束的松弛量"),
+                    ],
+                    acceptance_metrics=[
+                        AcceptanceMetric(key="objective_value", label="最优目标值", comparator="ge", target=0, unit="元", description="由线性目标函数计算"),
+                        AcceptanceMetric(key="max_constraint_violation", label="最大约束违反量", comparator="le", target=0, description="逐项回代资源约束"),
+                    ],
+                    visualization="绘制可行域边界和资源敏感性折线图。",
+                )
+            },
+            sensitivity_analysis="将机器时间增加10小时，比较最优目标值变化。",
+        )
+
+    def test_linear_programming_profile_requires_machine_readable_evidence(self):
+        contract = build_problem_contract(
+            "某工厂最优生产 A、B 产品，最大利润，受机器时间和人工时间资源约束。"
+        )
+        response = ModelerToCoder(model_plan=self._linear_plan())
+        result = validate_modeler_plan(
+            contract,
+            response,
+            expected_question_keys={"ques1"},
+            questions={"ques1": "求最优生产方案和最大利润。"},
+        )
+        self.assertTrue(result.valid, result.model_dump_json())
+        self.assertIn(
+            "linear_programming_evidence",
+            {item.key for item in contract.required_requirements},
+        )
+        self.assertIn("预期产物", response.questions_solution["ques1"])
+
+    def test_exact_question_coverage_is_checked(self):
+        plan = self._linear_plan()
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1", "ques2"},
+        )
+        self.assertFalse(result.valid)
+        self.assertIn("ques2", " ".join(result.missing_requirements))
+
+    def test_linear_programming_sensitivity_subtask_need_not_repeat_constraint_table(self):
+        plan = self._linear_plan()
+        plan.subtasks["ques2"] = SubtaskPlan(
+            inputs=["问题一最优解与机器时间增加10小时的情景"],
+            method="在同一线性规划模型下替换机器时间上限，重新求解并比较目标值变化。",
+            constraints=["人工时间约束保持不变", "产品数量保持非负"],
+            expected_artifacts=[
+                ExpectedArtifact(
+                    path="ques2_results.csv",
+                    kind="result_table",
+                    description="扩容情景的最优解与利润变化",
+                )
+            ],
+            acceptance_metrics=[
+                AcceptanceMetric(
+                    key="profit_change",
+                    label="扩容后的利润变化",
+                    comparator="ge",
+                    target=0,
+                    unit="元",
+                    description="比较两次线性规划求解的目标值",
+                )
+            ],
+            visualization="绘制扩容前后的产品组合和利润对比图。",
+        )
+        result = validate_modeler_plan(
+            build_problem_contract(
+                "某工厂最优生产 A、B 产品，最大利润，受机器时间和人工时间资源约束。"
+            ),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1", "ques2"},
+            questions={"ques1": "求最优方案", "ques2": "机器时间增加10小时后的利润变化"},
+        )
+        self.assertTrue(result.valid, result.model_dump_json())
+
+    def test_generic_profiles_are_selected_by_problem_language(self):
+        data_contract = build_problem_contract("附件给出样本数据，请清洗数据并建立回归预测模型。")
+        physics_contract = build_problem_contract("研究流量和压力随时间演化的物理仿真系统。")
+        self.assertIn(
+            "data_analysis_evidence",
+            {item.key for item in data_contract.required_requirements},
+        )
+        self.assertIn(
+            "physical_simulation_evidence",
+            {item.key for item in physics_contract.required_requirements},
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -18,6 +18,7 @@ def _write_required_success_files(work_dir: str, font_resolution: list[dict]) ->
         with open(os.path.join(work_dir, filename), "w", encoding="utf-8") as f:
             f.write("ok")
     _write_json(work_dir, "paper_preflight_report.json", {"status": "PASS"})
+    _write_json(work_dir, "execution_validation_report.json", {"status": "PASS"})
     _write_json(work_dir, "pdf_visual_check.json", {"status": "PASS"})
     _write_json(
         work_dir,
@@ -120,6 +121,28 @@ class TestSubmissionAudit(unittest.TestCase):
         preflight_check = next(item for item in report["checks"] if item["id"] == "paper_preflight")
         self.assertFalse(preflight_check["passed"])
         self.assertEqual(preflight_check["severity"], "error")
+
+    def test_failed_execution_validation_fails_submission_audit(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_required_success_files(
+                work_dir,
+                [
+                    {
+                        "variable": "mainfont",
+                        "preferred": "Times New Roman",
+                        "actual": "Times New Roman",
+                        "fallback": "Liberation Serif",
+                        "source": "profile",
+                    }
+                ],
+            )
+            _write_json(work_dir, "execution_validation_report.json", {"status": "FAIL"})
+
+            report = audit_submission(work_dir)
+
+        self.assertEqual(report["status"], "FAIL")
+        check = next(item for item in report["checks"] if item["id"] == "execution_validation")
+        self.assertFalse(check["passed"])
 
     def test_official_fonts_pass_and_report_files_are_written(self):
         with tempfile.TemporaryDirectory() as work_dir:

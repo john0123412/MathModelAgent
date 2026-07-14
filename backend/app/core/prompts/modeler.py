@@ -132,6 +132,10 @@ MODELER_PROMPT = """
 
 # 题意边界（严格遵守，防止题外假设）
 
+- 用户输入可能包含 `problem_contract`。其中 `immutable_parameters` 是题面硬事实，必须原样保留；
+  `required_requirements` 是必须逐项覆盖的交付要求。不得把题面明确的部件、参数或目标改为另一种系统结构。
+- 若参数契约与建模直觉冲突，以题面参数契约为准；可另外提出敏感性分析，但不得覆盖主模型中的题面值。
+
 - **禁止杜撰题目未给出的数值型参数**：不得自行引入题目没有提供的预算、升级成本、单位成本、政策补贴/罚款等参数。所有数值必须来自题目原文、题目提供的数据文件，或代码手统计得到的结果。
 - 如果为了让分析更完整，确实需要引入题目未给出的假设性参数（如市场平均成本、行业经验系数），**必须单独列为"扩展假设"**，并说明其为**假设性外推、非题目给定条件**，不得混入模型主结论或摘要式表达。
 - 每个出现在方案中的关键数字，必须在描述中说明其来源类别：**题目原文 / 数据统计 / 文献引用 / 假设性外推（需在扩展假设中注明）**，四选一，不能笼统写"经验值"而不说明依据。
@@ -139,23 +143,44 @@ MODELER_PROMPT = """
 
 ---
 
-# 输出规范
+# 输出规范（严格 ModelPlan，不能退化为自由文本字典）
 
-以 JSON 的形式输出，需遵守以下格式：
+只输出一个 JSON 对象，不要 Markdown 代码围栏。`subtasks` 的键必须与输入
+`questions` 内的正式 `quesN` **精确一致**：不得漏题、不得编造 `ques4`、不得把
+EDA 或敏感性分析放进 `subtasks`。
+
 ```json
 {
-  "eda": "<数据分析EDA方案，含数据清洗策略、探索性分析内容、可视化方案>",
-  "ques1": "<问题1的问题类型判断、模型选择理由、建模思路、求解方法、验证策略、可视化方案>",
-  "quesN": "<问题N同上>",
-  "sensitivity_analysis": "<需要分析的关键参数、变动范围、评估指标、可视化方案>"
+  "schema_version": "mathmodel.model-plan.v1",
+  "eda": "说明数据是否真实存在；无数据时只做参数、量纲与可行域核验。",
+  "subtasks": {
+    "ques1": {
+      "inputs": ["题面原文的机器时间、人工时间、利润参数", "附件A.csv（如存在）"],
+      "method": "明确决策变量、目标函数与全部约束；采用线性规划并用独立约束核验复算。",
+      "constraints": ["x_A,x_B>=0", "题面资源上限不可改写"],
+      "expected_artifacts": [
+        {"path": "ques1_results.csv", "kind": "result_table", "description": "最优决策变量、目标值及计算口径"},
+        {"path": "ques1_constraints.csv", "kind": "constraint_table", "description": "每条资源约束的左端、右端与松弛量"},
+        {"path": "ques1_plot_data.csv", "kind": "figure_data", "description": "可行域或敏感性图的原始数据"}
+      ],
+      "acceptance_metrics": [
+        {"key": "objective_value", "label": "最优目标值", "comparator": "ge", "target": 0, "unit": "元", "description": "由结果表中的目标函数直接计算"},
+        {"key": "max_constraint_violation", "label": "最大约束违反量", "comparator": "le", "target": 0, "unit": "题设单位", "description": "逐项代入全部约束得到"}
+      ],
+      "visualization": "用可行域/约束边界图或敏感性折线图，并保存对应原始数据。"
+    }
+  },
+  "sensitivity_analysis": "明确扰动参数、范围、评价指标和图数据；它不是额外正式问题。"
 }
 ```
-* 根据实际问题数量动态生成 ques1, ques2...quesN
 
-## 输出约束
-- JSON key 只能是: eda, ques1, quesN, sensitivity_analysis
-- 严格保持单层JSON结构
-- 键值对值类型：字符串
-- 禁止嵌套/多级JSON
-- **每个value要详细充实，不要一笔带过**
+## 每个 `quesN` 的硬性内容
+
+1. `inputs`：列出题面、附件、已定义常量的来源；不得把猜测的经验值混入。
+2. `method`：写清变量、方程/目标函数、算法和独立复算方式。优化问题必须出现决策变量、目标函数与约束；物理题必须说明状态方程或守恒关系及单位制。
+3. `constraints`：列出题面硬约束、物理边界或统计划分边界；不满足时必须输出不可行证据。
+4. `expected_artifacts`：至少一个 `result_table`、`time_series` 或 `dataset` 数值产物；PNG 不是证据。需要图时同时列出 `figure_data`。
+5. `acceptance_metrics`：至少一个可从结构化结果复算的指标，包含比较符、阈值/目标、单位和计算口径。不要以“结果合理”“图像平滑”充当指标。
+
+题面参数契约中的领域 profile 会额外要求：线性规划保留目标和约束表；数据分析保留数据来源、清洗/划分及误差/统计指标；物理仿真保留时序/扫描数据、守恒或残差指标。所有值均是**执行前计划**，不是虚构的计算结果。
 """

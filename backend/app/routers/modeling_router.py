@@ -22,6 +22,7 @@ from app.utils.common_utils import (
 )
 from app.tools.candidate_exporter import write_candidate_manifest
 from app.tools.submission_audit import write_submission_audit_report
+from app.tools.final_acceptance import write_final_acceptance_report
 import os
 import asyncio
 import shutil
@@ -59,6 +60,13 @@ def _finalize_docx_and_manifest(
         write_submission_audit_report(work_dir)
     except Exception as e:
         logger.error(f"submission_audit_report 刷新失败: {type(e).__name__}")
+    # The final report requires a manifest as a primary deliverable.  Refresh
+    # once before and once after it so the manifest also records the report.
+    write_candidate_manifest(work_dir, task_id)
+    try:
+        write_final_acceptance_report(work_dir)
+    except Exception as e:
+        logger.error(f"final_acceptance_report 生成失败: {type(e).__name__}")
     write_candidate_manifest(work_dir, task_id)
 
 

@@ -250,6 +250,58 @@ print("=" * 60)
 4. Document process through visualization at key stages
 5. Verify before completion: all requested outputs generated, files properly saved
 
+# TRUSTED EXECUTION EVIDENCE (MANDATORY FOR EACH FORMAL quesN)
+- Do **not** create or edit `execution_validation.json` yourself. It is a
+  backend-owned manifest; hand-written `tasks`, hashes, or top-level metrics are
+  not an accepted handoff for newly generated work. Historical manifests remain
+  readable only for backward-compatible task recovery.
+- After `execute_code` has written each formal question's task-relative
+  CSV/JSON/TXT result file (and any figure data file), call
+  `record_execution_evidence`. Submit only: `subtask_id` (`quesN`), each
+  constraint's finite numeric `actual`, comparison and target/bounds, its
+  `source_path`, the Chinese metrics, and optional figure `path`/`data_path`.
+  The backend validates paths, computes SHA-256, calculates `feasible`, and
+  atomically updates the shared manifest without deleting other questions.
+- `record_execution_evidence` is an Agent tool shown in the tool list; it is
+  **not** importable inside the Python notebook. Never try
+  `from __main__ import record_execution_evidence`, never call it from
+  `execute_code`, and never write a replacement manifest by hand.
+- Use one tool action per turn: execute or inspect one calculation first; only
+  after its result files are written, make a separate evidence-tool call. The
+  cited result and figure-data files must have been created or updated by this
+  current Coder turn, not reused from an earlier checkpoint.
+- A constraint source must be a task-relative numerical result file, never a
+  PNG. Every metric requires an id, Chinese label, finite value, unit, and a
+  concrete explanation. Figures require a task-relative image path and the
+  task-relative data source that produced it.
+- For optimization questions, metrics must include the objective value and
+  every decision variable used in the reported optimum (including each
+  sensitivity scenario's new decision vector). Do not record only profit
+  deltas or residuals: the Writer may not infer omitted decision values.
+- If the tool replies `ok: false` or `feasible: false`, read its errors/results,
+  fix the code or evidence file, rerun the calculation, then submit that one
+  `quesN` again. Do not claim optimality or completion merely because code ran.
+- Before your final response, ensure every formal question has been recorded by
+  this tool. Prose, screenshots, and a claimed success never substitute for
+  structured execution evidence.
+- 若题面契约要求“问题一单向阀开启时长”，调用
+  `record_execution_evidence(subtask_id="ques1", ...)` 时的 `metrics` 必须逐项写入下列 id，
+  数值必须来自本次实际仿真并同时在 `ques1_results.csv` 留存：
+  `q1_steady_100_open_duration`、`q1_steady_150_open_duration`、
+  `q1_transition_2s_open_duration`、`q1_transition_5s_open_duration`、
+  `q1_transition_10s_open_duration`。每个过渡方案还必须在 constraints 中用带 SHA-256
+  的结果 CSV 验证目标时刻压力误差；到达 150 MPa 后的稳态开启时长也必须明确记录。
+
+# PAPER-FACING KEY ALGORITHM NOTE (MANDATORY WHEN CODE IS NONTRIVIAL)
+- 除可运行源码外，在任务目录维护一个 `key_algorithms.md`。它服务于论文附录的“关键伪代码/核心实现”版式，
+  不是执行证据，也不能替代完整源码或结果 CSV。
+- 文件必须只包含 1--3 个与正式 `quesN` 对应的短小 Markdown 小节：每节先用 6--18 行伪代码说明
+  输入、核心迭代/求解、停止条件与输出，再给出至多 40 行的关键 Python 或 MATLAB 风格代码片段。
+  片段必须来自本次实际运行算法的核心计算；禁止粘贴 notebook 日志、图表绘制样板、import 列表、密钥、
+  绝对路径或未经执行的“示意代码”。
+- 每次修改正式求解算法时同步更新相应小节；若题目很简单，可明确写“本题为闭式/线性规划求解，核心步骤如下”，
+  仍给出真实决策变量、约束检查与结果落盘的伪代码。
+
 # PERFORMANCE CRITICAL
 - Prefer vectorized operations over loops
 - Use efficient data structures (csr_matrix for sparse data)

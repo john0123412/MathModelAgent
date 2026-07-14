@@ -36,10 +36,10 @@
 - 🤝 HIL 人机协作：当前只实现 `HUMAN_MODEL_GATE_ENABLED` 的建模方案确认门禁；通用 6 种动作尚未接入前端/工作流
 - 🛡️ 容错与续传：已实现基础重试、错误反思、断点续传和变量快照；Fallback Hand Off / Evaluator Shadow Mode / Feedback Rerun 尚未形成完整闭环
 
-## 当前代码实现状态（2026-07-11 审计）
+## 当前代码实现状态（2026-07-13 核对）
 
 - 已实现：FastAPI/Vue WebUI 主流程、默认 E2B 隔离代码执行、OpenAI/Responses/Anthropic provider、断点续传、变量快照、实时消息注入、多源文献检索、建模方案审批、任务文件打包下载、token 聚合统计、CUMCM2026 导出和提交审计。
-- 有明确边界：`/save-api-config` 只修改当前进程配置，前后端都不持久化浏览器填写的密钥；`/track` 是 best-effort 单进程聚合，不是供应商账单。Docker 默认仅监听本机，任务文件下载受单文件名和附件策略限制。
+- 有明确边界：`/save-api-config` 只修改当前进程配置，前后端都不持久化浏览器填写的密钥；`/track` 是 best-effort 单进程聚合，不是供应商账单。Docker 默认仅监听本机，任务文件下载受单文件名和附件策略限制。CUMCM 2026 当前自动附录 B 仅输出核心代码摘录，完整 notebook/脚本只列入支撑材料；技术审计 `PASS` 不代表已满足“论文附录含全部完整可运行源码”的正式要求，提交前必须人工补入或改造导出链路。
 - 未接入主流程：RAG、通用 HIL 6 种动作、Fallback Hand Off、Evaluator Shadow Mode、Feedback Rerun、Daytona、LiteLLM runtime、视觉模型、R/MATLAB 执行链路。
 - 最近验证：Docker 容器内后端单测、Ruff（含安全规则）、Bandit、pip-audit、前端 TypeScript/生产构建和生产依赖审计均已运行；Windows 本机 Node 工具链仍不主动使用。
 
@@ -76,6 +76,18 @@ skills 侧可沉淀建模规范、模型选择、易错模式和评分标准；W
 
 **✅ 验收与审计**
 WebUI 主流程当前使用 `paper_preflight_report`、`pdf_visual_check`、`submission_audit_report` 等审计文件；Typst 侧 9 步验收属于 skills 资源目标，不代表 WebUI 已默认执行 Typst 编译。
+
+**🔒 实验性证据链门禁**
+skills 工作流新增 `2a-method-validation`、`3a-result-freeze` 与
+`6a-independent-audit`：分别用于小型方法 PoC 与人工选型、关键数值及来源哈希冻结、
+以及独立可追溯审计。`1start-mathmodel` 会用本地 workflow guard 指示恢复位置。
+这些工件仅写入正在处理的 skill 工作区；它们不改变 FastAPI/Vue WebUI 的默认
+Coordinator/Modeler/Coder/Writer 流程、导出 profile 或提交审计口径，也不证明数学模型正确。
+
+**🧭 渐进式路由与 Codex 分发**
+`skills/_references/references/algorithm-routing.md` 会先按题型路由，再按需加载规范库章节，
+避免把全部算法资料塞入单次上下文。仓库根目录的 `.codex-plugin/plugin.json` 可将现有
+`skills/` 作为 Codex plugin 分发；它不创建个人 marketplace、不自动安装，也不改变 WebUI。
 
 **🔧 可组合、可扩展**
 skills 资源可继续探索单阶段调用、模板扩展和 Typst 生态排版；WebUI 主应用的贡献仍需要按后端/前端/导出链路分别评估。
@@ -203,9 +215,24 @@ docker-compose up
 
 现在你可以访问：
 - 前端界面：http://localhost:5173
-- 后端API：http://localhost:8000
+- Docker API（推荐经前端代理访问）：http://localhost:5173/api
+- 后端直连调试：http://localhost:8000
 
 Compose 端口仅绑定 `127.0.0.1`，该开发部署不应直接公开到公网。
+
+默认 Docker 模式使用 E2B 远程代码沙箱；缺少 `E2B_API_KEY` 时会安全失败，不会自动在后端
+执行模型生成代码。可信的单用户本机如需临时启用本地 Docker 自动降级，可运行：
+
+```powershell
+.\scripts\docker-local-execution.ps1 -Action Start
+# 续传已有 checkpoint 任务：
+.\scripts\docker-local-execution.ps1 -Action Resume -TaskId <task_id>
+# 完成后恢复默认 remote 安全模式：
+.\scripts\docker-local-execution.ps1 -Action RestoreRemote
+```
+
+本地模式会优先使用 E2B，E2B 不可用时才使用本地解释器；不要把
+`ALLOW_LOCAL_CODE_EXECUTION=true` 写入普通 `backend/.env.dev`，也不要用于共享或公开部署。
 
 3. 配置
 

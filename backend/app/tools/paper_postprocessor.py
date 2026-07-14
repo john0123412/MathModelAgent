@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
 import csv
 import json
 import os
@@ -10,6 +11,11 @@ import re
 from dataclasses import dataclass
 
 from app.utils.log_util import logger
+from app.tools.result_integrity import (
+    build_frozen_result_summary,
+    metric_aliases,
+    validate_result_freeze,
+)
 
 
 REFERENCE_HEADING_RE = re.compile(
@@ -35,6 +41,7 @@ NO_SUPPORT_MATERIAL_RE = re.compile(r"本论文没有支撑材料")
 HEADING_RE = re.compile(r"(?m)^#{1,6}\s+(.+?)\s*$")
 ABSTRACT_HEADING_RE = re.compile(r"(?m)^#{1,6}\s*摘要\s*$")
 KEYWORDS_RE = re.compile(r"\*{0,2}\s*关键词\s*\*{0,2}\s*[:：]\s*(.+)")
+CJK_INLINE_SPACE_RE = re.compile(r"(?<=[\u4e00-\u9fff])[ \t]+(?=[\u4e00-\u9fff])")
 KEYWORDS_HEADING_RE = re.compile(
     r"(?ms)^#{1,6}\s*关键词\s*\n+(?P<keywords>.*?)(?=\n#{1,6}\s|\Z)"
 )
@@ -64,6 +71,26 @@ CLAIM_SENTENCE_RE = re.compile(r"[^。！？.!?\n]*(?:最优|利润|提高|增�
 NUMERIC_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:%|元|小时|件|吨|亩|分|倍|年|万元)?")
 PLAIN_NUMBER_RE = re.compile(r"(?<![A-Za-z_\\])[-+]?\d+(?:\.\d+)?(?![A-Za-z_])")
 STRONG_WORDING_RE = re.compile(r"证明|唯一|显著优于|最可靠|精确预测")
+OPTIMALITY_CLAIM_RE = re.compile(r"最优(?:解|方案|控制|参数)?|最佳(?:解|方案)?|Pareto(?:最优)?|帕累托(?:最优)?")
+ALGORITHM_CLAIMS = {
+    "genetic_algorithm": (
+        re.compile(r"遗传算法|genetic\s+algorithm", re.IGNORECASE),
+        ("遗传算法", "genetic algorithm", "deap", "pymoo", "geneticalgorithm"),
+    ),
+    "pareto_optimization": (
+        re.compile(r"Pareto|帕累托", re.IGNORECASE),
+        ("pareto", "pymoo", "nsga", "nondominated"),
+    ),
+    "particle_swarm": (
+        re.compile(r"粒子群|particle\s+swarm|PSO", re.IGNORECASE),
+        ("粒子群", "particle swarm", "pyswarms"),
+    ),
+}
+FUTURE_ALGORITHM_CONTEXT_RE = re.compile(
+    r"(?:可|可以|建议|拟|将|未来|后续|进一步|改进).{0,32}"
+    r"(?:遗传算法|genetic\s+algorithm|Pareto|帕累托|粒子群|particle\s+swarm|PSO)",
+    re.IGNORECASE,
+)
 RANDOM_SIMULATION_RE = re.compile(
     r"Monte[\s_-]*Carlo|蒙特卡洛|随机模拟|随机扰动|随机生成样本|模拟样本|模拟数据集",
     re.IGNORECASE,
@@ -85,7 +112,6 @@ DETERMINISTIC_NO_SAMPLE_MARKERS = (
     "参数确定不变",
 )
 MAX_CODE_SEPARATOR_CHARS = 48
-MAX_APPENDIX_CODE_LINES = 240
 MAX_APPENDIX_CONSOLE_LINES = 20
 NUMERIC_CONSISTENCY_TOLERANCE = 0.05
 LONG_CODE_SEPARATOR_RE = re.compile(
@@ -185,7 +211,10 @@ _SUPPORT_EXCLUDED_FILENAMES = {
     "variable_snapshot.pkl",
     "variable_snapshot_meta.json",
     "test_save.png",
+    "paper_appendix_config.json",
 }
+_PAPER_APPENDIX_CONFIG = "paper_appendix_config.json"
+_KEY_ALGORITHM_NOTE = "key_algorithms.md"
 
 
 @dataclass(frozen=True)
@@ -368,6 +397,18 @@ def normalize_markdown_headings(markdown: str) -> str:
     if not ABSTRACT_HEADING_RE.search(markdown):
         markdown = BARE_ABSTRACT_HEADING_RE.sub("## 摘要", markdown, count=1)
     return BOLD_KEYWORDS_HEADING_RE.sub("## 关键词", markdown)
+
+
+def normalize_cjk_inline_spacing(markdown: str) -> str:
+    """Remove accidental spaces inside Chinese prose without touching code fences."""
+    parts: list[str] = []
+    cursor = 0
+    for match in FENCED_CODE_BLOCK_RE.finditer(markdown):
+        parts.append(CJK_INLINE_SPACE_RE.sub("", markdown[cursor : match.start()]))
+        parts.append(match.group(0))
+        cursor = match.end()
+    parts.append(CJK_INLINE_SPACE_RE.sub("", markdown[cursor:]))
+    return "".join(parts)
 
 
 def _chinese_problem_number(text: str) -> int | None:
@@ -911,8 +952,44 @@ def collect_support_materials(work_dir: str) -> list[SupportMaterial]:
     return sorted(materials, key=lambda item: (item.category, item.name))
 
 
+def _appendix_code_mode(work_dir: str) -> str:
+    """Read the backend-controlled per-task appendix presentation mode.
+
+    ``full`` remains the default and is the only mode eligible for strict final
+    acceptance. ``key`` mirrors concise contest exemplars: it renders a vetted
+    key-algorithm note while retaining complete runnable files as support
+    material. The mode is deliberately not written by an LLM tool.
+    """
+    path = os.path.join(work_dir, _PAPER_APPENDIX_CONFIG)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return "full"
+    return "key" if isinstance(value, dict) and value.get("mode") == "key" else "full"
+
+
+def _key_algorithm_note(work_dir: str) -> str:
+    path = os.path.join(work_dir, _KEY_ALGORITHM_NOTE)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            note = handle.read().strip()
+    except OSError:
+        return ""
+    # Keep a malformed or pasted notebook log from silently becoming the paper.
+    if len(note) > 24_000 or "```" not in note:
+        return ""
+    return note
+
+
 def append_code_appendix(markdown: str, work_dir: str) -> tuple[str, list[str]]:
-    """Rebuild the CUMCM appendix with support list and concise code excerpts."""
+    """Rebuild the CUMCM appendix with complete runnable source code.
+
+    CUMCM's final-paper requirement is stricter than a support-material list:
+    every discovered program is embedded in Appendix B and tagged with its raw
+    SHA-256.  The strict final acceptance report verifies that no source was
+    silently shortened or replaced after this step.
+    """
     sources = collect_code_sources(work_dir)
     materials = collect_support_materials(work_dir)
     appendix_match = APPENDIX_HEADING_RE.search(markdown)
@@ -928,26 +1005,46 @@ def append_code_appendix(markdown: str, work_dir: str) -> tuple[str, list[str]]:
     else:
         lines.extend(["本论文没有支撑材料。", ""])
 
+    mode = _appendix_code_mode(work_dir)
     lines.extend(["## 附录B 源程序代码", ""])
+    if mode == "key":
+        note = _key_algorithm_note(work_dir)
+        lines.extend(
+            [
+                "本附录按精简展示模式给出经本次计算对应的关键伪代码与核心实现；"
+                "完整可运行源码已在附录A所列支撑材料中保留。该展示模式用于版式审阅，"
+                "不能获得完整源码附录的严格技术验收。",
+                "",
+            ]
+        )
+        if note:
+            lines.extend([note, ""])
+        else:
+            lines.extend(["未提供可核验的关键算法说明，不能据此通过论文技术验收。", ""])
+        return "\n".join(lines).rstrip() + "\n", [source.name for source in sources]
     if sources:
         lines.extend(
             [
-                "完整可运行源程序见附录A列出的支撑材料文件；为保持电子论文正文紧凑，"
-                "本附录仅列核心建模、求解与作图流程摘录，省略批量控制台输出语句。",
+                "以下附录逐份保留本次计算使用的完整可运行源程序；每份代码标题后的 SHA-256"
+                "对应任务目录中的原始源码。notebook 仅导出代码单元，不包含运行输出。",
                 "",
             ]
         )
         for index, source in enumerate(sources, 1):
-            excerpt = _appendix_code_excerpt(source.code)
-            if not excerpt:
-                continue
-            fence = _code_fence(excerpt)
+            source_hash = hashlib.sha256(source.code.encode("utf-8")).hexdigest()
+            fence = _code_fence(source.code)
             lines.extend(
                 [
                     f"### B.{index} {source.name}",
                     "",
+                    "SHA-256:",
+                    " ".join(
+                        source_hash[offset : offset + 16]
+                        for offset in range(0, len(source_hash), 16)
+                    ),
+                    "",
                     f"{fence}{source.language}",
-                    _listings_safe_code(excerpt).rstrip(),
+                    _listings_safe_code(source.code).rstrip(),
                     fence,
                     "",
                 ]
@@ -958,44 +1055,13 @@ def append_code_appendix(markdown: str, work_dir: str) -> tuple[str, list[str]]:
 
 
 def _appendix_code_excerpt(code: str) -> str:
-    """Return a concise paper-facing source excerpt.
+    """Backward-compatible identity helper.
 
-    The full runnable source remains in the support-material file list. The
-    PDF appendix keeps the key model/solve/plot workflow while removing
-    verbose console-report lines that otherwise dominate the competition paper.
+    Earlier releases abbreviated source after 240 lines.  Keeping this helper
+    avoids breaking callers while making the required complete-source policy
+    explicit.
     """
-    cleaned: list[str] = []
-    previous_blank = False
-    for raw_line in code.splitlines():
-        line = raw_line.rstrip()
-        if APPENDIX_NOISY_LINE_RE.match(line):
-            continue
-        if LONG_CODE_SEPARATOR_RE.match(line):
-            continue
-        if not line.strip():
-            if previous_blank:
-                continue
-            previous_blank = True
-            cleaned.append("")
-            continue
-        previous_blank = False
-        cleaned.append(line)
-
-    while cleaned and not cleaned[0].strip():
-        cleaned.pop(0)
-    while cleaned and not cleaned[-1].strip():
-        cleaned.pop()
-
-    truncated = len(cleaned) > MAX_APPENDIX_CODE_LINES
-    if truncated:
-        cleaned = cleaned[:MAX_APPENDIX_CODE_LINES]
-        cleaned.extend(
-            [
-                "",
-                "# 后续完整程序见附录A列出的支撑材料文件。",
-            ]
-        )
-    return "\n".join(cleaned)
+    return code.rstrip()
 
 
 def _code_fence(code: str) -> str:
@@ -1037,7 +1103,12 @@ def _shorten_long_code_separator_body(code: str) -> tuple[str, int]:
 
 
 def shorten_long_code_separator_lines(markdown: str) -> tuple[str, int]:
-    """Shorten decoration-only separator lines inside fenced code blocks."""
+    """Shorten decoration-only separators outside the complete-source appendix.
+
+    Appendix B is intentionally byte-for-byte source-facing (except the one
+    LaTeX safety escape), so no postprocessor may shorten it after its hash is
+    emitted.
+    """
     replacements = 0
 
     def replace_block(match: re.Match[str]) -> str:
@@ -1046,7 +1117,12 @@ def shorten_long_code_separator_lines(markdown: str) -> tuple[str, int]:
         replacements += count
         return f"{match.group('open')}{body}{match.group('close')}"
 
-    return FENCED_CODE_CONTENT_RE.sub(replace_block, markdown), replacements
+    appendix_match = CODE_APPENDIX_HEADING_RE.search(markdown)
+    if appendix_match is None:
+        return FENCED_CODE_CONTENT_RE.sub(replace_block, markdown), replacements
+    head = markdown[: appendix_match.start()]
+    tail = markdown[appendix_match.start() :]
+    return FENCED_CODE_CONTENT_RE.sub(replace_block, head) + tail, replacements
 
 
 def _resolve_image_path(work_dir: str, image_path: str) -> str:
@@ -1221,8 +1297,12 @@ def _appendix_text(markdown: str) -> str:
 
 
 def _check_appendix_console_noise(markdown: str) -> dict:
-    """Detect print-heavy source appendices that inflate the formal PDF."""
-    appendix = _appendix_text(markdown)
+    """Detect pasted console output, but never executable source statements.
+
+    Appendix B must retain complete runnable source.  A Python ``print(...)``
+    inside a fenced code block is source, not console output.
+    """
+    appendix = _without_fenced_code_blocks(_appendix_text(markdown))
     noisy_lines = [
         line.strip()
         for line in appendix.splitlines()
@@ -1733,7 +1813,14 @@ def _load_result_numeric_facts(work_dir: str) -> list[dict]:
 
 
 def build_result_fact_summary(work_dir: str) -> str:
-    """从任务结果 CSV 中生成给写作手使用的关键数值事实摘要。"""
+    """从冻结结果或兼容 CSV 生成给写作手使用的关键数值事实摘要。
+
+    一旦任务已创建冻结结果，CSV 只保留作来源证据，不能再与冻结文件并列
+    注入 Writer，避免同一结论出现两个互相竞争的数值来源。
+    """
+    frozen_summary = build_frozen_result_summary(work_dir)
+    if frozen_summary:
+        return frozen_summary
     facts = _load_result_numeric_facts(work_dir)
     if not facts:
         return ""
@@ -1793,6 +1880,18 @@ def _ordered_shadow_price_number(sentence: str, fact: dict, numbers: list[float]
 
 
 def _check_result_consistency(work_dir: str, markdown: str) -> dict:
+    freeze_validation = validate_result_freeze(work_dir)
+    if freeze_validation["active"]:
+        if not freeze_validation["passed"]:
+            return {
+                "passed": False,
+                "source": freeze_validation.get("path", "frozen_results.json"),
+                "facts": [],
+                "conflicts": [],
+                "errors": freeze_validation["errors"],
+            }
+        return _check_frozen_result_consistency(markdown, freeze_validation)
+
     facts = _load_result_numeric_facts(work_dir)
     if not facts:
         return {"passed": True, "facts": [], "conflicts": []}
@@ -1842,6 +1941,265 @@ def _check_result_consistency(work_dir: str, markdown: str) -> dict:
         ],
         "conflicts": conflicts,
     }
+
+
+def _sentence_mentions_metric(sentence: str, metric: dict) -> bool:
+    for alias in metric_aliases(metric):
+        if len(alias) < 2 or alias not in sentence:
+            continue
+        # “利润增长率” is a rate, not the frozen scalar “利润增加量”.
+        if alias.endswith("增长") and f"{alias}率" in sentence:
+            continue
+        # The original optimum and an explicitly named new optimum are
+        # distinct facts in sensitivity-analysis problems.
+        if metric.get("base_id", metric.get("id")) == "objective_value" and re.search(
+            r"(?:新|调整后|增加后)\s*(?:最大|最优)?利润", sentence
+        ):
+            continue
+        if metric.get("base_id", metric.get("id")) == "objective_value":
+            suffix = sentence[sentence.find(alias) + len(alias) :]
+            if not re.search(r"(?:为|=|达到|提升至|降至)", suffix):
+                continue
+        if metric.get("base_id", metric.get("id")) in {"profit_increase", "marginal_profit"}:
+            suffix = sentence[sentence.find(alias) + len(alias) :]
+            if not re.search(r"(?:为|=|约为|分别为)", suffix):
+                continue
+        return True
+    return False
+
+
+def _numbers_in_sentence(sentence: str) -> list[float]:
+    scientific_numbers = [
+        float(base) * (10 ** int(exponent))
+        for base, exponent in re.findall(
+            r"(-?\d+(?:\.\d+)?)\s*\\times\s*10\s*\^\s*\{?(-?\d+)\}?", sentence
+        )
+    ]
+    return scientific_numbers + [
+        number
+        for number in (_parse_float(match.group(0)) for match in PLAIN_NUMBER_RE.finditer(sentence))
+        if number is not None
+    ]
+
+
+def _sentence_matches_metric_scope(sentence: str, section: str, metric: dict) -> bool:
+    """Avoid comparing a quesN metric against prose explicitly about quesM."""
+    subtask_id = str(metric.get("subtask_id") or "")
+    match = re.fullmatch(r"ques(\d+)", subtask_id, flags=re.IGNORECASE)
+    if not match:
+        return True
+    number = match.group(1)
+    context = f"{section}\n{sentence}"
+    explicit_numbers = set(re.findall(r"(?:问题|第)\s*([1-9])(?:问)?", context))
+    explicit_numbers.update(re.findall(r"\b5\.([1-9])", context))
+    return not explicit_numbers or number in explicit_numbers
+
+
+def _check_frozen_result_consistency(markdown: str, validation: dict) -> dict:
+    """Check prose and abstract facts against an active frozen result baseline."""
+    markdown_without_code = _without_fenced_code_blocks(markdown)
+    abstract = _extract_abstract(markdown_without_code)
+    abstract_start = markdown_without_code.find(abstract) if abstract else -1
+    conflicts: list[dict] = []
+    for offset, sentence in _sentences_with_offsets(markdown_without_code):
+        section = _current_section_for_offset(markdown_without_code, offset)
+        for metric in validation["metrics"]:
+            if not _sentence_matches_metric_scope(sentence, section, metric):
+                continue
+            if not _sentence_mentions_metric(sentence, metric):
+                continue
+            numbers = _numbers_in_sentence(sentence)
+            expected = float(metric["value"])
+            if not numbers or _numbers_close_to_expected(numbers, expected):
+                continue
+            conflicts.append(
+                {
+                    "fact": metric.get("label") or metric.get("id"),
+                    "expected": metric["value"],
+                    "unit": metric.get("unit", ""),
+                    "paper_section": section,
+                    "location": (
+                        "abstract"
+                        if abstract_start >= 0 and abstract_start <= offset < abstract_start + len(abstract)
+                        else "body"
+                    ),
+                    "sentence": _plain_text(sentence),
+                    "paper_numbers": numbers,
+                }
+            )
+    return {
+        "passed": not conflicts,
+        "source": validation.get("path", "frozen_results.json"),
+        "facts": [
+            {
+                "fact": metric.get("label") or metric.get("id"),
+                "expected": metric["value"],
+                "unit": metric.get("unit", ""),
+            }
+            for metric in validation["metrics"]
+        ],
+        "conflicts": conflicts,
+        "abstract_conflicts": [item for item in conflicts if item["location"] == "abstract"],
+    }
+
+
+def _check_freeze_integrity(work_dir: str) -> dict:
+    validation = validate_result_freeze(work_dir)
+    return {
+        "passed": validation["passed"],
+        "active": validation["active"],
+        "path": validation.get("path"),
+        "errors": validation.get("errors", []),
+    }
+
+
+def _algorithm_code_evidence(work_dir: str) -> tuple[str, list[str]]:
+    sources = collect_code_sources(work_dir)
+    return "\n".join(source.code.lower() for source in sources), [source.name for source in sources]
+
+
+def _check_algorithm_evidence(work_dir: str, markdown: str) -> dict:
+    """Reject declared optimization methods that cannot be found in executed code."""
+    body, _ = _reference_body_parts(_without_fenced_code_blocks(markdown))
+    code_text, source_names = _algorithm_code_evidence(work_dir)
+    claims: list[dict] = []
+    for algorithm, (claim_pattern, evidence_tokens) in ALGORITHM_CLAIMS.items():
+        declared_matches = list(claim_pattern.finditer(body))
+        if not declared_matches:
+            continue
+        # “可升级为遗传算法”等未来改进建议不等于已在本次求解中采用；只有
+        # 当前任务的实际算法声明才应当要求代码证据。
+        actual_matches = [
+            match
+            for match in declared_matches
+            if not FUTURE_ALGORITHM_CONTEXT_RE.search(
+                body[max(0, match.start() - 40) : match.end() + 1]
+            )
+        ]
+        if not actual_matches:
+            continue
+        evidence_found = any(token.lower() in code_text for token in evidence_tokens)
+        claims.append(
+            {
+                "algorithm": algorithm,
+                "implemented": evidence_found,
+                "sources": source_names if evidence_found else [],
+            }
+        )
+    return {"passed": all(item["implemented"] for item in claims), "claims": claims}
+
+
+def _infeasible_subtask_markers(subtask: dict) -> list[str]:
+    identifier = str(subtask.get("id") or subtask.get("problem") or "")
+    markers = [identifier]
+    match = re.fullmatch(r"ques(\d+)", identifier, re.IGNORECASE)
+    if match:
+        number = int(match.group(1))
+        chinese = "一二三四五六七八九十"[number - 1] if 1 <= number <= 10 else str(number)
+        markers.extend([f"问题{number}", f"问题 {number}", f"问题{chinese}", f"第{number}问"])
+    label = str(subtask.get("label", "")).strip()
+    if label:
+        markers.append(label)
+    return [marker for marker in markers if marker]
+
+
+def _check_infeasible_optimality_claims(work_dir: str, markdown: str) -> dict:
+    validation = validate_result_freeze(work_dir)
+    if not validation["active"] or not validation["passed"]:
+        return {"passed": True, "issues": []}
+    subtasks = validation["document"].get("subtasks", [])
+    infeasible = [item for item in subtasks if isinstance(item, dict) and item.get("feasible") is False]
+    if not infeasible:
+        return {"passed": True, "issues": []}
+    body, _ = _reference_body_parts(_without_fenced_code_blocks(markdown))
+    issues: list[dict] = []
+    for match in OPTIMALITY_CLAIM_RE.finditer(body):
+        context = body[max(0, match.start() - 480) : match.end() + 160]
+        matching = [
+            subtask
+            for subtask in infeasible
+            if any(marker in context for marker in _infeasible_subtask_markers(subtask))
+        ]
+        if not matching and len(infeasible) == 1:
+            matching = infeasible
+        for subtask in matching:
+            issues.append(
+                {
+                    "subtask": subtask.get("id") or subtask.get("problem") or "unknown",
+                    "claim": match.group(0),
+                    "context": _plain_text(context)[:500],
+                }
+            )
+    return {"passed": not issues, "issues": issues}
+
+
+def _check_figure_result_consistency(work_dir: str, markdown: str) -> dict:
+    """Check labelled numbers around a figure against its freeze metric binding."""
+    validation = validate_result_freeze(work_dir)
+    if not validation["active"] or not validation["passed"]:
+        return {"passed": True, "active": validation["active"], "conflicts": []}
+    metric_by_id = {str(metric.get("id")): metric for metric in validation["metrics"]}
+    figures = validation["document"].get("figures", [])
+    if not isinstance(figures, list):
+        figures = []
+    conflicts: list[dict] = []
+    for figure in figures:
+        if not isinstance(figure, dict) or not isinstance(figure.get("path"), str):
+            continue
+        metric_ids = figure.get("metric_ids", [])
+        if not isinstance(metric_ids, list):
+            continue
+        bound_metrics = [metric_by_id[str(identifier)] for identifier in metric_ids if str(identifier) in metric_by_id]
+        if not bound_metrics:
+            continue
+        for image_match in IMAGE_MARKDOWN_RE.finditer(markdown):
+            image_path = image_match.group(2).replace("\\", "/")
+            if image_path != figure["path"].replace("\\", "/"):
+                continue
+            nearby = markdown[max(0, image_match.start() - 600) : image_match.end() + 600]
+            for _, sentence in _sentences_with_offsets(nearby):
+                for metric in bound_metrics:
+                    if not _sentence_mentions_metric(sentence, metric):
+                        continue
+                    numbers = _numbers_in_sentence(sentence)
+                    if not numbers or _numbers_close_to_expected(numbers, float(metric["value"])):
+                        continue
+                    conflicts.append(
+                        {
+                            "figure": image_path,
+                            "fact": metric.get("label") or metric.get("id"),
+                            "expected": metric["value"],
+                            "sentence": _plain_text(sentence),
+                            "paper_numbers": numbers,
+                        }
+                    )
+    return {"passed": not conflicts, "active": True, "conflicts": conflicts}
+
+
+def _check_reference_relevance(markdown: str) -> dict:
+    """Block a small set of explicit cross-domain citation failures.
+
+    This is intentionally conservative: it rejects a reference only when the
+    paper clearly concerns fuel/hydraulic pressure control while the citation
+    clearly concerns blockchain or international business.  It never guesses
+    that a normal, sparsely formatted Chinese reference is irrelevant.
+    """
+    body, reference_text = _reference_body_parts(_without_fenced_code_blocks(markdown))
+    lower_body = body.lower()
+    fuel_topic = any(token in lower_body for token in ("高压油管", "喷油", "燃油", "柱塞", "减压阀", "液压"))
+    unrelated: list[dict] = []
+    if fuel_topic:
+        for number, content in _parse_reference_entries(reference_text):
+            lowered = content.lower()
+            if any(token in lowered for token in ("blockchain", "区块链", "international business", "国际商务")):
+                unrelated.append(
+                    {
+                        "number": number,
+                        "reference": content,
+                        "reason": "高压燃油/液压控制论文引用了区块链或国际商务文献。",
+                    }
+                )
+    return {"passed": not unrelated, "unrelated": unrelated}
 
 
 def build_preflight_report(
@@ -1945,6 +2303,11 @@ def build_preflight_report(
     sections_check = _check_sections(markdown_without_code)
     export_profile_check = _check_export_profile(export_profile)
     result_consistency_check = _check_result_consistency(work_dir, markdown)
+    freeze_integrity_check = _check_freeze_integrity(work_dir)
+    algorithm_evidence_check = _check_algorithm_evidence(work_dir, markdown)
+    infeasible_optimality_check = _check_infeasible_optimality_claims(work_dir, markdown)
+    figure_result_consistency_check = _check_figure_result_consistency(work_dir, markdown)
+    reference_relevance_check = _check_reference_relevance(markdown)
     claim_trace_check = _check_claim_trace(
         claim_trace if claim_trace is not None else build_claim_trace(markdown, code_sources)
     )
@@ -1969,6 +2332,13 @@ def build_preflight_report(
         "tables": _with_severity(_check_tables(markdown_without_code), "conditional"),
         "extra_problem_labels": _with_severity(extra_problem_labels_check, "conditional"),
         "result_consistency": _with_severity(result_consistency_check, "fail"),
+        "freeze_integrity": _with_severity(freeze_integrity_check, "fail"),
+        "algorithm_evidence": _with_severity(algorithm_evidence_check, "fail"),
+        "infeasible_optimality": _with_severity(infeasible_optimality_check, "fail"),
+        "figure_result_consistency": _with_severity(
+            figure_result_consistency_check, "fail"
+        ),
+        "reference_relevance": _with_severity(reference_relevance_check, "fail"),
         "claim_trace": _with_severity(
             claim_trace_check, _claim_trace_check_severity(claim_trace_check)
         ),
@@ -2134,8 +2504,8 @@ def prepare_paper_markdown(
     markdown, removed_unmatched_references = strip_unmatched_inline_references(markdown)
     markdown, removed_empty_references = remove_empty_reference_section(markdown)
     markdown = normalize_keywords(markdown)
+    markdown = normalize_cjk_inline_spacing(markdown)
     markdown, removed_missing_images = remove_missing_image_references(markdown, work_dir)
-    markdown, code_sources = append_code_appendix(markdown, work_dir)
     markdown, shortened_code_separators = shorten_long_code_separator_lines(markdown)
     markdown, normalised_extra_problem_labels = normalize_extra_problem_labels(
         markdown,
@@ -2156,6 +2526,9 @@ def prepare_paper_markdown(
         markdown
     )
     markdown, normalised_submission_wording = normalize_submission_wording(markdown)
+    # Append complete source only after all prose normalizers.  Otherwise a
+    # wording/label cleanup could mutate code after its SHA-256 is recorded.
+    markdown, code_sources = append_code_appendix(markdown, work_dir)
     markdown = normalize_image_captions(markdown)
     markdown = ensure_table_captions(markdown)
     outline = build_paper_outline(markdown)

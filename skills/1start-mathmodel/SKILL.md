@@ -18,6 +18,7 @@ allowed-tools: Bash(*), Read, Write, Edit, Grep, Glob, Agent, WebSearch, WebFetc
 
 - `plan.md`：整体流程方案、建模方向、阶段顺序、预期产物和风险控制。
 - `todo.md`：具体待办事项列表，记录每个阶段的任务和状态。
+- `reports/workflow_guard_report.json`：由本 skill 的 guard 生成的当前阶段、缺失交接物和推荐下游 skill。
 
 ## 工作流
 
@@ -53,10 +54,13 @@ allowed-tools: Bash(*), Read, Write, Edit, Grep, Glob, Agent, WebSearch, WebFetc
 workflow:
    step      skills
 1. 赛题分析与建模设计 - `2analysis-modeling`
-2. 编程实现和图表生成 - `3coding-visual`
-3. 流程与架构图绘制 - `4drawio`
-4. 竞赛论文撰写 - `5writing`
-5. 验证和验收 - `6verity`
+2. 方法 PoC 验证与人工选型 - `2a-method-validation`
+3. 编程实现和图表生成 - `3coding-visual`
+4. 结果冻结与可追溯性 - `3a-result-freeze`
+5. 流程与架构图绘制 - `4drawio`
+6. 竞赛论文撰写 - `5writing`
+7. 独立证据审计 - `6a-independent-audit`
+8. 验证和验收 - `6verity`
 ```
 
 ## 项目目录结构
@@ -69,17 +73,21 @@ workflow:
 ├── todo.md                      # 1: 待办事项
 ├── reports/                     # 各阶段文档报告
 │   ├── ANALYSIS_MODELING_REPORT.md  # 1: 赛题分析-建模报告（2analysis-modeling）
-│   ├── RESULTS_REPORT.md            # 2: 结果报告（3coding-visual）
-│   ├── DRAWIO_REPORT.md             # 3: 非数据图说明（4drawio）
-│   ├── VERIFY_REPORT.md             # 5: 验收报告（6verity）
-├── code/                        # 2: 代码（3coding-visual）
+│   ├── METHOD_VALIDATION.md          # 2: 候选 PoC 与比较（2a-method-validation）
+│   ├── METHOD_SELECTION.md           # 2: 人工选型理由（2a-method-validation）
+│   ├── RESULTS_REPORT.md             # 3: 结果报告（3coding-visual）
+│   ├── frozen_numbers.json           # 4: 冻结指标与来源哈希（3a-result-freeze）
+│   ├── DRAWIO_REPORT.md              # 5: 非数据图说明（4drawio）
+│   ├── independent_audit_report.json # 7: 独立证据审计（6a-independent-audit）
+│   ├── VERIFY_REPORT.md              # 8: 验收报告（6verity）
+├── code/                        # 3: 代码（3coding-visual）
 │   ├── problem1.py
 │   ├── problem2.py
 │   ├── problem3.py               # 问题的数量应该更具题目动态调整
 │   ├── ... 
 │   └── utils.py
-├── results/                     # 2: 结果记录（3coding-visual）
-├── figures/                     # 2+3: 所有图表（3coding-visual + 4drawio）
+├── results/                     # 3: 结果记录（3coding-visual）
+├── figures/                     # 3+5: 所有图表（3coding-visual + 4drawio）
 │   ├── *.pdf                    #     数据图 + 非数据图 PDF
 │   ├── *.drawio                 #     非数据图源文件
 ├── paper/                       # 4: 论文（5writing）
@@ -97,24 +105,40 @@ workflow:
 # 待办事项
 
 - [ ] 1. 赛题分析与建模设计 - `2analysis-modeling`
-- [ ] 2. 编程实现和图表生成 - `3coding-visual`
-- [ ] 3. 流程与架构图绘制 - `4drawio`
-- [ ] 4. 竞赛论文撰写 - `5writing`
-- [ ] 5. 验证和验收 - `6verity`
+- [ ] 2. 方法 PoC 验证与人工选型 - `2a-method-validation`
+- [ ] 3. 编程实现和图表生成 - `3coding-visual`
+- [ ] 4. 结果冻结与可追溯性 - `3a-result-freeze`
+- [ ] 5. 流程与架构图绘制 - `4drawio`
+- [ ] 6. 竞赛论文撰写 - `5writing`
+- [ ] 7. 独立证据审计 - `6a-independent-audit`
+- [ ] 8. 验证和验收 - `6verity`
 ```
 
 每完成一个阶段，都要更新 `todo.md` 中对应任务的状态。
 
 ### 4. 依次执行阶段
 
+每次首次启动、长对话恢复或不确定进度时，先运行 guard；不要根据聊天记忆猜测阶段：
+
+```text
+python "<1start-mathmodel skill 目录>/scripts/workflow_guard.py" --workspace .
+```
+
+读取 `reports/workflow_guard_report.json` 的 `recommended_skill` 和
+`missing_prerequisites` 后再继续。该 guard 只检查实验性 skill 工作区的交接物，
+不读取或修改 WebUI 的 `backend/project/work_dir/`。
+
 按以下顺序调用下游 skills：
 
 | 阶段 | Skill | 作用 | 主要产物 |
 | --- | --- | --- | --- |
 | 赛题分析与建模设计 | `2analysis-modeling` | 解析题意、识别变量/约束/数据/评价指标，并建立数学模型、目标函数、约束条件和求解策略。 | `ANALYSIS_MODELING_REPORT.md` |
+| 方法 PoC 验证与人工选型 | `2a-method-validation` | 用小型可复查 PoC 比较候选方法；由人工记录最终选型理由。 | `METHOD_VALIDATION.md`, `METHOD_SELECTION.md`, `code/poc/` |
 | 编程实现和图表生成 | `3coding-visual` | 实现可复现代码，运行实验，生成结果表和多种多样的图表。 | `code/`, `results/` ,  `RESULTS_REPORT.md`, `figures/图表` |
+| 结果冻结与可追溯性 | `3a-result-freeze` | 冻结写入论文的关键数值及来源哈希；来源变化时阻止继续使用旧结论。 | `frozen_numbers.json` |
 | 流程与架构图绘制 | `4drawio` | 在论文确实需要时，绘制方法流程图、架构图和非数据型概念图。 | `figures/*.drawio`, `figures/*.pdf`, `DRAWIO_REPORT.md` |
 | 竞赛论文撰写 | `5writing` | 基于分析、建模、代码结果和图表撰写最终竞赛论文，并按章节直接插入图表。 | `paper/` |
+| 独立证据审计 | `6a-independent-audit` | 独立核查冻结来源、指标语义、论文与图表的基本可追溯性。 | `independent_audit_report.json/md` |
 | 验证和验收 | `6verity` | 检查可复现性、一致性、产物完整性、格式规范和提交就绪状态。 | `VERIFY_REPORT.md` |
 
 ## 多智能体 / Subagent 调用限制（Codex spawn_agent）
@@ -138,3 +162,4 @@ workflow:
   - Typst：`#figure(image("../../figures/xxx.pdf", width: 85%), caption: [...])`
   - LaTeX：`\begin{figure}[H]\centering\includegraphics[width=0.85\textwidth]{../../figures/xxx.pdf}\caption{...}\label{fig:xxx}\end{figure}`
 - 不要让 `5writing` 编造数值结论。论文中的数值必须来自 `RESULTS_REPORT.md`、结果表或已生成图表的数据。
+- 启用结果冻结后，`5writing`、`6a-independent-audit` 和 `6verity` 必须以 `frozen_numbers.json` 为关键数值的来源基线；它只能证明来源未变化，不能证明数学模型正确。

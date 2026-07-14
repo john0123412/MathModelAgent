@@ -2,14 +2,15 @@
 
 import asyncio
 from typing import Callable
+from pydantic import ValidationError
 from app.core.agents.agent import Agent
 from app.core.llm.llm import LLM
 from app.core.prompts import MODELER_PROMPT
-from app.schemas.A2A import CoordinatorToModeler, ModelerToCoder
+from app.schemas.A2A import CoordinatorToModeler, ModelPlan, ModelerToCoder
+from app.schemas.problem_contract import validate_modeler_plan
 from app.utils.log_util import logger
 import json
 import re
-from icecream import ic  # type: ignore[import-unresolved]
 
 MAX_JSON_REPAIR_ATTEMPTS = 3
 
@@ -89,7 +90,17 @@ class ModelerAgent(Agent):
         await self.append_chat_history(
             {
                 "role": "user",
-                "content": json.dumps(coordinator_to_modeler.questions),
+                "content": json.dumps(
+                    {
+                        "questions": coordinator_to_modeler.questions,
+                        "problem_contract": (
+                            coordinator_to_modeler.problem_contract.model_dump()
+                            if coordinator_to_modeler.problem_contract
+                            else None
+                        ),
+                    },
+                    ensure_ascii=False,
+                ),
             }
         )
 
@@ -104,18 +115,38 @@ class ModelerAgent(Agent):
             if not json_str:
                 raise ValueError("返回的 JSON 字符串为空，请检查输入内容。")
 
-            questions_solution = repair_json(json_str)
-            if questions_solution:
-                ic(questions_solution)
-                return ModelerToCoder(questions_solution=questions_solution)
+            payload = repair_json(json_str)
+            issues: list[str] = []
+            if payload:
+                try:
+                    model_plan = ModelPlan.model_validate(payload)
+                    modeler_response = ModelerToCoder(model_plan=model_plan)
+                    expected_question_keys = {
+                        key
+                        for key in coordinator_to_modeler.questions
+                        if key.startswith("ques") and key != "ques_count"
+                    }
+                    issues.extend(model_plan.coverage_issues(expected_question_keys))
+                    if coordinator_to_modeler.problem_contract:
+                        validation = validate_modeler_plan(
+                            coordinator_to_modeler.problem_contract,
+                            modeler_response,
+                            expected_question_keys=expected_question_keys,
+                            questions=coordinator_to_modeler.questions,
+                        )
+                        issues.extend(validation.violations + validation.missing_requirements)
+                    if not issues:
+                        return modeler_response
+                except ValidationError as exc:
+                    issues.append("ModelPlan schema 校验失败: " + exc.errors()[0]["msg"])
+            else:
+                issues.append("JSON 无法解析")
 
             attempt += 1
-            logger.warning(
-                f"JSON 解析失败 (第{attempt}次)，请求模型重新生成"
-            )
+            logger.warning("ModelPlan 校验失败 (第{}次): {}", attempt, "; ".join(issues))
             if attempt >= MAX_JSON_REPAIR_ATTEMPTS:
                 raise ValueError(
-                    f"ModelerAgent 连续 {attempt} 次返回无效 JSON"
+                    "ModelerAgent 连续返回不合格的 ModelPlan: " + "; ".join(issues)
                 )
             retry_msg: dict = {"role": "assistant", "content": json_str}
             if response.reasoning_content:
@@ -124,6 +155,10 @@ class ModelerAgent(Agent):
             await self.append_chat_history(
                 {
                     "role": "user",
-                    "content": "你返回的JSON格式有误，请严格按照JSON格式重新输出，注意字符串值内的双引号必须转义为\\\"，不要包含未转义的特殊字符。",
+                    "content": (
+                        "你的输出不是可执行的完整 ModelPlan。请只修正后重新输出完整 JSON，"
+                        "保留全部 quesN，并补齐 inputs、method、constraints、expected_artifacts、"
+                        "acceptance_metrics：" + "; ".join(issues)
+                    ),
                 }
             )

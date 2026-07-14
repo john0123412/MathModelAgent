@@ -26,6 +26,13 @@
 >   Docker task directory (`backend/project/work_dir/<task_id>/`) and get a
 >   default-layout PDF with minimal fuss.
 
+> **CUMCM 2026 submission boundary**: the current automatic Appendix B keeps only
+> concise code excerpts; complete runnable notebooks/scripts remain support material.
+> The generated PDF and its technical audit are therefore candidate output, not proof
+> that the official requirement for complete runnable source in the paper appendix has
+> been met. Add the complete source to the appendix manually, or extend and verify the
+> export pipeline before formal submission.
+
 Use the host machine's Pandoc and TeX Live to generate a PDF for a completed
 task without installing heavy TeX dependencies inside Docker:
 
@@ -166,7 +173,7 @@ agent verification:
 
 ```powershell
 docker compose up --build -d
-curl.exe http://127.0.0.1:8000/docs
+curl.exe http://127.0.0.1:5173/api/docs
 curl.exe http://127.0.0.1:5173/
 ```
 

@@ -3,6 +3,17 @@
 ## 当前稳定状态
 
 - 2026-07-14：仓库级 `AGENTS.md` 与 `skills/1start-mathmodel/SKILL.md` 已增加 Codex 多智能体限制：禁止 `fork_turns:"all"`，必须显式使用 `"none"` 或不大于 5 的历史窗口，并行子 agent 最多 2 个；子任务仅接收阶段摘要和文件路径。真实建模任务如需断点续传优先走后端 `POST /modeling`。发起子线程前必须确认经用户授权的隔离计费与预算限制。
+
+- 2026-07-14：主工作流的最终执行验证失败会保留已通过 `quesN` 的代码检查点，并对报告中定位到的失败题目最多进行一次自动定向回修；回修后再次失败或同一任务已记录两次真实验证失败时，停止 Writer/PDF 和自动重试，要求按恢复规程人工切换已验证 provider 或确认低开销算法。执行冻结通过后，若 `paper_preflight_report.json` 的硬失败只定位到 `result_consistency` 等可归属正文的检查项，工作流还会把冲突证据和冻结事实只交回受影响章节的 Writer 一次，再重新预检；无法归属的失败、或回修后仍为 `FAIL`，会停止候选 PDF 导出而不是生成貌似完成的论文。DOCX 收尾后生成 `final_acceptance_report.json/md`：`TECHNICAL_PASS` 同时要求执行验证、冻结来源哈希、preflight、PDF visual、正式字体、主交付文件/manifest 和论文附录完整源码通过；数学、引用、版式及平台规则始终是 `PENDING_HUMAN_REVIEW`。论文后处理不再将附录源码截断为 240 行，而是写入完整脚本/notebook 代码单元及 SHA-256；完整源码可能增加页数，仍须实际 PDF 视觉检查。
+
+- 2026-07-14：正式 `quesN` 的 Coder 到达成功代码调用上限时，不再直接以“成功收束”进入下一阶段。后端会只暴露 `record_execution_evidence` 并要求提交本题的结果文件、约束、指标和图表数据来源；兼容 provider 若仍回传旧的 `execute_code` 调用会被拒绝，不会继续执行。受控记录成功后才结束该 Coder 子任务。`checkpoint.json` 从已冻结状态续传时会清除旧的连续回修计数，且每次新冻结也会重置该计数，避免历史成功冻结耗尽下一次真实失败的回修额度。
+
+- 2026-07-14：正式 Coder 回合的证据还必须来自**本回合实际执行中新建或更新**的结果/图表数据文件；不允许用 checkpoint 中未更新的旧 CSV 重新登记。一个回合只能处理一个工具动作，多个并发工具调用会得到逐一的重试说明而不会留下孤立 tool-call id；回合只允许记录自己的 `quesN`，不能覆盖其他已通过题目。对正式题目，连续“任务完成”输出或无工具完成说明也会转入强制证据提交，不能绕过验证。证据记录成功即结束该题 Coder 回合，防止后续模型改写结果后令 manifest 失效。
+
+- [2026-07-14] 真实任务 `20260714-021910-23c08616b2c6256627fcfd85fdb0f66c` 从 checkpoint 续传时，问题二 Coder 连续成功执行 8 次却未调用受控证据工具，旧 manifest 的 SHA-256 与刚写入的结果 CSV 不一致，且缺少线性规划决策变量指标，最终 `execution_validation_report.json = FAIL`；Writer/PDF 未被再次放行。当前处置：已实现上述强制证据收束并通过单元测试，**不**对该任务发起第三次自动/真实重试；应按恢复规程以新任务或经人工确认的 provider/算法方案重新运行。
+
+- 2026-07-14：可在任务目录由受控导出配置写入 `paper_appendix_config.json` 的 `{"mode":"key"}`，使附录 B 展示已验证的 `key_algorithms.md`（关键伪代码/核心实现）而不是完整 notebook 转储，用于参考国一复刻模板的阅读性。完整源码仍保留为支撑材料；该展示模式刻意不能通过 `complete_source_appendix`，因此 `final_acceptance_report.json` 不会是 `TECHNICAL_PASS`，正式提交必须改回完整源码附录。
+
 - 默认新建建模任务使用 `cumcm2026`。
 - 主交付链路是：
   - `res.md`
@@ -14,6 +25,48 @@
   - `pdf_visual_check.json`
   - `submission_audit_report.json`
 - `latex_project/` 是候选 LaTeX sidecar，不是主交付链路。
+- 2026-07-13：主 WebUI workflow 已接入题面参数、执行可行性与结果冻结门禁。任务创建/续传会写入 `problem_contract.json`；题面可识别的不可变参数和必答要求会传给 Modeler/Coder。全部 solution 代码阶段会先单独持久化到 checkpoint，完成全部正式问题后才创建 `execution_validation.json` 并通过 `execution_validation_report.json`（代码实际执行、每问可行性、约束来源 SHA-256、图数据来源）；通过后由受信任 workflow 生成 `frozen_results.json`，最后才允许 Writer 与 preflight 使用其作为计算数值事实源。notebook 的历史报错会保留在报告中；只有存在通过哈希/约束校验的最终执行清单时才视为已由最终计算证据覆盖。历史任务没有这些新产物时应按当前门禁重跑，不能凭旧的 `completed`/preflight `PASS` 认定数学内容通过。
+- 2026-07-13：preflight 新增冻结完整性、冻结数值/图文一致性、不可行解最优化表述、算法代码证据和明确跨领域引用相关性检查；`submission_audit_report.json` 也要求 `execution_validation_report.json = PASS`。这些门禁提高可追溯性与明显错误拦截能力，仍不替代独立数学推导、数值收敛与人工复核。
+- [2026-07-13] 2019 CUMCM A 题真实重跑 `20260713-091903-3d8e333eb10220b849fda0878ba11f69` 在 Coder 的压力恢复 `solve_ivp` 数值实验中进入高 CPU、无 IOPub 返回状态，旧实现的单线程超时轮询未能及时中断。当前处置：受控 Linux Docker 中本地解释器使用独立 OS 级看门狗向内核进程发送中断/终止信号，非 POSIX 回退才使用线程计时器；单段代码上限调整为 120 秒。超时一律作为执行失败，不得生成冻结结果或进入 Writer。修复后需用同题新任务完整重跑。
+- [2026-07-13] 真实任务 `20260713-094126-a94c9d8a07cce0aa80ea9cb844338b52` 首次续传在尚未生成任何 `res.*`/PDF 时被安全停止：审计发现旧流程在最终执行验证和结果冻结前已对 `ques1` 调用 Writer，且 notebook 留有 TypeError/NameError 历史错误、无可验收 manifest。当前处置：代码阶段与写作阶段已拆分并为代码响应增加 checkpoint 持久化；恢复时先完成哈希验证/冻结，再重写所有 solution 正文，禁止复用冻结前 Writer 文本。待同一任务恢复完成后以 PDF、preflight、visual check、submission audit 实测验收。
+- [2026-07-13] 上述任务在修复后真实续传的敏感性分析中，有一段代码达到 120 秒硬上限；受控 Docker 的 OS 级看门狗已发送中断，解释器将其记为执行错误，未创建冻结结果或触发 Writer/PDF。当前处置：仅允许 Coder 的有限反思重试改写该段计算；若仍不能在限制内完成，保持任务失败并依据 checkpoint 产物改用更低开销且可复核的算法，不放宽超时或手工伪造验证清单。
+- [2026-07-13] 真实任务 `20260713-094126-a94c9d8a07cce0aa80ea9cb844338b52` 在全部正式代码阶段完成后仍被最终执行门禁拒绝：`execution_validation_report.json = FAIL`，问题 1 仅有 PNG 而无可校验数值结果源，问题 2 无结果文件，问题 3 的 `问题3_仿真数据.csv` 给出平均压力 `41.61315472855306 MPa`、相对目标 `100 MPa` 的偏差 `58.38684527144694 MPa`、标准差 `27.014085871749835 MPa`，不满足目标偏差和波动约束；因此没有 `frozen_results.json`、`res.md`、`res.docx` 或 `res.pdf`。当前处置：manifest 必须以精确 `source.path` 指向任务内 CSV/JSON/TXT 并包含有限数值；每问必须产出 `quesN_results.csv`，图表需有独立数据源；最终验证失败会清除全部 solution 代码/正文 checkpoint，防止续传复用未验证内容。该任务已连续多次在同一 provider 下失败，按赛前恢复规程不得再自动重试；须由指定决策人切换到已验证的备用 provider/配置后最多续传一次，或人工确定可复核的低开销算法，不能放宽约束或伪造 manifest。
+- [2026-07-13] 用户明确要求继续该任务后，第二次真实续传虽生成 `ques1_results.csv`、`ques2_results.csv`、`ques3_results.csv`，但最终 `execution_validation.json` 错把规范要求的 `subtasks` 写成 `tasks`，所以 `execution_validation_report.json = FAIL`，没有进入 Writer/PDF。进一步审计发现该清单不能作为数学验收证据：问题 2 的核心数值明确标注为“基于问题 1 稳态结果估计”，并未执行建模手要求的耦合仿真与搜索；问题 3 的减压阀开启次数为 0，却把阈值当成控制效果验证。当前处置：最终门禁要求每问记录实际计算的守恒残差，并在题面要求减压阀控制时提供扰动/超压下的真实开启证据；续传必须重新执行正式代码阶段，不得仅修正 JSON 字段名后进入写作。
+- [2026-07-13] 同一真实任务再次续传后，已完成问题二耦合仿真和问题三实际阀门动作（62 次），但最终门禁仍拒绝：清单使用了未约定的 `gt` 比较符，并将 CSV 误登记为图表而无图数据哈希；更关键的是 `q3_pressure_fluctuation=42.37 MPa`，在 100 MPa 目标下不能称为稳定。当前处置：验证器兼容严格比较符以便如实报告数学条件，但工作流提示只允许规范比较符；对有明确 100 MPa 目标的题面新增 15 MPa 峰峰值硬上限。后续续传必须重新优化问题三控制，不能以仅修复 manifest 结构进入 Writer/PDF。
+- 2026-07-13：`skills/` 实验性工作流增加 `2a-method-validation`、
+  `3a-result-freeze`、`6a-independent-audit` 和 `workflow_guard.py`：前者要求
+  方法 PoC 与人工选型，后两者冻结关键指标/来源哈希并独立审计。它们只作用于
+  skill 工作区，不接入 FastAPI/Vue WebUI 主工作流，不改变 `res.*`、默认
+  export profile 或既有提交审计；冻结/审计只能证明来源和基本可追溯性，不能证明数学正确性。
+- 2026-07-13 P2：实验性 skills 通过 `algorithm-routing.md` 按题型渐进加载现有规范库，
+  并在仓库根提供 `.codex-plugin/plugin.json` 供 Codex plugin 分发；未创建 marketplace，
+  不会自动安装或接入 WebUI 主工作流。
+- [2026-07-13] 真实轻量线性规划任务 `20260713-021852-8d8e948a7a679b5abcd5e76d25894412`
+  在 Modeler 后、代码执行前失败：Docker 运行配置缺少 `E2B_API_KEY`，remote 默认安全关闭，
+  已生成 checkpoint 但无主交付物。当前应对：仅在受控单用户 Docker 中启用
+  `docker-compose.local-execution.yml` 的显式本地执行覆盖后，从 checkpoint 续传；不要在普通
+  `.env.dev` 中把正式/验收环境切到 local。
+- [2026-07-13] 上述任务已在受控 Docker 本地执行覆盖中从 checkpoint 续传完成：`/tasks` 为
+  `completed`，`res.md/res.json/res.docx/res.pdf`、`candidate_manifest.json`、checkpoint 和变量
+  快照均存在；`paper_preflight_report`、`pdf_visual_check`、`submission_audit_report` 均为 `PASS`，
+  LaTeX sidecar 编译成功。人工核验正文数值为 `A=40`、`B=20`、利润 `2200`；机器时间增至
+  `110` 后为 `A≈46.67`、`B≈16.67`、利润 `2366.67`。该结果验证受控恢复路径和导出链路，
+  不等同于将本地解释器设为正式环境默认值。
+- [2026-07-13] `STARTUP.md` 现将 Docker 启动路径、首次配置预检、E2B 缺失时的受控恢复与
+  默认安全模式回退前置，并提供“测试 -1”无模型启动/代理烟雾脚本。脚本已实测通过：Compose
+  三服务为 `healthy`，首页和 `/api/docs` 为 HTTP 200，`/api/status` 的 backend/redis 状态为
+  `running`。PowerShell 中不要使用 `$home` 作为变量名（与只读 `HOME` 冲突）。
+- [2026-07-13] 真实任务 `20260713-071018-f6816c34351283cb1a7509d9800cbc4d` 在默认
+  `CODE_INTERPRETER_KIND=remote` 且未配置 `E2B_API_KEY` 时于 Coder 创建解释器阶段失败；
+  已保留 `checkpoint.json`，尚无代码执行和主交付物。当前处置：实现并验证受控本地 Docker
+  自动降级入口后从该 checkpoint 续传，不重新提交题目。
+- [2026-07-13] 上述真实任务已通过受控本地 Docker 自动模式（`auto`、显式允许本地执行、
+  无 E2B）从 checkpoint 续传完成：任务状态 `completed`，`res.md/res.json/res.docx/res.pdf`、
+  manifest、checkpoint、变量快照、paper preflight、PDF 视觉报告、LaTeX sidecar 和提交审计
+  均生成；preflight 为 `PASS`，LaTeX 编译成功。PDF 视觉门禁因正文摘要后 34 页超过当前 30 页
+  上限为 `FAIL`，submission audit 随之为 `FAIL`，需人工压缩正文或按正式规则单独处理，不能
+  将该门禁失败归因于本地解释器。运行期间出现一次模型代码错误（随后自动修复）和一次
+  Semantic Scholar HTTP 警告，均未阻断任务完成。
 - `GET /download_all_url` 会按需生成任务目录下的 `all.zip`，用于下载当前任务工作区文件；
   打包时会排除已有 `all.zip`、临时文件和常见缓存目录，并设置单文件/总大小上限，避免
   意外打包过大目录。
@@ -50,12 +103,11 @@
   `export_status.json`、`pdf_visual_check.json`、`submission_audit_report.json`
   和已有的 manifest，避免审核读取旧字体记录。
 - CUMCM 官方 2026 论文格式规范强调电子版论文为单独 PDF/Word 文件（建议 PDF、
-  不超过 20MB），第一页必须是摘要页，不放承诺书和编号专用页；支撑材料单独压缩，
-  至少包含所有可运行源程序、数据资料和较大篇幅中间结果图表。项目标准流程据此调整为：
-  `res.pdf/res.docx` 论文附录只保留支撑材料清单和核心代码摘录，完整可运行
-  `notebook.ipynb`/脚本保留在支撑材料并由 manifest/audit 登记。后处理会重建旧附录，
-  删除批量 `print(...)`/`printf`/`console.log` 控制台输出语句，`paper_preflight_report`
-  新增 `appendix_console_noise` 门禁。
+  不超过 20MB），第一页必须是摘要页，不放承诺书和编号专用页；电子版应与纸质版内容/格式
+  一致，附录须包含全部完整、可运行源程序。支撑材料还须单独压缩并包含必要源程序、数据资料
+  和较大篇幅中间结果图表。当前后处理会把发现的完整脚本/notebook 代码单元写入附录 B，
+  记录 SHA-256，并由 `final_acceptance_report.json -> complete_source_appendix` 核验覆盖与正文内容；
+  正常的 `print(...)` 等可运行源码不会被删除或误判为控制台噪声。
 - 当前最新真实烟雾任务的主链路曾达到：
   - `task_id = 20260709-091916-1ff165da`
   - `paper_preflight_report.json = PASS`
@@ -234,6 +286,27 @@
   capabilities、无敏感环境变量、不能读取 backend `/proc` 环境，backend 可持久化任务文件，
   kernel 退出后连接目录和进程均清理。此验证只证明受控单用户恢复开发链路，不替代 E2B 或
   等效隔离运行器的共享/公开/正式验收要求；测试任务目录和 Compose 容器已在收尾时清理。
+- 2026-07-13 真实高压油管任务 `20260713-094126-a94c9d8a07cce0aa80ea9cb844338b52`
+  的执行验证为 `PASS`，且已生成 PDF/DOCX/LaTeX sidecar；但首次交付预检与 PDF
+  视觉检查为 `FAIL`。原因分别是算法证据检查把“未来可升级为遗传算法、粒子群”的改进建议
+  误判为已采用算法，以及约 850 字摘要使关键词溢出首页。修复前不得将该任务称为可验收；
+  应压缩摘要并重导，同时仅对正文中实际采用的算法要求代码证据。已在同一任务上把摘要压缩
+  为冻结结果支持的紧凑版本，并重导 DOCX/PDF/LaTeX sidecar；随后
+  `paper_preflight_report`、`pdf_visual_check`、`submission_audit_report` 均为 `PASS`，
+  LaTeX 编译成功。Docker 中相关 87 项单测与 Ruff 也通过。
+- [2026-07-13] 同一高压油管任务虽已通过技术导出门禁，但人工复核发现问题一未在正文与冻结结果中
+  给出题面要求的单向阀稳态开启时长、2/5/10 秒升压策略及切回稳态策略；旧
+  `ques1_results.csv` 的 0.6/1.2/1.0/0.8 ms 也没有由附件 3 的完整压力—密度模型复核。
+  当前处置：以桌面 MATLAB 方程和题目附件为基线运行独立复算脚本，更新执行清单、冻结、论文和
+  导出；在五项控制指标和对应压力误差均可追溯前，不得再称该论文为最终可验收稿。
+- [2026-07-13] 上述高压油管任务已用附件3压力—密度模型和固定步长 RK4 独立复算并重导：100 MPa
+  稳态开启时长为 0.288217 ms，150 MPa 稳态为 0.750000 ms，2/5/10 秒过渡分别为
+  0.877147/0.702703/0.700326 ms，且均写入 `execution_validation.json`、
+  `frozen_results.json`、摘要和问题一控制表。重新生成的
+  `paper_preflight_report.json`、`pdf_visual_check.json`、`submission_audit_report.json`
+  均为 `PASS`，LaTeX sidecar 编译成功；实页复核确认控制表标题未与表格分离，附录截断均以
+  “以下代码略；完整可运行程序见附录A列出的支撑材料文件”明确标注。该结果仍需按最终人工清单复核
+  问题二/三模型、引用与竞赛要求的完整源代码附录，不能由自动门禁替代。
 - 2026-07-12 已使用 `git-filter-repo` 重写本地和正常远程 Git 历史，并 force-push
   `main`；可达对象中已删除资产路径计数为零，当前 `main` 和正常远程分支均不含该路径。
   但 GitHub 已合并 PR #1-#15 的服务端头快照仍保留该历史路径，普通 Git 重写无法删除。
@@ -243,6 +316,31 @@
   `codex/*` 分支、六个不再使用的 worktree 以及一个失效 worktree 注册。后续工作应
   从干净的 `main` 创建新分支；归档计划中的 PR 编号可用于追溯历史实现。
 - 真实提交前仍需人工复核论文内容和 PDF 排版。
+
+- [2026-07-14] 完整证据交接/定向回修/最终验收改造后的 Docker 真实 smoke 在启动前被本机环境阻断：
+  `docker compose up --build -d` 无法连接 `//./pipe/dockerDesktopLinuxEngine`，且没有 Docker
+  Desktop 进程；因此没有容器重建、HTTP 检查或真实 provider 任务被实际执行。当前处置：仅在
+  Docker Desktop 恢复后重跑一次受控 Docker 健康检查、容器回归和轻量真实题；不得将 PowerShell
+  后续的普通输出误记为 smoke 通过。
+- [2026-07-14] Docker Desktop 恢复后，真实轻量线性规划 smoke
+  `20260714-021514-e0be90b4d9e3940267458ebcd195659f` 在 Modeler 阶段后失败，未生成
+  checkpoint、执行证据或主交付物。当前处置：在重试前读取该任务 `task_status.json` 和受限后端日志，
+  修正结构化 ModelPlan 的运行时链路；不得把本次失败当作证据工具、冻结或导出链路的通过结果。
+- [2026-07-14] 修正线性规划主/敏感性子题 profile 后，唯一真实重试
+  `20260714-021910-23c08616b2c6256627fcfd85fdb0f66c` 已通过 Coordinator 与 Modeler，
+  并写入 ModelPlan/checkpoint；随后默认 `remote` 执行器因未配置 `E2B_API_KEY` 安全停止，未执行
+  Coder、证据、冻结或 Writer。当前处置：使用已验证的受控单用户
+  `docker-compose.local-execution.yml` 覆盖后，从该 checkpoint 续传一次；不得在基础 Compose
+  或普通 `.env.dev` 中关闭远程执行安全默认值。
+- [2026-07-14] 上述任务在受控 Docker 本地执行续传后已实际完成 Coder、受控证据、冻结、Writer、PDF、
+  DOCX 与候选清单；但首次最终技术验收为 `TECHNICAL_FAIL`：完整源码附录中的正常 `print()` 被误判为
+  控制台噪声，跨子题同名指标在冻结投影中丢失题号作用域，且 64 位源码 SHA 标题造成 PDF 右边距溢出。
+  当前处置：修复附录/冻结/一致性检查后，仅重建并重验该任务的既有产物；不再发起新的真实 provider 任务。
+- [2026-07-14] 同一任务重验后，`pdf_visual_check.json` 已由 FAIL 修复为 PASS，完整源码附录哈希/覆盖检查也已通过。
+  但任务的真实数学交接缺口被新门禁正确拦截：`ques2` 的 CSV 含新最优决策变量，却只提交了利润和残差，
+  `execution_validation_report.json` 明确报 `ques2.linear_programming_solution_metrics`；既有 Writer 正文同时含有
+  问题二资源代入矛盾，`paper_preflight_report.json -> result_consistency = FAIL`。当前处置：不得把该任务标记为
+  可验收；下一次只允许从既有 checkpoint 对 ques2 定向补齐受控证据并重写受影响正文，连续失败规则仍适用。
 
 ## 接手时禁止全盘扫描
 

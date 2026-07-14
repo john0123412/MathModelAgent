@@ -77,6 +77,11 @@ allowed-tools: Bash(*), Read, Write, Edit, Grep, Glob, Agent, WebSearch, WebFetc
 - 可直接用于建模的变量。
 - 需要派生的指标。
 
+先读取 `../_references/references/algorithm-routing.md`，根据每个子问题的输出、约束和
+数据量选择主路线；随后只读取 `../_references/math_modeling_norms.md` 中该路线对应的
+章节，不要罗列与题目无关的算法。对每个子问题记录题型、可解释基线、候选方法、输入
+可用性和验证口径，供 `2a-method-validation` 做 PoC 与人工选型。
+
 然后给出总体路线：
 
 ```text

@@ -67,7 +67,7 @@ class TestVariableSnapshotMetadata(unittest.TestCase):
 
 
 class TestReplayNotebookSelection(unittest.TestCase):
-    """验证 resume 重放单元格选择逻辑。"""
+    """验证 resume 只恢复已持久化的快照边界。"""
 
     def _write_notebook(self, work_dir: str) -> None:
         nb = nbf.new_notebook()
@@ -107,7 +107,7 @@ class TestReplayNotebookSelection(unittest.TestCase):
 
         return interpreter.replayed
 
-    def test_snapshot_meta_uses_notebook_cell_index_not_code_index(self):
+    def test_snapshot_restore_does_not_replay_unfinished_cells(self):
         with tempfile.TemporaryDirectory() as work_dir:
             self._write_notebook(work_dir)
 
@@ -120,9 +120,9 @@ class TestReplayNotebookSelection(unittest.TestCase):
                 snapshot_load=True,
             )
 
-            self.assertEqual(replayed, ["b = 2", "c = 3"])
+            self.assertEqual(replayed, [])
 
-    def test_old_meta_without_cell_count_falls_back_to_code_index(self):
+    def test_snapshot_restore_ignores_legacy_cell_metadata(self):
         with tempfile.TemporaryDirectory() as work_dir:
             self._write_notebook(work_dir)
 
@@ -132,9 +132,9 @@ class TestReplayNotebookSelection(unittest.TestCase):
                 snapshot_load=True,
             )
 
-            self.assertEqual(replayed, ["b = 2", "c = 3"])
+            self.assertEqual(replayed, [])
 
-    def test_invalid_meta_does_not_crash_and_replays_all(self):
+    def test_snapshot_restore_does_not_depend_on_metadata(self):
         with tempfile.TemporaryDirectory() as work_dir:
             self._write_notebook(work_dir)
 
@@ -147,7 +147,7 @@ class TestReplayNotebookSelection(unittest.TestCase):
                 snapshot_load=True,
             )
 
-            self.assertEqual(replayed, ["a = 1", "b = 2", "c = 3"])
+            self.assertEqual(replayed, [])
 
     def test_missing_notebook_after_snapshot_load_is_allowed(self):
         with tempfile.TemporaryDirectory() as work_dir:

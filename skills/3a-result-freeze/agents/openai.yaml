@@ -1,0 +1,4 @@
+interface:
+  display_name: "结果冻结与可追溯性"
+  short_description: "Freeze key metrics with reproducible source hash records"
+  default_prompt: "Use $3a-result-freeze to freeze key modeling results and their source hashes."

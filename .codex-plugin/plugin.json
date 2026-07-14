@@ -1,0 +1,18 @@
+{
+  "name": "mathmodelagent-skills",
+  "version": "0.2.0",
+  "description": "Experimental mathematical-modeling workflow skills for MathModelAgent.",
+  "author": {
+    "name": "MathModelAgent project"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "MathModelAgent Skills",
+    "shortDescription": "Run staged mathematical-modeling workflows in Codex.",
+    "longDescription": "Provides experimental mathematical-modeling skills, evidence-chain gates, and paper-workflow guidance. It does not replace the MathModelAgent WebUI workflow.",
+    "developerName": "MathModelAgent project",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Use the MathModelAgent skills to start a mathematical-modeling workflow."
+  }
+}

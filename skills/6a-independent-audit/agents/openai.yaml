@@ -1,0 +1,4 @@
+interface:
+  display_name: "独立证据审计"
+  short_description: "Audit frozen results before final paper verification"
+  default_prompt: "Use $6a-independent-audit to independently check frozen modeling evidence before final verification."

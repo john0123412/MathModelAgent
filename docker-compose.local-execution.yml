@@ -5,7 +5,9 @@ services:
     environment:
       CODE_INTERPRETER_KIND: auto
       ALLOW_LOCAL_CODE_EXECUTION: "true"
-      LOCAL_CODE_EXECUTION_TIMEOUT_SECONDS: "300"
+      # A numerical experiment must yield promptly. The interpreter watchdog also
+      # protects the workflow if a Jupyter IOPub receive stalls.
+      LOCAL_CODE_EXECUTION_TIMEOUT_SECONDS: "120"
     cap_drop:
       - ALL
     # Backend uses these only to manage shared task files, prepare, and terminate the
@@ -19,3 +21,18 @@ services:
     security_opt:
       - no-new-privileges:true
     pids_limit: 256
+    # Local model-code execution can occupy the backend event loop for several
+    # minutes while a notebook cell runs. Keep the container health signal
+    # useful without treating that expected workload as an immediate restart.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8000/docs', timeout=10).status == 200 else 1)",
+        ]
+      interval: 10s
+      timeout: 15s
+      retries: 36
+      start_period: 20s

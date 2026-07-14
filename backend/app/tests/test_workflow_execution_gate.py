@@ -1,0 +1,403 @@
+"""Regression tests for the code-validation-freeze-writer ordering."""
+
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+from app.core.checkpoint import CheckpointManager, TaskCheckpoint
+from app.core.workflow import MathModelWorkFlow
+from app.schemas.A2A import CoderToWriter, ModelerToCoder, WriterResponse
+
+
+class _Flows:
+    def get_solution_flows(self, _questions, _modeler_response):
+        return {
+            "ques1": {"coder_prompt": "solve q1"},
+            "ques2": {"coder_prompt": "solve q2"},
+        }
+
+    def get_writer_prompt(self, key, _response, _interpreter, _template):
+        return f"write {key}"
+
+
+class _Coder:
+    def __init__(self, events):
+        self.events = events
+
+    async def run(self, prompt, subtask_title):
+        self.events.append(("code", subtask_title, prompt))
+        return CoderToWriter(
+            code_response=f"response {subtask_title}",
+            created_images=[],
+            execution_attempted=True,
+            execution_succeeded=True,
+        )
+
+
+class _Writer:
+    def __init__(self, events):
+        self.events = events
+
+    async def run(self, prompt, available_images=None, sub_title=None):
+        self.events.append(("writer", sub_title, prompt))
+        return WriterResponse(response_content=f"paper {sub_title}")
+
+
+class _Interpreter:
+    def __init__(self, work_dir):
+        self.work_dir = work_dir
+        self.kc = None
+
+
+class _Output:
+    def __init__(self):
+        self.results = {}
+
+    def set_res(self, key, value):
+        self.results[key] = value
+
+
+class _RepairOutput:
+    def __init__(self):
+        self.results = {
+            "ques1": {"response_content": "paper q1", "footnotes": []},
+            "ques2": {"response_content": "incorrect paper q2", "footnotes": []},
+        }
+        self.save_count = 0
+
+    def get_res(self):
+        return self.results
+
+    def set_res(self, key, value):
+        self.results[key] = {
+            "response_content": value.response_content,
+            "footnotes": value.footnotes,
+        }
+
+    def save_result(self):
+        self.save_count += 1
+
+
+class WorkflowExecutionGateTest(unittest.IsolatedAsyncioTestCase):
+    async def test_all_code_and_freeze_finish_before_any_solution_writer_runs(self):
+        with tempfile.TemporaryDirectory() as raw_work_dir:
+            work_dir = Path(raw_work_dir)
+            checkpoint_manager = CheckpointManager(str(work_dir))
+            checkpoint_manager.save(
+                TaskCheckpoint(
+                    task_id="task",
+                    ques_all="test",
+                    comp_template="cumcm",
+                    format_output="markdown",
+                    questions={"ques_count": 2, "ques1": "q1", "ques2": "q2"},
+                    ques_count=2,
+                    modeler_response={"questions_solution": {}},
+                    updated_at="now",
+                )
+            )
+            events = []
+            workflow = MathModelWorkFlow()
+            workflow.task_id = "task"
+            workflow.work_dir = str(work_dir)
+            coder = _Coder(events)
+            writer = _Writer(events)
+            output = _Output()
+
+            def freeze(directory):
+                events.append(("freeze",))
+                Path(directory, "frozen_results.json").write_text("{}", encoding="utf-8")
+                return Path(directory, "frozen_results.json")
+
+            with (
+                patch("app.core.workflow.redis_manager.publish_message", AsyncMock()),
+                patch("app.core.workflow.write_execution_validation_report", return_value={"status": "PASS"}),
+                patch("app.core.workflow.write_frozen_results_from_execution_validation", side_effect=freeze),
+            ):
+                await workflow._run_solution_flows(
+                    _Flows(),
+                    ModelerToCoder(questions_solution={}),
+                    coder,
+                    writer,
+                    _Interpreter(str(work_dir)),
+                    output,
+                    checkpoint_manager,
+                    {},
+                )
+
+            self.assertEqual([event[1] for event in events if event[0] == "code"], ["ques1", "ques2"])
+            self.assertEqual(events[2], ("freeze",))
+            self.assertEqual([event[1] for event in events if event[0] == "writer"], ["ques1", "ques2"])
+            self.assertEqual(set(output.results), {"ques1", "ques2"})
+            self.assertIsNotNone(checkpoint_manager.get_solution_coder_response("ques1"))
+
+    async def test_second_failed_validation_keeps_passed_checkpoint_and_clears_repair_boundary(self):
+        with tempfile.TemporaryDirectory() as raw_work_dir:
+            work_dir = Path(raw_work_dir)
+            checkpoint_manager = CheckpointManager(str(work_dir))
+            checkpoint_manager.save(
+                TaskCheckpoint(
+                    task_id="task",
+                    ques_all="test",
+                    comp_template="cumcm",
+                    format_output="markdown",
+                    questions={"ques_count": 2, "ques1": "q1", "ques2": "q2"},
+                    ques_count=2,
+                    modeler_response={"questions_solution": {}},
+                    updated_at="now",
+                )
+            )
+            workflow = MathModelWorkFlow()
+            workflow.task_id = "task"
+            workflow.work_dir = str(work_dir)
+
+            with (
+                patch("app.core.workflow.redis_manager.publish_message", AsyncMock()),
+                patch(
+                    "app.core.workflow.write_execution_validation_report",
+                    return_value={
+                        "status": "FAIL",
+                        "checks": [
+                            {"id": "ques2.constraints", "passed": False, "message": "missing"}
+                        ],
+                    },
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "数值可行性门禁"):
+                    await workflow._run_solution_flows(
+                        _Flows(),
+                        ModelerToCoder(questions_solution={}),
+                        _Coder([]),
+                        _Writer([]),
+                        _Interpreter(str(work_dir)),
+                        _Output(),
+                        checkpoint_manager,
+                        {},
+                    )
+
+            self.assertIsNotNone(checkpoint_manager.get_solution_coder_response("ques1"))
+            self.assertIsNone(checkpoint_manager.get_solution_coder_response("ques2"))
+
+    async def test_targeted_repair_only_reexecutes_failed_subtask_and_keeps_passed_checkpoint(self):
+        with tempfile.TemporaryDirectory() as raw_work_dir:
+            work_dir = Path(raw_work_dir)
+            checkpoint_manager = CheckpointManager(str(work_dir))
+            checkpoint_manager.save(
+                TaskCheckpoint(
+                    task_id="task",
+                    ques_all="test",
+                    comp_template="cumcm",
+                    format_output="markdown",
+                    questions={"ques_count": 2, "ques1": "q1", "ques2": "q2"},
+                    ques_count=2,
+                    modeler_response={"questions_solution": {}},
+                    updated_at="now",
+                )
+            )
+            events = []
+            workflow = MathModelWorkFlow()
+            workflow.task_id = "task"
+            workflow.work_dir = str(work_dir)
+
+            def freeze(directory):
+                Path(directory, "frozen_results.json").write_text("{}", encoding="utf-8")
+
+            failed_report = {
+                "status": "FAIL",
+                "checks": [
+                    {"id": "ques2.constraints", "passed": False, "message": "缺少结果文件。"},
+                    {"id": "ques1.executed", "passed": True, "message": "ok"},
+                ],
+            }
+            with (
+                patch("app.core.workflow.redis_manager.publish_message", AsyncMock()),
+                patch(
+                    "app.core.workflow.write_execution_validation_report",
+                    side_effect=[failed_report, {"status": "PASS", "checks": []}],
+                ),
+                patch("app.core.workflow.write_frozen_results_from_execution_validation", side_effect=freeze),
+            ):
+                await workflow._run_solution_flows(
+                    _Flows(),
+                    ModelerToCoder(questions_solution={}),
+                    _Coder(events),
+                    _Writer(events),
+                    _Interpreter(str(work_dir)),
+                    _Output(),
+                    checkpoint_manager,
+                    {},
+                )
+
+            code_subtasks = [event[1] for event in events if event[0] == "code"]
+            self.assertEqual(
+                code_subtasks,
+                ["ques1", "ques2", "ques2_repair"],
+            )
+            self.assertEqual(checkpoint_manager._checkpoint.targeted_repair_attempts, 0)
+            self.assertEqual(checkpoint_manager._checkpoint.workflow_state, "frozen")
+            self.assertIsNotNone(checkpoint_manager.get_solution_coder_response("ques1"))
+            self.assertIsNotNone(checkpoint_manager.get_solution_coder_response("ques2"))
+
+    async def test_preflight_repair_rewrites_only_reported_question_once(self):
+        with tempfile.TemporaryDirectory() as raw_work_dir:
+            work_dir = Path(raw_work_dir)
+            checkpoint_manager = CheckpointManager(str(work_dir))
+            checkpoint_manager.save(
+                TaskCheckpoint(
+                    task_id="task",
+                    ques_all="test",
+                    comp_template="cumcm",
+                    format_output="markdown",
+                    questions={"ques_count": 2, "ques1": "q1", "ques2": "q2"},
+                    ques_count=2,
+                    modeler_response={"questions_solution": {}},
+                    updated_at="now",
+                )
+            )
+            workflow = MathModelWorkFlow()
+            workflow.task_id = "task"
+            workflow.work_dir = str(work_dir)
+            events = []
+            output = _RepairOutput()
+            report = {
+                "status": "FAIL",
+                "checks": {
+                    "result_consistency": {
+                        "passed": False,
+                        "severity": "fail",
+                        "conflicts": [
+                            {
+                                "paper_section": "5.2 问题二模型的建立与求解",
+                                "location": "body",
+                                "sentence": "wrong result",
+                            }
+                        ],
+                        "abstract_conflicts": [],
+                    }
+                },
+            }
+            with (
+                patch("app.core.workflow.redis_manager.publish_message", AsyncMock()),
+                patch("app.core.workflow.build_result_fact_summary", return_value="frozen facts"),
+            ):
+                repaired = await workflow._repair_writer_preflight_once(
+                    output, _Writer(events), checkpoint_manager, report
+                )
+
+            self.assertIs(repaired, report)
+            self.assertEqual([event[1] for event in events], ["ques2_preflight_repair"])
+            self.assertEqual(output.results["ques1"]["response_content"], "paper q1")
+            self.assertEqual(output.results["ques2"]["response_content"], "paper ques2_preflight_repair")
+            self.assertEqual(output.save_count, 1)
+            self.assertEqual(checkpoint_manager._checkpoint.paper_repair_attempts, 1)
+
+    async def test_preflight_non_section_failure_is_not_blindly_rewritten(self):
+        with tempfile.TemporaryDirectory() as raw_work_dir:
+            checkpoint_manager = CheckpointManager(raw_work_dir)
+            checkpoint_manager.save(
+                TaskCheckpoint(
+                    task_id="task",
+                    ques_all="test",
+                    comp_template="cumcm",
+                    format_output="markdown",
+                    questions={"ques_count": 1, "ques1": "q1"},
+                    ques_count=1,
+                    modeler_response={"questions_solution": {}},
+                    updated_at="now",
+                )
+            )
+            workflow = MathModelWorkFlow()
+            workflow.task_id = "task"
+            workflow.work_dir = raw_work_dir
+            output = _RepairOutput()
+            report = {
+                "status": "FAIL",
+                "checks": {
+                    "code_appendix": {"passed": False, "severity": "fail"}
+                },
+            }
+            with patch("app.core.workflow.redis_manager.publish_message", AsyncMock()):
+                repaired = await workflow._repair_writer_preflight_once(
+                    output, _Writer([]), checkpoint_manager, report
+                )
+
+            self.assertIsNone(repaired)
+            self.assertEqual(checkpoint_manager._checkpoint.paper_repair_attempts, 0)
+
+    async def test_export_stops_before_pdf_when_single_preflight_repair_still_fails(self):
+        with tempfile.TemporaryDirectory() as raw_work_dir:
+            checkpoint_manager = CheckpointManager(raw_work_dir)
+            checkpoint_manager.save(
+                TaskCheckpoint(
+                    task_id="task",
+                    ques_all="test",
+                    comp_template="cumcm",
+                    format_output="markdown",
+                    questions={"ques_count": 2, "ques1": "q1", "ques2": "q2"},
+                    ques_count=2,
+                    modeler_response={"questions_solution": {}},
+                    updated_at="now",
+                )
+            )
+            workflow = MathModelWorkFlow()
+            workflow.task_id = "task"
+            workflow.work_dir = raw_work_dir
+            workflow.questions = {"ques_count": 2, "ques1": "q1", "ques2": "q2"}
+            events = []
+            output = _RepairOutput()
+            failed_report = {
+                "status": "FAIL",
+                "checks": {
+                    "result_consistency": {
+                        "passed": False,
+                        "severity": "fail",
+                        "conflicts": [
+                            {"paper_section": "5.2 问题二模型", "location": "body"}
+                        ],
+                        "abstract_conflicts": [],
+                    }
+                },
+            }
+            with (
+                patch("app.core.workflow.redis_manager.publish_message", AsyncMock()),
+                patch("app.core.workflow.prepare_paper_markdown", side_effect=[failed_report, failed_report]),
+                patch("app.core.workflow.build_result_fact_summary", return_value="frozen facts"),
+                patch("app.core.workflow.export_markdown_to_pdf") as export_pdf,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "停止生成候选 PDF"):
+                    await workflow._export_results(
+                        output,
+                        writer_agent=_Writer(events),
+                        checkpoint_manager=checkpoint_manager,
+                    )
+
+            self.assertEqual([event[1] for event in events], ["ques2_preflight_repair"])
+            export_pdf.assert_not_called()
+            self.assertEqual(checkpoint_manager._checkpoint.paper_repair_attempts, 1)
+
+    def test_loading_legacy_frozen_checkpoint_resets_completed_repair_budget(self):
+        with tempfile.TemporaryDirectory() as raw_work_dir:
+            manager = CheckpointManager(raw_work_dir)
+            manager.save(
+                TaskCheckpoint(
+                    task_id="task",
+                    ques_all="test",
+                    comp_template="cumcm",
+                    format_output="markdown",
+                    questions={"ques_count": 1, "ques1": "q1"},
+                    ques_count=1,
+                    modeler_response={"questions_solution": {}},
+                    workflow_state="frozen",
+                    targeted_repair_attempts=1,
+                    last_validation_failure={},
+                    updated_at="now",
+                )
+            )
+            loaded = CheckpointManager(raw_work_dir).load()
+
+            self.assertIsNotNone(loaded)
+            self.assertEqual(loaded.targeted_repair_attempts, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

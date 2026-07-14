@@ -12,11 +12,11 @@ Roman/SimSun/SimHei/KaiTi 等正式字体，直接在本机运行这个 CLI 可�
     uv run python -m app.tools.export_cli check
 
     # 直接导出 PDF，本地字体优先（Times New Roman/SimSun/... 检测缺失才回退）
-    uv run python -m app.tools.export_cli pdf --input res.md --output res.pdf --profile cumcm2025 --local
+    uv run python -m app.tools.export_cli pdf --input res.md --output res.pdf --profile cumcm2026 --local
 
     # 只导出 LaTeX sidecar 项目，供之后手动 xelatex 编译（最稳妥的方式，
     # gmcmthesis 模板自带 \\IfFontExistsTF 检测，不需要额外参数）
-    uv run python -m app.tools.export_cli latex --input res.md --work-dir . --profile cumcm2025
+    uv run python -m app.tools.export_cli latex --input res.md --work-dir . --profile cumcm2026
 
     # 手动指定字体（用户显式指定优先，检测到缺失只警告，不会静默换成别的字体）
     uv run python -m app.tools.export_cli pdf --input res.md --output res.pdf --local `
@@ -41,6 +41,7 @@ from app.tools.candidate_exporter import write_candidate_manifest
 from app.tools.pdf_exporter import export_markdown_to_pdf
 from app.tools.pdf_visual_checker import check_pdf_visual
 from app.tools.submission_audit import write_submission_audit_report
+from app.tools.final_acceptance import write_final_acceptance_report
 from app.tools.tex_project_exporter import export_markdown_to_latex_project
 from app.utils.font_utils import check_font_installed
 
@@ -146,6 +147,8 @@ def _refresh_task_status(
     if os.path.exists(manifest_path):
         manifest = _load_existing_json(manifest_path)
         task_id = manifest.get("task_id") or os.path.basename(os.path.abspath(work_dir))
+        write_candidate_manifest(work_dir, str(task_id))
+        write_final_acceptance_report(work_dir)
         write_candidate_manifest(work_dir, str(task_id))
 
 

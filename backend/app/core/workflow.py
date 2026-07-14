@@ -4,11 +4,12 @@ import asyncio
 import datetime
 import json
 import os
+import re
 from contextlib import asynccontextmanager
 import nbformat
 from app.core.agents import WriterAgent, CoderAgent, CoordinatorAgent, ModelerAgent
 from app.core.checkpoint import CheckpointManager, TaskCheckpoint
-from app.schemas.A2A import ModelerToCoder, WriterResponse
+from app.schemas.A2A import CoordinatorToModeler, CoderToWriter, ModelerToCoder, WriterResponse
 from app.schemas.enums import CompTemplate, ExportProfile, FormatOutPut
 from app.schemas.request import DEFAULT_MODELING_EXPORT_PROFILE, Problem
 from app.schemas.response import SystemMessage
@@ -26,11 +27,16 @@ from app.tools.pdf_exporter import export_markdown_to_pdf
 from app.tools.tex_project_exporter import export_markdown_to_latex_project
 from app.tools.candidate_exporter import write_candidate_manifest
 from app.tools.export_profiles import normalize_export_profile
-from app.tools.paper_postprocessor import prepare_paper_markdown
+from app.tools.paper_postprocessor import build_result_fact_summary, prepare_paper_markdown
 from app.tools.pdf_visual_checker import check_pdf_visual
 from app.tools.submission_audit import write_submission_audit_report
+from app.tools.execution_validation import (
+    write_execution_validation_report,
+    write_frozen_results_from_execution_validation,
+)
 from app.core.flows import Flows
 from app.core.llm.llm_factory import LLMFactory
+from app.schemas.problem_contract import build_problem_contract, validate_modeler_plan
 
 
 class WorkFlow:
@@ -180,21 +186,17 @@ class MathModelWorkFlow(WorkFlow):
 
         优先级：
         1. 从变量快照恢复（最快，秒级）
-        2. 增量重放（只重放新单元格）
-        3. 全量重放（fallback）
+        2. 全量重放（快照缺失或恢复失败时的 fallback）
 
         Args:
             code_interpreter: 新建的代码解释器实例。
-            checkpoint_manager: 检查点管理器，用于增量重放。
+            checkpoint_manager: 检查点管理器，用于更新快照可用状态。
         """
         # 尝试从变量快照恢复（最快）
         from app.tools.variable_snapshot import VariableSnapshot
 
         notebook_path = os.path.join(self.work_dir, "notebook.ipynb")
         snapshot = VariableSnapshot(self.work_dir)
-        replay_start_cell_index = 0
-        replay_start_code_index = 0
-        replay_start_uses_cell_index = True
         replay_mode = "全量重放"
 
         if snapshot.exists():
@@ -206,20 +208,14 @@ class MathModelWorkFlow(WorkFlow):
             # 获取内核客户端
             kernel_client = getattr(code_interpreter, "kc", None)
             if kernel_client and await snapshot.load(kernel_client):
-                logger.info("变量快照恢复成功，跳过单元格重放")
-                meta = snapshot.load_meta()
-                replay_start_cell_index = self._safe_non_negative_int(
-                    meta.get("notebook_cell_count"), default=0
-                )
-                replay_start_code_index = self._safe_non_negative_int(
-                    meta.get("notebook_code_cell_count"), default=0
-                )
-                replay_start_uses_cell_index = "notebook_cell_count" in meta
-                replay_mode = "快照后增量重放"
+                logger.info("变量快照恢复成功，丢弃快照后的未完成阶段代码")
                 await redis_manager.publish_message(
                     self.task_id,
-                    SystemMessage(content="计算环境恢复完成（从快照）"),
+                    SystemMessage(
+                        content="计算环境恢复完成（从快照；未完成阶段不会重放）"
+                    ),
                 )
+                return
             else:
                 logger.warning("变量快照恢复失败，降级为全量重放")
                 if checkpoint_manager is not None:
@@ -230,9 +226,6 @@ class MathModelWorkFlow(WorkFlow):
                 )
 
         if not os.path.exists(notebook_path):
-            if replay_mode == "快照后增量重放":
-                logger.info("未找到 notebook.ipynb，已从变量快照恢复，跳过单元格重放")
-                return
             logger.info("未找到 notebook.ipynb，跳过内核状态重放")
             return
 
@@ -250,17 +243,10 @@ class MathModelWorkFlow(WorkFlow):
             and (cell.get("source") or "").strip()
         ]
 
-        # 无快照时必须全量重放；快照成功时只补齐快照之后新增的成功单元格。
-        if replay_start_uses_cell_index:
-            cells_to_replay = [
-                (i, cell) for i, cell in all_code_cells if i >= replay_start_cell_index
-            ]
-        else:
-            cells_to_replay = [
-                (i, cell)
-                for code_index, (i, cell) in enumerate(all_code_cells)
-                if code_index >= replay_start_code_index
-            ]
+        # A restored snapshot is returned above.  Replaying arbitrary cells after a
+        # snapshot can repeat a cancelled, expensive partial phase and corrupt the
+        # durable checkpoint boundary, so fallback replay is intentionally all-or-none.
+        cells_to_replay = all_code_cells
 
         total = len(cells_to_replay)
         total_all = len(all_code_cells)
@@ -313,6 +299,33 @@ class MathModelWorkFlow(WorkFlow):
             logger.warning(f"读取 notebook 单元格数量失败: {e}")
             return 0, 0
 
+    def _archive_unverified_execution_context(self) -> None:
+        """Keep failed evidence for audit while ensuring a repaired plan starts clean."""
+        archived_dir = os.path.join(
+            self.work_dir,
+            "failed_attempts",
+            datetime.datetime.now().strftime("%Y%m%d-%H%M%S"),
+        )
+        names = (
+            "notebook.ipynb",
+            "variable_snapshot.pkl",
+            "variable_snapshot_meta.json",
+            "execution_validation.json",
+            "execution_validation_report.json",
+            "frozen_results.json",
+        )
+        existing = [
+            name for name in names if os.path.isfile(os.path.join(self.work_dir, name))
+        ]
+        if not existing:
+            return
+        os.makedirs(archived_dir, exist_ok=True)
+        for name in existing:
+            os.replace(
+                os.path.join(self.work_dir, name), os.path.join(archived_dir, name)
+            )
+        logger.warning(f"已归档未通过的执行上下文，重新建立干净求解环境: {archived_dir}")
+
     @staticmethod
     def _safe_non_negative_int(value, default: int = 0) -> int:
         """将 metadata 字段转换为非负整数。"""
@@ -321,6 +334,47 @@ class MathModelWorkFlow(WorkFlow):
         except (TypeError, ValueError):
             return default
         return max(parsed, 0)
+
+    @staticmethod
+    def _failed_subtasks_from_execution_report(
+        report: dict,
+        required_subtasks: list[str],
+    ) -> list[str]:
+        """Map final validation failures back to formal question keys.
+
+        A malformed top-level manifest cannot be assigned safely, so it is
+        treated as a repair request for every required question.  Per-question
+        checks retain the already-passed Coder checkpoints of other questions.
+        """
+        failed: set[str] = set()
+        global_failure = False
+        for check in report.get("checks", []):
+            if not isinstance(check, dict) or check.get("passed") is True:
+                continue
+            check_id = str(check.get("id", ""))
+            for key in required_subtasks:
+                if check_id == key or check_id.startswith(f"{key}."):
+                    failed.add(key)
+                    break
+            else:
+                if check_id in {"execution_manifest", "required_subtasks", "metrics"}:
+                    global_failure = True
+        return list(required_subtasks) if global_failure else sorted(failed)
+
+    @staticmethod
+    def _repair_failure_summary(report: dict, failed_subtasks: list[str]) -> str:
+        """Keep the Coder repair context factual and bounded."""
+        lines: list[str] = []
+        for check in report.get("checks", []):
+            if not isinstance(check, dict) or check.get("passed") is True:
+                continue
+            check_id = str(check.get("id", ""))
+            if check_id in {"execution_manifest", "required_subtasks", "metrics"} or any(
+                check_id == key or check_id.startswith(f"{key}.")
+                for key in failed_subtasks
+            ):
+                lines.append(f"- {check_id}: {check.get('message', '验证失败')}")
+        return "\n".join(lines[:40]) or "- 未能从报告中定位到单项失败；请核对 execution_validation_report.json。"
 
     async def _run_solution_flows(
         self,
@@ -333,18 +387,22 @@ class MathModelWorkFlow(WorkFlow):
         checkpoint_manager: CheckpointManager,
         config_template: dict,
     ) -> None:
-        """执行 solution_flows 循环（代码手求解 + 写作手撰写），已完成的阶段直接跳过。"""
+        """先完成全部代码求解与验证冻结，再允许论文手撰写。"""
         solution_flows = flows.get_solution_flows(self.questions, modeler_response)
+        if checkpoint_manager.repair_attempts_exhausted():
+            raise RuntimeError(
+                "最终执行验证已连续两次失败；按恢复规程已停止自动回修，"
+                "请由指定决策人切换已验证 provider 或确认低开销可复核算法后再续传。"
+            )
+        coder_responses: dict[str, CoderToWriter] = {}
 
         for key, value in solution_flows.items():
             await self._check_cancelled()
 
-            phase = checkpoint_manager.get_phase(key)
-            if phase is not None:
-                logger.info(f"跳过已完成阶段: {key}")
-                user_output.set_res(
-                    key, WriterResponse.model_validate(phase.writer_response)
-                )
+            saved_coder_response = checkpoint_manager.get_solution_coder_response(key)
+            if saved_coder_response is not None:
+                logger.info(f"复用已完成的代码阶段，等待最终验证后再写作: {key}")
+                coder_responses[key] = CoderToWriter.model_validate(saved_coder_response)
                 continue
 
             await redis_manager.publish_message(
@@ -356,38 +414,35 @@ class MathModelWorkFlow(WorkFlow):
                 prompt=value["coder_prompt"], subtask_title=key
             )
 
+            if (
+                not coder_response.execution_attempted
+                or not coder_response.execution_succeeded
+                or coder_response.execution_error_occurred
+            ):
+                report = write_execution_validation_report(
+                    self.work_dir, require_manifest=False
+                )
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(
+                        content=(
+                            f"代码手未提供可验证的成功执行证据，已停止 {key} 的写作；"
+                            "请查看 execution_validation_report.json"
+                        ),
+                        type="error",
+                    ),
+                )
+                raise RuntimeError(
+                    f"代码阶段 {key} 未通过执行门禁: {report.get('status')}"
+                )
+
             await redis_manager.publish_message(
                 self.task_id,
                 SystemMessage(content=f"代码手求解成功{key}", type="success"),
             )
-
-            writer_prompt = flows.get_writer_prompt(
-                key,
-                coder_response.code_response or "",
-                code_interpreter,
-                config_template,
-            )
-
-            await redis_manager.publish_message(
-                self.task_id,
-                SystemMessage(content=f"论文手开始写{key}部分"),
-            )
-
-            ## TODO: 图片引用错误
-            writer_response = await writer_agent.run(
-                writer_prompt,
-                available_images=coder_response.created_images,
-                sub_title=key,
-            )
-
-            await redis_manager.publish_message(
-                self.task_id,
-                SystemMessage(content=f"论文手完成{key}部分"),
-            )
-
-            user_output.set_res(key, writer_response)
-            checkpoint_manager.mark_phase_completed(
-                key, coder_response.model_dump(), writer_response.model_dump()
+            coder_responses[key] = coder_response
+            checkpoint_manager.mark_solution_coder_completed(
+                key, coder_response.model_dump()
             )
 
             # 保存变量快照（用于下次快速恢复）
@@ -413,6 +468,153 @@ class MathModelWorkFlow(WorkFlow):
                 except Exception as e:
                     checkpoint_manager.set_variable_snapshot_exists(False)
                     logger.warning(f"保存变量快照失败: {e}")
+
+        required_subtasks = [
+            flow_key
+            for flow_key in solution_flows
+            if flow_key.startswith("ques") and flow_key != "ques_count"
+        ]
+        # `execution_validation.json` is assembled by the trusted evidence
+        # recorder called within each formal Coder subtask.  Do not ask the
+        # model to maintain a second, cross-question manifest here: that was
+        # the source of `tasks`/`subtasks`, path and SHA-256 hand-off errors.
+        report = write_execution_validation_report(
+            self.work_dir,
+            required_subtasks=required_subtasks,
+        )
+        if report.get("status") != "PASS":
+            failed_subtasks = self._failed_subtasks_from_execution_report(
+                report, required_subtasks
+            )
+            if not failed_subtasks:
+                # Keep the failure actionable even if a future validator adds a
+                # new global check without a question prefix.
+                failed_subtasks = list(required_subtasks)
+            repair_attempt = checkpoint_manager.record_validation_failure(
+                failed_subtasks, report
+            )
+            if repair_attempt == 1:
+                checkpoint_manager.invalidate_solution_coder_responses(failed_subtasks)
+                failure_summary = self._repair_failure_summary(report, failed_subtasks)
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(
+                        content=(
+                            "最终验证未通过，开始一次定向回修："
+                            + "、".join(failed_subtasks)
+                            + "；已通过问题的代码检查点将保留。"
+                        ),
+                        type="warning",
+                    ),
+                )
+                for key in failed_subtasks:
+                    await self._check_cancelled()
+                    repair_prompt = (
+                        "这是最终执行验证后的唯一一次定向回修。只修复当前正式问题，"
+                        "不得重算或改写已通过问题。必须实际执行并覆盖本题结果文件，"
+                        "随后通过受控证据记录流程更新本题的验证证据。\n\n"
+                        f"当前问题：{key}\n原始求解要求：\n{solution_flows[key]['coder_prompt']}\n\n"
+                        "验证失败项：\n"
+                        f"{failure_summary}\n\n"
+                        "保留所有已通过问题的文件和数值；不要把失败解释写进论文。"
+                    )
+                    repaired_response = await coder_agent.run(
+                        prompt=repair_prompt,
+                        subtask_title=f"{key}_repair",
+                    )
+                    if (
+                        not repaired_response.execution_attempted
+                        or not repaired_response.execution_succeeded
+                        or repaired_response.execution_error_occurred
+                    ):
+                        # The original validation failure plus this failed repair
+                        # consumes the two-failure budget immediately.
+                        checkpoint_manager.record_validation_failure(
+                            failed_subtasks,
+                            {"checks": [{"id": key, "passed": False, "message": "定向回修代码未成功执行。"}]},
+                        )
+                        raise RuntimeError(
+                            "定向回修代码未成功执行；已按连续两次失败恢复规程停止。"
+                        )
+                    coder_responses[key] = repaired_response
+                    checkpoint_manager.mark_solution_coder_completed(
+                        key, repaired_response.model_dump()
+                    )
+
+                # The repair Coder call has to use `record_execution_evidence`
+                # for the repaired question.  Revalidate directly from the
+                # backend-owned manifest; never introduce a free-form manifest
+                # repair turn.
+                report = write_execution_validation_report(
+                    self.work_dir, required_subtasks=required_subtasks
+                )
+
+            if report.get("status") != "PASS":
+                # The first failure was recorded before repair.  A failed repair
+                # is the second real failure and must not enter an automatic loop.
+                if repair_attempt == 1:
+                    exhausted_subtasks = (
+                        self._failed_subtasks_from_execution_report(
+                            report, required_subtasks
+                        )
+                        or failed_subtasks
+                    )
+                    checkpoint_manager.record_validation_failure(exhausted_subtasks, report)
+                    # The second failure is not reusable evidence.  Passed
+                    # questions were never removed; only the exhausted repair
+                    # boundary is cleared before manual recovery takes over.
+                    checkpoint_manager.invalidate_solution_coder_responses(exhausted_subtasks)
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(
+                        content=(
+                            "代码执行或数值可行性验证连续失败，已停止论文写作和自动回修；"
+                            "请查看 execution_validation_report.json 并按恢复规程处理。"
+                        ),
+                        type="error",
+                    ),
+                )
+                raise RuntimeError("代码执行/数值可行性门禁未通过，定向回修已停止")
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(
+                    content="定向回修后的最终执行验证通过。",
+                    type="success",
+                ),
+            )
+        try:
+            write_frozen_results_from_execution_validation(self.work_dir)
+            checkpoint_manager.mark_results_frozen()
+        except Exception as exc:
+            raise RuntimeError("执行验证通过但冻结结果写入失败") from exc
+
+        # 此处开始才允许 Writer 接触代码结果。即使旧检查点中有 Writer 文本，
+        # 也必须重写，避免把冻结前生成的未验证数值带入本次导出。
+        for key, coder_response in coder_responses.items():
+            await self._check_cancelled()
+            writer_prompt = flows.get_writer_prompt(
+                key,
+                coder_response.code_response or "",
+                code_interpreter,
+                config_template,
+            )
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content=f"最终执行验证通过，论文手开始写{key}部分"),
+            )
+            writer_response = await writer_agent.run(
+                writer_prompt,
+                available_images=coder_response.created_images,
+                sub_title=key,
+            )
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content=f"论文手完成{key}部分"),
+            )
+            user_output.set_res(key, writer_response)
+            checkpoint_manager.mark_phase_completed(
+                key, coder_response.model_dump(), writer_response.model_dump()
+            )
 
     async def _run_write_flows(
         self,
@@ -523,10 +725,139 @@ class MathModelWorkFlow(WorkFlow):
         with open(decision_md_path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines).rstrip() + "\n")
 
+    @staticmethod
+    def _preflight_failure_summary(report: dict) -> str:
+        """Make a bounded, actionable Writer brief from hard preflight checks."""
+        lines: list[str] = []
+        checks = report.get("checks", {}) if isinstance(report, dict) else {}
+        if not isinstance(checks, dict):
+            return "- paper_preflight_report.json 格式无效。"
+        for check_id, check in checks.items():
+            if not isinstance(check, dict) or check.get("passed") is True:
+                continue
+            if check.get("severity") != "fail":
+                continue
+            details = {
+                key: value
+                for key, value in check.items()
+                if key not in {"passed", "severity"}
+            }
+            rendered = json.dumps(details, ensure_ascii=False, separators=(",", ":"))
+            lines.append(f"- {check_id}: {rendered[:2400]}")
+        return "\n".join(lines[:12]) or "- 未定位到可修复的硬门禁项。"
+
+    @staticmethod
+    def _preflight_repairable_sections(report: dict, available_sections: set[str]) -> list[str]:
+        """Map result-consistency conflicts to only the Writer sections at fault.
+
+        The checker reports section headings rather than Agent keys.  We only
+        auto-rewrite a section when that mapping is unambiguous; broad layout,
+        source-code and reference failures remain hard stops for human repair.
+        """
+        checks = report.get("checks", {}) if isinstance(report, dict) else {}
+        if not isinstance(checks, dict):
+            return []
+        repairable = {"result_consistency", "algorithm_evidence", "infeasible_optimality", "claim_trace"}
+        failed = {
+            check_id: check
+            for check_id, check in checks.items()
+            if isinstance(check, dict)
+            and check.get("passed") is False
+            and check.get("severity") == "fail"
+        }
+        if not failed or not set(failed).issubset(repairable):
+            return []
+
+        sections: set[str] = set()
+        consistency = failed.get("result_consistency", {})
+        conflicts = []
+        if isinstance(consistency, dict):
+            conflicts = list(consistency.get("conflicts", [])) + list(
+                consistency.get("abstract_conflicts", [])
+            )
+        for conflict in conflicts:
+            if not isinstance(conflict, dict):
+                continue
+            location = str(conflict.get("location", ""))
+            if location == "abstract" and "firstPage" in available_sections:
+                sections.add("firstPage")
+            heading = str(conflict.get("paper_section", ""))
+            match = re.search(r"问题\s*([0-9一二三四五六七八九十]+)", heading)
+            if match:
+                raw_index = match.group(1)
+                chinese_index = {
+                    "一": "1",
+                    "二": "2",
+                    "三": "3",
+                    "四": "4",
+                    "五": "5",
+                    "六": "6",
+                    "七": "7",
+                    "八": "8",
+                    "九": "9",
+                    "十": "10",
+                }.get(raw_index, raw_index)
+                candidate = f"ques{chinese_index}"
+                if candidate in available_sections:
+                    sections.add(candidate)
+        # A claim-trace or method-evidence failure is not safely assignable by
+        # heading.  Keep it human-visible instead of paying for a blind rewrite.
+        if not sections:
+            return []
+        return sorted(sections, key=lambda key: (key != "firstPage", key))
+
+    async def _repair_writer_preflight_once(
+        self,
+        user_output: UserOutput,
+        writer_agent: WriterAgent,
+        checkpoint_manager: CheckpointManager,
+        report: dict,
+    ) -> dict | None:
+        """Rewrite only report-identified prose once, then let caller recheck."""
+        sections = self._preflight_repairable_sections(report, set(user_output.get_res()))
+        if not sections:
+            return None
+        attempt = checkpoint_manager.record_paper_preflight_failure(report)
+        if attempt != 1:
+            return None
+        failure_summary = self._preflight_failure_summary(report)
+        frozen_facts = build_result_fact_summary(self.work_dir)
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(
+                content="论文预检发现冻结结果与正文不一致，开始一次定向正文回修：" + "、".join(sections),
+                type="warning",
+            ),
+        )
+        for key in sections:
+            previous = user_output.get_res()[key]["response_content"]
+            prompt = (
+                "这是论文最终技术预检后的唯一一次定向回修。不要编程、不要修改任何结果文件、"
+                "不要改写其他章节，也不要编造未冻结的数值。请只返回下列章节的完整替换正文，"
+                "保留原章节标题和必要的公式/图表引用。所有计算数值必须逐项服从冻结结果；"
+                "若原句把题设、旧解和新解混在一起，应删去错误叙述并改为冻结事实支持的表述。\n\n"
+                f"【待替换章节】{key}\n{previous}\n\n"
+                f"{frozen_facts}\n\n"
+                "【预检失败证据】\n"
+                f"{failure_summary}\n"
+            )
+            response = await writer_agent.run(prompt, sub_title=f"{key}_preflight_repair")
+            user_output.set_res(key, response)
+            phase = checkpoint_manager.get_phase(key)
+            checkpoint_manager.mark_phase_completed(
+                key,
+                phase.coder_response if phase else None,
+                response.model_dump(),
+            )
+        user_output.save_result()
+        return report
+
     async def _export_results(
         self,
         user_output: UserOutput,
         export_profile: ExportProfile | str | None = DEFAULT_MODELING_EXPORT_PROFILE,
+        writer_agent: WriterAgent | None = None,
+        checkpoint_manager: CheckpointManager | None = None,
     ) -> None:
         """保存结果并导出 PDF/LaTeX/候选清单（execute 与 resume 共享）。"""
         logger.info(user_output.get_res())
@@ -546,6 +877,23 @@ class MathModelWorkFlow(WorkFlow):
                 export_profile=normalize_export_profile(export_profile).value,
                 declared_problem_count=declared_problem_count or None,
             )
+            if (
+                preflight_report.get("status") == "FAIL"
+                and writer_agent is not None
+                and checkpoint_manager is not None
+            ):
+                repaired = await self._repair_writer_preflight_once(
+                    user_output, writer_agent, checkpoint_manager, preflight_report
+                )
+                if repaired is not None:
+                    preflight_report = prepare_paper_markdown(
+                        self.work_dir,
+                        "res.md",
+                        export_profile=normalize_export_profile(export_profile).value,
+                        declared_problem_count=declared_problem_count or None,
+                    )
+            if preflight_report.get("status") == "PASS" and checkpoint_manager is not None:
+                checkpoint_manager.mark_paper_preflight_passed()
             if preflight_report.get("status") == "PASS":
                 await redis_manager.publish_message(
                     self.task_id,
@@ -566,6 +914,12 @@ class MathModelWorkFlow(WorkFlow):
                         type="warning",
                     ),
                 )
+                if preflight_report.get("status") == "FAIL":
+                    raise RuntimeError(
+                        "论文预检硬门禁未通过；已停止生成候选 PDF，请查看 paper_preflight_report.json。"
+                    )
+        except RuntimeError:
+            raise
         except Exception as e:
             logger.error(f"论文排版后处理失败: {type(e).__name__}")
             await redis_manager.publish_message(
@@ -738,6 +1092,13 @@ class MathModelWorkFlow(WorkFlow):
         """
         self.task_id = problem.task_id
         self.work_dir = create_work_dir(self.task_id)
+        problem_contract = build_problem_contract(problem.ques_all)
+        with open(
+            os.path.join(self.work_dir, "problem_contract.json"),
+            "w",
+            encoding="utf-8",
+        ) as contract_file:
+            json.dump(problem_contract.model_dump(), contract_file, ensure_ascii=False, indent=2)
 
         llm_factory = LLMFactory(self.task_id)
         coordinator_llm, modeler_llm, coder_llm, writer_llm = llm_factory.get_all_llms()
@@ -762,6 +1123,7 @@ class MathModelWorkFlow(WorkFlow):
 
         try:
             coordinator_response = await coordinator_agent.run(problem.ques_all)
+            coordinator_response.problem_contract = problem_contract
             self.questions = coordinator_response.questions
             self.ques_count = coordinator_response.ques_count
         except Exception as e:
@@ -841,7 +1203,7 @@ class MathModelWorkFlow(WorkFlow):
             user_input_provider,
         )
 
-        flows = Flows(self.questions)
+        flows = Flows(self.questions, problem_contract)
         config_template = get_config_template(problem.comp_template)
 
         ################################################ solution steps
@@ -867,7 +1229,12 @@ class MathModelWorkFlow(WorkFlow):
             problem.ques_all,
         )
 
-        await self._export_results(user_output, problem.export_profile)
+        await self._export_results(
+            user_output,
+            problem.export_profile,
+            writer_agent=writer_agent,
+            checkpoint_manager=checkpoint_manager,
+        )
 
     async def resume(self, task_id: str) -> None:
         """从检查点恢复并继续执行数学建模工作流。
@@ -891,11 +1258,17 @@ class MathModelWorkFlow(WorkFlow):
 
         self.questions = checkpoint.questions
         self.ques_count = checkpoint.ques_count
+        problem_contract = build_problem_contract(checkpoint.ques_all)
+        with open(
+            os.path.join(self.work_dir, "problem_contract.json"),
+            "w",
+            encoding="utf-8",
+        ) as contract_file:
+            json.dump(problem_contract.model_dump(), contract_file, ensure_ascii=False, indent=2)
         comp_template = CompTemplate(checkpoint.comp_template)
         format_output = FormatOutPut(checkpoint.format_output)
         export_profile = ExportProfile(checkpoint.export_profile)
         modeler_response = ModelerToCoder.model_validate(checkpoint.modeler_response)
-        self._write_modeler_plan(modeler_response)
 
         await redis_manager.publish_message(
             self.task_id,
@@ -904,11 +1277,41 @@ class MathModelWorkFlow(WorkFlow):
 
         llm_factory = LLMFactory(self.task_id)
         # 续传时不重新调用协调者/建模手，只需要代码手和写作手的 LLM
-        _coordinator_llm, _modeler_llm, coder_llm, writer_llm = (
+        _coordinator_llm, modeler_llm, coder_llm, writer_llm = (
             llm_factory.get_all_llms()
         )
 
         user_input_provider = lambda: user_input_queue.pop_all(self.task_id)  # noqa: E731
+
+        plan_validation = validate_modeler_plan(
+            problem_contract, modeler_response.questions_solution
+        )
+        if not plan_validation.valid:
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(
+                    content="检测到历史建模方案与当前题面参数契约冲突，正在重新建模并清理未验收计算上下文...",
+                    type="warning",
+                ),
+            )
+            modeler_agent = ModelerAgent(
+                self.task_id,
+                modeler_llm,
+                context_window=settings.MODELER_CONTEXT_WINDOW,
+                cancel_event=self.cancel_event,
+                user_input_provider=user_input_provider,
+            )
+            modeler_response = await modeler_agent.run(
+                CoordinatorToModeler(
+                    questions=self.questions,
+                    ques_count=self.ques_count,
+                    problem_contract=problem_contract,
+                )
+            )
+            self._archive_unverified_execution_context()
+            checkpoint_manager.replace_modeler_response(modeler_response.model_dump())
+            checkpoint = checkpoint_manager.load() or checkpoint
+        self._write_modeler_plan(modeler_response)
 
         user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
 
@@ -925,7 +1328,7 @@ class MathModelWorkFlow(WorkFlow):
             user_input_provider,
         )
 
-        flows = Flows(self.questions)
+        flows = Flows(self.questions, problem_contract)
         config_template = get_config_template(comp_template)
 
         async with self._managed_interpreter(code_interpreter):
@@ -954,4 +1357,9 @@ class MathModelWorkFlow(WorkFlow):
             checkpoint.ques_all,
         )
 
-        await self._export_results(user_output, export_profile)
+        await self._export_results(
+            user_output,
+            export_profile,
+            writer_agent=writer_agent,
+            checkpoint_manager=checkpoint_manager,
+        )

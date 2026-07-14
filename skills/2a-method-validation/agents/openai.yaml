@@ -1,0 +1,4 @@
+interface:
+  display_name: "Method PoC Validation"
+  short_description: "Test modeling candidates before human selection"
+  default_prompt: "Use $2a-method-validation to test and compare modeling candidates before selecting one."

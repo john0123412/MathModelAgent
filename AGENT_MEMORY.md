@@ -540,3 +540,7 @@ uv run python scripts/smoke_pdf_export.py
 - [2026-07-14] 真实任务 `20260714-060406-1fb71cbf5669243532c3eff5f57486f2` 未再调用 provider：修复后对现有 `res.md` 重新运行确定性论文后处理，`paper_preflight_report.json = PASS`、`execution_validation_report.json = PASS`、冻结结果哈希有效；已在 Windows 本机正式字体环境重导 `res.docx`、`res.pdf`，PDF 视觉检查 PASS，严格字体 `submission_audit_report.json = PASS`，LaTeX sidecar 自动编译成功，`final_acceptance_report.json = TECHNICAL_PASS`（人工复核仍为 `PENDING_HUMAN_REVIEW`）。已在这些证据完成后将任务状态恢复为 `completed`；Docker `GET /tasks` 已实际显示 completed。说明文件同步需求：本次只改变内部预检语义和修复记录，已更新本记忆；未改变用户启动、模板或导出命令，故无需更新 STARTUP / 模板说明。
 
 - [2026-07-14] `result_consistency` 二次强化：按每个指标别名 occurrence 的本地分句抽取明确赋值数值，并把“从/由基线值提升至/降至新值”识别为基线指标声明；避免同句其他数字掩盖错误。最新 Docker 后端镜像重建后，全量单测与 Ruff 均通过；真实任务 `20260714-060406-1fb71cbf5669243532c3eff5f57486f2` 再次核验为 `completed`，执行验证、论文预检、PDF 视觉检查、严格字体审计均为 PASS，最终技术状态为 `TECHNICAL_PASS`。
+
+- [2026-07-14] 真实任务 `20260714-060406-1fb71cbf5669243532c3eff5f57486f2` 的本地确定性恢复在重新导出 `res.pdf` 时失败：Pandoc 返回 `permission denied`，触发条件为覆盖既有 `res.pdf`；当前处置：已停止该命令的重复覆盖重试，保留已通过的 Markdown/DOCX 和执行冻结，改为先记录故障并检查文件锁定/采用新的候选输出路径。
+
+- [2026-07-14] 上述本地确定性恢复的 `res.pdf` 文件锁已解除；未关闭或强制终止任何用户进程。已以修正后的 Markdown 正式覆盖重导 `res.pdf`（23 页），同步重导 `res.docx`，并实际复跑严格字体提交审计与最终验收：`execution_validation_report.json = PASS`、`paper_preflight_report.json = PASS`（`result_consistency = true`）、`pdf_visual_check.json = PASS`、`submission_audit_report.json = PASS`、`final_acceptance_report.json = TECHNICAL_PASS`。PDF 文本复核确认不含历史错误参数/表述 `M = 120`、`L = 90`、`3*x_A`、`题目未提供`、`假设性外推`或“单纯形法”。人工复核状态仍为 `PENDING_HUMAN_REVIEW`。

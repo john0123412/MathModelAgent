@@ -181,7 +181,7 @@ class TestTaskFinalization(unittest.TestCase):
 
         self.assertTrue(audit_called)
 
-    def test_audit_refresh_failure_does_not_skip_candidate_manifest(self):
+    def test_audit_refresh_failure_is_propagated_and_does_not_publish_stale_manifest(self):
         import app.routers.modeling_router as modeling_router
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -204,12 +204,12 @@ class TestTaskFinalization(unittest.TestCase):
                     side_effect=RuntimeError("audit failed"),
                 ),
             ):
-                modeling_router._finalize_docx_and_manifest(task_id)
+                with self.assertRaisesRegex(RuntimeError, "audit failed"):
+                    modeling_router._finalize_docx_and_manifest(task_id)
 
-            with open(os.path.join(task_dir, "candidate_manifest.json"), encoding="utf-8") as f:
-                manifest = json.load(f)
-
-        self.assertEqual(manifest["files"]["res_docx"], "res.docx")
+            self.assertFalse(
+                os.path.exists(os.path.join(task_dir, "candidate_manifest.json"))
+            )
 
 
 class TestModelingExportProfileDefaults(unittest.TestCase):

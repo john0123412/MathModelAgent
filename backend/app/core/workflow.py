@@ -969,26 +969,27 @@ class MathModelWorkFlow(WorkFlow):
                 ),
             )
 
-        pdf_visual_result = None
-        if pdf_result["success"]:
-            pdf_visual_result = check_pdf_visual(pdf_path, self.work_dir)
-            if pdf_visual_result.get("success"):
-                await redis_manager.publish_message(
-                    self.task_id,
-                    SystemMessage(content="PDF 后验视觉检查通过"),
-                )
-            else:
-                logger.warning(
-                    "PDF 后验视觉检查存在风险: "
-                    f"status={pdf_visual_result.get('status', 'unknown')}"
-                )
-                await redis_manager.publish_message(
-                    self.task_id,
-                    SystemMessage(
-                        content="PDF 后验视觉检查存在风险，请查看 pdf_visual_check.json",
-                        type="warning",
-                    ),
-                )
+        # Always refresh the visual report. On export failure the exporter has
+        # already removed any old PDF, so this writes a fresh SKIPPED/FAIL
+        # report instead of leaving a previous PASS report reusable.
+        pdf_visual_result = check_pdf_visual(pdf_path, self.work_dir)
+        if pdf_visual_result.get("success"):
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content="PDF 后验视觉检查通过"),
+            )
+        else:
+            logger.warning(
+                "PDF 后验视觉检查存在风险: "
+                f"status={pdf_visual_result.get('status', 'unknown')}"
+            )
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(
+                    content="PDF 后验视觉检查存在风险，请查看 pdf_visual_check.json",
+                    type="warning",
+                ),
+            )
 
         export_status_path = os.path.join(self.work_dir, "export_status.json")
         try:

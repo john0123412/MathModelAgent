@@ -42,7 +42,7 @@ PDF_CODE_BLOCK_STYLE = (
     r"showspaces=false,"
     r"showstringspaces=false,"
     r"showtabs=false,"
-    r"basicstyle=\ttfamily\small"
+    r"basicstyle=\ttfamily\footnotesize"
     r"}"
 )
 PDF_PARAGRAPH_BREAK_STYLE = (

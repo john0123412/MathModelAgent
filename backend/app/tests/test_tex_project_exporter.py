@@ -140,6 +140,7 @@ class TestTexProjectExporterHappyPath(unittest.TestCase):
             self.assertIn(r"\input{sections/01_section.tex}", main_tex_content)
             self.assertNotIn(r"\input{sections/imported_body}", main_tex_content)
             self.assertIn("ctexart", main_tex_content)
+            self.assertIn(r"basicstyle=\ttfamily\footnotesize", main_tex_content)
 
             status_path = os.path.join(work_dir, "tex_export_status.json")
             self.assertTrue(os.path.exists(status_path))
@@ -234,6 +235,7 @@ class TestTexProjectExporterCumcm2025Profile(unittest.TestCase):
             self.assertIn(r"\newcounter{none}", main_tex_content)
             self.assertIn(r"\providecommand{\pandocbounded}[1]{#1}", main_tex_content)
             self.assertIn(r"\providecommand{\passthrough}[1]{#1}", main_tex_content)
+            self.assertIn(r"basicstyle=\ttfamily\footnotesize", main_tex_content)
             # 图片位于 latex_project 上级 work_dir 时也应能被 gmcmthesis sidecar 找到。
             self.assertIn(
                 r"\graphicspath{{./}{../}{sections/}{figures/}}",
@@ -275,6 +277,7 @@ class TestTexProjectExporterCumcm2025Profile(unittest.TestCase):
             )
             self.assertIn(r"\providecommand{\pandocbounded}[1]{#1}", main_tex_content)
             self.assertIn(r"\providecommand{\passthrough}[1]{#1}", main_tex_content)
+            self.assertIn(r"basicstyle=\ttfamily\footnotesize", main_tex_content)
             self.assertNotIn(r"\tableofcontents", main_tex_content)
 
     def test_referenced_root_images_are_copied_into_latex_project(self):

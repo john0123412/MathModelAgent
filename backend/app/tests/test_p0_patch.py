@@ -87,6 +87,14 @@ class TestCandidateExporter(unittest.TestCase):
             os.makedirs(cache_dir, exist_ok=True)
             with open(os.path.join(cache_dir, "should_be_excluded.png"), "wb") as f:
                 f.write(b"")
+            failed_dir = os.path.join(work_dir, "failed_attempts")
+            os.makedirs(failed_dir, exist_ok=True)
+            with open(os.path.join(failed_dir, "old.png"), "wb") as f:
+                f.write(b"")
+            latex_figures = os.path.join(work_dir, "latex_project", "figures")
+            os.makedirs(latex_figures, exist_ok=True)
+            with open(os.path.join(latex_figures, "template-logo.png"), "wb") as f:
+                f.write(b"")
 
             manifest_path = write_candidate_manifest(work_dir, "unittest-task-id")
             self.assertTrue(os.path.exists(manifest_path))
@@ -129,8 +137,13 @@ class TestCandidateExporter(unittest.TestCase):
             self.assertIn("top.png", figures)
             self.assertIn("figures/nested.jpg", figures)
             self.assertTrue(
-                all("__pycache__" not in fig for fig in figures),
-                f"缓存目录图片未被排除: {figures}",
+                all(
+                    "__pycache__" not in fig
+                    and "failed_attempts" not in fig
+                    and "latex_project" not in fig
+                    for fig in figures
+                ),
+                f"内部目录图片未被排除: {figures}",
             )
 
             self.assertEqual(manifest["claims"][0]["claim"], "最优利润为 2600 元。")
@@ -155,6 +168,8 @@ class TestPdfExporterMissingTools(unittest.TestCase):
             with open(md_path, "w", encoding="utf-8") as f:
                 f.write("# demo")
             pdf_path = os.path.join(work_dir, "res.pdf")
+            with open(pdf_path, "wb") as handle:
+                handle.write(b"stale")
 
             with mock.patch("shutil.which", return_value=None):
                 result = export_markdown_to_pdf(md_path, pdf_path, work_dir)
@@ -162,6 +177,7 @@ class TestPdfExporterMissingTools(unittest.TestCase):
             self.assertFalse(result["enabled"])
             self.assertFalse(result["success"])
             self.assertTrue(result["reason"])
+            self.assertFalse(os.path.exists(pdf_path))
 
 
 class TestFilesRouterUsesSettingsServerHost(unittest.TestCase):

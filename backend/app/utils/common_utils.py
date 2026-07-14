@@ -1,6 +1,8 @@
 """通用工具函数模块，提供任务 ID 生成、文件操作和文档转换等功能。"""
 
 import os
+import hashlib
+import json
 import shutil
 import datetime
 import secrets
@@ -230,39 +232,75 @@ def transform_link(task_id: str, content: str):
     return content
 
 
+def _file_sha256(path: str) -> str | None:
+    if not os.path.isfile(path):
+        return None
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
 def md_2_docx(
     task_id: str,
     export_profile: ExportProfile | str | None = ExportProfile.DEFAULT,
-):
-    """将 Markdown 论文转换为 DOCX 格式。
-
-    Args:
-        task_id: 任务 ID。
-    """
+) -> dict:
+    """将 Markdown 论文转换为 DOCX，并记录当前源文件与输出哈希。"""
     work_dir = get_work_dir(task_id)
     md_path = os.path.join(work_dir, "res.md")
     docx_path = os.path.join(work_dir, "res.docx")
+    status_path = os.path.join(work_dir, "docx_export_status.json")
+    status = {
+        "generated_at": datetime.datetime.now().isoformat(),
+        "success": False,
+        "source_sha256": _file_sha256(md_path),
+        "output_sha256": None,
+        "reason": "",
+        "export_profile": get_export_profile_config(export_profile).key.value,
+    }
 
-    extra_args = [
-        "--resource-path",
-        str(work_dir),
-        "--standalone",
-    ]
-    profile_config = get_export_profile_config(export_profile)
-    if profile_config.docx_reference_doc and os.path.exists(
-        profile_config.docx_reference_doc
-    ):
-        extra_args.extend(["--reference-doc", profile_config.docx_reference_doc])
+    try:
+        if os.path.exists(docx_path):
+            os.remove(docx_path)
 
-    pypandoc.convert_file(
-        source_file=md_path,
-        to="docx",
-        outputfile=docx_path,
-        format=PANDOC_DOCX_MARKDOWN_FORMAT,
-        extra_args=extra_args,
-    )
-    print(f"转换完成: {docx_path}")
-    logger.info(f"转换完成: {docx_path}")
+        extra_args = [
+            "--resource-path",
+            str(work_dir),
+            "--standalone",
+        ]
+        profile_config = get_export_profile_config(export_profile)
+        if profile_config.docx_reference_doc and os.path.exists(
+            profile_config.docx_reference_doc
+        ):
+            extra_args.extend(["--reference-doc", profile_config.docx_reference_doc])
+
+        pypandoc.convert_file(
+            source_file=md_path,
+            to="docx",
+            outputfile=docx_path,
+            format=PANDOC_DOCX_MARKDOWN_FORMAT,
+            extra_args=extra_args,
+        )
+        if not os.path.isfile(docx_path) or os.path.getsize(docx_path) <= 0:
+            raise RuntimeError("Pandoc 未生成有效 DOCX 文件")
+        status["success"] = True
+        status["output_sha256"] = _file_sha256(docx_path)
+        print(f"转换完成: {docx_path}")
+        logger.info(f"转换完成: {docx_path}")
+        return status
+    except Exception as exc:
+        status["reason"] = f"{type(exc).__name__}: {exc}"
+        raise
+    finally:
+        try:
+            with open(status_path, "w", encoding="utf-8") as handle:
+                json.dump(status, handle, ensure_ascii=False, indent=2)
+        except OSError as exc:
+            logger.error(f"docx_export_status.json 写入失败: {exc}")
 
 
 def split_footnotes(text: str) -> tuple[str, list[tuple[str, str]]]:

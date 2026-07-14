@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+from pathlib import Path
 import unittest
 from unittest import mock
 
@@ -48,6 +49,9 @@ class TestMd2DocxExportProfile(unittest.TestCase):
                 ),
                 mock.patch("app.utils.common_utils.pypandoc.convert_file") as convert_mock,
             ):
+                convert_mock.side_effect = lambda **kwargs: Path(
+                    kwargs["outputfile"]
+                ).write_bytes(b"docx")
                 md_2_docx("task-default", export_profile=ExportProfile.DEFAULT)
 
         extra_args = convert_mock.call_args.kwargs["extra_args"]
@@ -66,6 +70,9 @@ class TestMd2DocxExportProfile(unittest.TestCase):
                 ),
                 mock.patch("app.utils.common_utils.pypandoc.convert_file") as convert_mock,
             ):
+                convert_mock.side_effect = lambda **kwargs: Path(
+                    kwargs["outputfile"]
+                ).write_bytes(b"docx")
                 md_2_docx("task-cumcm2025", export_profile=ExportProfile.CUMCM2025)
 
         extra_args = convert_mock.call_args.kwargs["extra_args"]
@@ -74,6 +81,31 @@ class TestMd2DocxExportProfile(unittest.TestCase):
         self.assertEqual(extra_args[ref_index + 1], CUMCM2025_DOCX_REFERENCE)
         # 转换出的 format2025 参考文档应确实存在于仓库中（不是空配置）。
         self.assertTrue(os.path.exists(CUMCM2025_DOCX_REFERENCE))
+
+
+    def test_failed_reexport_removes_stale_docx_and_writes_status(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            task_dir = self._make_work_dir_with_md(tmp_dir, "task-fail")
+            docx_path = os.path.join(task_dir, "res.docx")
+            with open(docx_path, "wb") as handle:
+                handle.write(b"stale")
+            with (
+                mock.patch("app.utils.common_utils.get_work_dir", return_value=task_dir),
+                mock.patch(
+                    "app.utils.common_utils.pypandoc.convert_file",
+                    side_effect=RuntimeError("pandoc failed"),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "pandoc failed"):
+                    md_2_docx("task-fail", export_profile=ExportProfile.DEFAULT)
+
+            self.assertFalse(os.path.exists(docx_path))
+            with open(
+                os.path.join(task_dir, "docx_export_status.json"), encoding="utf-8"
+            ) as handle:
+                status = __import__("json").load(handle)
+            self.assertFalse(status["success"])
+            self.assertIn("pandoc failed", status["reason"])
 
 
 if __name__ == "__main__":

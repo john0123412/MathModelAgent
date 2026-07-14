@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -31,6 +32,19 @@ FORBIDDEN_SUBMISSION_TERMS = (
     "所在学校",
     "学校名称",
 )
+
+
+def _file_sha256(path: str) -> str | None:
+    if not os.path.isfile(path):
+        return None
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
 
 
 def _write_report(work_dir: str, report: dict) -> None:
@@ -198,11 +212,31 @@ def _check_body_page_limit(page_texts: list[str]) -> dict:
     }
 
 
-def check_pdf_visual(pdf_path: str, work_dir: str, max_pages: int = 3) -> dict:
+def _check_markdown_table_leakage(page_texts: list[str]) -> dict:
+    """Detect pipe-table source that leaked into rendered body pages."""
+    issues: list[dict] = []
+    for index, text in enumerate(page_texts):
+        # Code appendices may legitimately contain Markdown strings. Stop at
+        # the source-code appendix and keep the rule focused on paper prose.
+        if "附录B 源程序代码" in text:
+            break
+        compact = re.sub(r"\s+", " ", text)
+        for match in re.finditer(r"表\s*\d+[^\n]{0,1200}", compact):
+            sample = match.group(0)
+            if sample.count("|") < 6:
+                continue
+            if not re.search(r"(?:-{3,}|—{2,}|–{2,})", sample):
+                continue
+            issues.append({"page": index + 1, "text": sample[:300]})
+            break
+    return {"passed": not issues, "issues": issues}
+
+
+def check_pdf_visual(pdf_path: str, work_dir: str, max_pages: int | None = None) -> dict:
     """检查 PDF 是否基本可交付，并写入 pdf_visual_check.json。
 
-    该检查只做低成本后验：页数、A4 尺寸、前几页非空、文本可提取，
-    并扫描全文文本行是否贴近或越过页面物理边界。失败不会阻断主导出流程，
+    该检查逐页验证非空、A4 尺寸和文本边界，并检测正文中的 Markdown
+    表格源码泄漏。调用方仍决定失败是否阻断主导出流程。
     由调用方决定是否只报警。
     """
     report = {
@@ -211,6 +245,8 @@ def check_pdf_visual(pdf_path: str, work_dir: str, max_pages: int = 3) -> dict:
         "status": "SKIPPED",
         "generated_at": datetime.datetime.now().isoformat(),
         "pdf_path": os.path.basename(pdf_path),
+        "pdf_sha256": None,
+        "scan_scope": "none",
         "page_count": 0,
         "pages_checked": 0,
         "reason": "",
@@ -230,11 +266,16 @@ def check_pdf_visual(pdf_path: str, work_dir: str, max_pages: int = 3) -> dict:
         return report
 
     report["enabled"] = True
+    report["pdf_sha256"] = _file_sha256(pdf_path)
     file_size_bytes = os.path.getsize(pdf_path)
     try:
         with fitz.open(pdf_path) as doc:
             page_count = int(doc.page_count)
-            pages_checked = min(max_pages, page_count)
+            pages_checked = (
+                page_count
+                if max_pages is None or max_pages <= 0
+                else min(max_pages, page_count)
+            )
             page_sizes: list[dict] = []
             nonblank_pages: list[int] = []
             extracted_text_chars = 0
@@ -290,6 +331,7 @@ def check_pdf_visual(pdf_path: str, work_dir: str, max_pages: int = 3) -> dict:
         "abstract_first_page": _check_first_page_is_abstract(page_texts),
         "no_table_of_contents": _check_no_table_of_contents(page_texts),
         "submission_anonymity": _check_forbidden_submission_terms(page_texts),
+        "markdown_table_leakage": _check_markdown_table_leakage(page_texts),
         "nonblank_pages": {
             "passed": pages_checked > 0 and len(nonblank_pages) == pages_checked,
             "pages": nonblank_pages,
@@ -311,6 +353,9 @@ def check_pdf_visual(pdf_path: str, work_dir: str, max_pages: int = 3) -> dict:
         {
             "page_count": page_count,
             "pages_checked": pages_checked,
+            "scan_scope": (
+                "all_pages" if pages_checked == page_count else "partial_pages"
+            ),
             "checks": checks,
             "success": all(check["passed"] for check in checks.values()),
         }

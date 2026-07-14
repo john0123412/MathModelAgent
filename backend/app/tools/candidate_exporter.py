@@ -3,9 +3,10 @@
 import os
 import json
 import datetime
+import hashlib
 from app.utils.log_util import logger
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 SOURCE_NAME = "MathModelAgent"
 
 # 图片扩展名（大小写不敏感）
@@ -18,7 +19,49 @@ _EXCLUDED_DIR_NAMES = {
     "node_modules",
     ".git",
     ".cache",
+    ".agent-work",
+    ".ipython",
+    ".jupyter_runtime",
+    ".matplotlib",
+    "failed_attempts",
+    "internal",
+    "latex_project",
+    "recovery_review_pages",
+    "review",
+    "screenshots",
 }
+
+
+def _file_sha256(path: str) -> str | None:
+    if not os.path.isfile(path):
+        return None
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def _artifact_hashes(work_dir: str) -> tuple[str | None, dict[str, str]]:
+    names = (
+        "res.md",
+        "res.json",
+        "res.docx",
+        "res.pdf",
+        "frozen_results.json",
+    )
+    hashes = {
+        name: value
+        for name in names
+        if (value := _file_sha256(os.path.join(work_dir, name))) is not None
+    }
+    if not hashes:
+        return None, {}
+    canonical = "\n".join(f"{name}:{hashes[name]}" for name in sorted(hashes))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest(), hashes
 
 
 def _existing_or_none(work_dir: str, filename: str) -> str | None:
@@ -104,11 +147,14 @@ def write_candidate_manifest(work_dir: str, task_id: str) -> str:
     Returns:
         生成的 candidate_manifest.json 文件的绝对/相对路径（与传入 work_dir 一致的路径风格）。
     """
+    artifact_set_id, artifact_hashes = _artifact_hashes(work_dir)
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "source": SOURCE_NAME,
         "task_id": task_id,
         "generated_at": datetime.datetime.now().isoformat(),
+        "artifact_set_id": artifact_set_id,
+        "artifact_hashes": artifact_hashes,
         "files": {
             "res_md": _existing_or_none(work_dir, "res.md"),
             "res_json": _existing_or_none(work_dir, "res.json"),
@@ -131,6 +177,9 @@ def write_candidate_manifest(work_dir: str, task_id: str) -> str:
                 work_dir, "execution_validation_report.json"
             ),
             "export_status": _existing_or_none(work_dir, "export_status.json"),
+            "docx_export_status": _existing_or_none(
+                work_dir, "docx_export_status.json"
+            ),
             "paper_preflight_report": _existing_or_none(
                 work_dir, "paper_preflight_report.json"
             ),

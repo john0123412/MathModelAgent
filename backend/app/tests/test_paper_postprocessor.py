@@ -247,6 +247,127 @@ class TestNormalizeChineseReferences(unittest.TestCase):
         self.assertFalse(report["checks"]["tables"]["passed"])
         self.assertEqual(report["checks"]["tables"]["uncaptioned_tables"][0]["table_index"], 1)
 
+    def test_invalid_pipe_table_structure_is_a_hard_failure(self):
+        markdown = (
+            "表1 非法表格\n\n"
+            "| A | B |\n"
+            "| --- | --- |\n"
+            "| 1 | 2 | 3 |\n"
+        )
+
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(),
+            markdown=markdown,
+            code_sources=[],
+        )
+
+        self.assertEqual(report["status"], "FAIL")
+        structure = report["checks"]["markdown_structure"]
+        self.assertFalse(structure["passed"])
+        self.assertTrue(
+            any(item["type"] == "invalid_markdown_table" for item in structure["issues"])
+        )
+
+    def test_pipe_table_inside_fenced_code_is_not_validated_as_paper_table(self):
+        markdown = "```text\n| not | a | table |\n```\n"
+
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(),
+            markdown=markdown,
+            code_sources=[],
+        )
+
+        self.assertTrue(report["checks"]["markdown_structure"]["passed"])
+
+    def test_failed_attempt_images_are_excluded_from_generated_assets(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            failed_dir = os.path.join(work_dir, "failed_attempts")
+            os.makedirs(failed_dir)
+            with open(os.path.join(failed_dir, "old.png"), "wb") as handle:
+                handle.write(b"old")
+
+            report = build_preflight_report(
+                work_dir=work_dir,
+                markdown="# 摘要\n\n正文。",
+                code_sources=[],
+            )
+
+        self.assertEqual(report["checks"]["images"]["unused_generated"], [])
+        self.assertEqual(
+            report["source_sha256"],
+            hashlib.sha256("# 摘要\n\n正文。".encode("utf-8")).hexdigest(),
+        )
+
+    def test_body_figure_without_numbered_prose_reference_is_conditional(self):
+        markdown = "正文分析。\n\n![灵敏度分析](result.png)\n"
+
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(),
+            markdown=markdown,
+            code_sources=[],
+        )
+
+        check = report["checks"]["figure_references"]
+        self.assertFalse(check["passed"])
+        self.assertEqual(check["severity"], "conditional")
+        self.assertEqual(check["missing_references"][0]["figure_number"], 1)
+
+    def test_numbered_figure_reference_closes_body_figure_loop(self):
+        markdown = "灵敏度变化如图1所示。\n\n![灵敏度分析](result.png)\n"
+
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(),
+            markdown=markdown,
+            code_sources=[],
+        )
+
+        self.assertTrue(report["checks"]["figure_references"]["passed"])
+
+    def test_fractional_piece_wording_in_continuous_model_is_conditional(self):
+        markdown = (
+            "本文采用连续型线性规划并允许小数解。\n\n"
+            "最优方案为产品A 46.67件、产品B 16.67件。\n"
+        )
+
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(),
+            markdown=markdown,
+            code_sources=[],
+        )
+
+        check = report["checks"]["continuous_quantity_wording"]
+        self.assertFalse(check["passed"])
+        self.assertEqual(check["severity"], "conditional")
+        self.assertEqual(len(check["ambiguous_units"]), 2)
+
+    def test_continuous_production_equivalent_wording_is_accepted(self):
+        markdown = (
+            "本文采用连续型线性规划并允许小数解。\n\n"
+            "最优方案为产品A 46.67个连续生产当量、产品B 16.67个连续生产当量。\n"
+        )
+
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(),
+            markdown=markdown,
+            code_sources=[],
+        )
+
+        self.assertTrue(report["checks"]["continuous_quantity_wording"]["passed"])
+
+    def test_fractional_piece_wording_in_code_appendix_is_ignored(self):
+        markdown = (
+            "本文采用连续型线性规划并允许小数解。\n\n"
+            "# 附录\n\n```python\nprint('46.67件')\n```\n"
+        )
+
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(),
+            markdown=markdown,
+            code_sources=[],
+        )
+
+        self.assertTrue(report["checks"]["continuous_quantity_wording"]["passed"])
+
     def test_extra_problem_labels_are_normalized_outside_code_and_paths(self):
         markdown = (
             "本文只列出（1）和（2）两个问题。\n\n"
@@ -654,6 +775,8 @@ class TestPreparePaperMarkdown(unittest.TestCase):
                 encoding="utf-8",
             ) as f:
                 saved_report = json.load(f)
+            with open(os.path.join(work_dir, "res.md"), "rb") as f:
+                written_md_hash = hashlib.sha256(f.read()).hexdigest()
             generated_audit_files = {
                 filename: os.path.exists(os.path.join(work_dir, filename))
                 for filename in (
@@ -667,6 +790,7 @@ class TestPreparePaperMarkdown(unittest.TestCase):
         self.assertEqual(report["status"], "PASS")
         self.assertIn("conclusion", saved_report)
         self.assertEqual(saved_report["status"], "PASS")
+        self.assertEqual(saved_report["source_sha256"], written_md_hash)
         self.assertIn("正文[1]。", updated)
         self.assertIn("# 附录", updated)
         self.assertIn("## 附录A 支撑材料文件列表", updated)

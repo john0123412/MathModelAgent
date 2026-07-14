@@ -6,6 +6,7 @@ import os
 import tempfile
 import unittest
 
+from app.tools.candidate_exporter import write_candidate_manifest
 from app.tools.final_acceptance import audit_final_acceptance, write_final_acceptance_report
 from app.tools.paper_postprocessor import append_code_appendix
 
@@ -24,25 +25,57 @@ def _prepare_technical_fixture(work_dir: str) -> None:
     markdown, _ = append_code_appendix("# 论文\n\n正文。", work_dir)
     with open(os.path.join(work_dir, "res.md"), "w", encoding="utf-8") as handle:
         handle.write(markdown)
-    for name in ("res.json", "res.docx", "res.pdf", "candidate_manifest.json"):
+    for name in ("res.json", "res.docx", "res.pdf"):
         with open(os.path.join(work_dir, name), "w", encoding="utf-8") as handle:
             handle.write("ok")
+    with open(os.path.join(work_dir, "res.md"), "rb") as handle:
+        md_hash = hashlib.sha256(handle.read()).hexdigest()
+    with open(os.path.join(work_dir, "res.docx"), "rb") as handle:
+        docx_hash = hashlib.sha256(handle.read()).hexdigest()
+    with open(os.path.join(work_dir, "res.pdf"), "rb") as handle:
+        pdf_hash = hashlib.sha256(handle.read()).hexdigest()
     _write_json(work_dir, "execution_validation_report.json", {"status": "PASS"})
-    _write_json(work_dir, "paper_preflight_report.json", {"status": "PASS"})
-    _write_json(work_dir, "pdf_visual_check.json", {"status": "PASS"})
+    _write_json(
+        work_dir,
+        "paper_preflight_report.json",
+        {"status": "PASS", "source_sha256": md_hash},
+    )
+    _write_json(
+        work_dir,
+        "pdf_visual_check.json",
+        {
+            "status": "PASS",
+            "pdf_sha256": pdf_hash,
+            "scan_scope": "all_pages",
+            "pages_checked": 1,
+            "page_count": 1,
+        },
+    )
     _write_json(
         work_dir,
         "export_status.json",
         {
             "pdf": {
+                "success": True,
+                "source_sha256": md_hash,
+                "output_sha256": pdf_hash,
                 "font_resolution": [
                     {
                         "preferred": "Times New Roman",
                         "actual": "Times New Roman",
                         "source": "profile",
                     }
-                ]
+                ],
             }
+        },
+    )
+    _write_json(
+        work_dir,
+        "docx_export_status.json",
+        {
+            "success": True,
+            "source_sha256": md_hash,
+            "output_sha256": docx_hash,
         },
     )
     _write_json(
@@ -70,6 +103,8 @@ def _prepare_technical_fixture(work_dir: str) -> None:
             "subtasks": [{"id": "ques1", "feasible": True}],
         },
     )
+    _write_json(work_dir, "submission_audit_report.json", {"status": "PASS"})
+    write_candidate_manifest(work_dir, "task-fixture")
 
 
 class FinalAcceptanceTest(unittest.TestCase):

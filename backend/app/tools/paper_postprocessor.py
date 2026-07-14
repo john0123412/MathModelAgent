@@ -47,6 +47,7 @@ KEYWORDS_HEADING_RE = re.compile(
 )
 BOLD_ABSTRACT_HEADING_RE = re.compile(r"(?m)^\*\*\s*摘要\s*\*\*\s*$")
 BOLD_KEYWORDS_HEADING_RE = re.compile(r"(?m)^\*\*\s*关键词\s*\*\*\s*$")
+BOLD_REFERENCE_HEADING_RE = re.compile(r"(?m)^\*\*\s*参考文献\s*\*\*\s*$")
 BARE_ABSTRACT_HEADING_RE = re.compile(r"(?m)^\s*摘要\s*$")
 INTERNAL_PATH_RE = re.compile(
     r"(?<![A-Za-z])(?:[A-Za-z]:[\\/][^\s，。；；,;]+|/(?:home|tmp|var|usr|etc|opt|root|workspace)/[^\s，。；；,;]+)"
@@ -186,6 +187,17 @@ _CODE_EXCLUDED_DIRS = {
     "latex_project",
     ".git",
     ".cache",
+}
+_SUPPORT_EXCLUDED_DIRS = _CODE_EXCLUDED_DIRS | {
+    ".agent-work",
+    ".ipython",
+    ".jupyter_runtime",
+    ".matplotlib",
+    "failed_attempts",
+    "internal",
+    "recovery_review_pages",
+    "review",
+    "screenshots",
 }
 _SUPPORT_EXCLUDED_FILENAMES = {
     "candidate_manifest.json",
@@ -392,11 +404,41 @@ def normalize_keywords(markdown: str) -> str:
 
 
 def normalize_markdown_headings(markdown: str) -> str:
-    """规范 Writer 偶发输出的加粗摘要/关键词标题。"""
+    """规范 Writer 偶发输出的加粗摘要/关键词/参考文献标题。"""
     markdown = BOLD_ABSTRACT_HEADING_RE.sub("## 摘要", markdown)
     if not ABSTRACT_HEADING_RE.search(markdown):
         markdown = BARE_ABSTRACT_HEADING_RE.sub("## 摘要", markdown, count=1)
-    return BOLD_KEYWORDS_HEADING_RE.sub("## 关键词", markdown)
+    markdown = BOLD_KEYWORDS_HEADING_RE.sub("## 关键词", markdown)
+    return BOLD_REFERENCE_HEADING_RE.sub("## 参考文献", markdown)
+
+
+def remove_duplicate_reference_fragments(markdown: str) -> tuple[str, int]:
+    """删除最终参考文献表之前明显为空或只有孤立编号的重复片段。
+
+    仅自动删除空白、分隔线和 ``[n]`` 组成的片段。若重复章节包含真实
+    书目信息，则保留给预检报错，避免后处理猜测应保留哪一组文献。
+    """
+    removed = 0
+    while True:
+        matches = list(REFERENCE_HEADING_RE.finditer(markdown))
+        if len(matches) <= 1:
+            return markdown, removed
+
+        changed = False
+        for match in reversed(matches[:-1]):
+            next_heading = HEADING_RE.search(markdown, match.end())
+            block_end = next_heading.start() if next_heading else matches[-1].start()
+            body = markdown[match.end() : block_end]
+            meaningful_lines = [line.strip() for line in body.splitlines() if line.strip()]
+            if not meaningful_lines or all(
+                re.fullmatch(r"(?:---+|\[\d+\])", line) for line in meaningful_lines
+            ):
+                markdown = markdown[: match.start()] + markdown[block_end:]
+                removed += 1
+                changed = True
+                break
+        if not changed:
+            return markdown, removed
 
 
 def normalize_cjk_inline_spacing(markdown: str) -> str:
@@ -942,7 +984,7 @@ def collect_support_materials(work_dir: str) -> list[SupportMaterial]:
     if not os.path.isdir(work_dir):
         return materials
     for root, dirs, files in os.walk(work_dir):
-        dirs[:] = [d for d in dirs if d not in _CODE_EXCLUDED_DIRS]
+        dirs[:] = [d for d in dirs if d not in _SUPPORT_EXCLUDED_DIRS]
         for filename in sorted(files):
             category = _support_category(filename)
             if category is None:
@@ -1140,7 +1182,7 @@ def _scan_generated_images(work_dir: str) -> list[str]:
     if not os.path.isdir(work_dir):
         return images
     for root, dirs, files in os.walk(work_dir):
-        dirs[:] = [d for d in dirs if d not in _CODE_EXCLUDED_DIRS]
+        dirs[:] = [d for d in dirs if d not in _SUPPORT_EXCLUDED_DIRS]
         for filename in files:
             if filename.lower().endswith(_IMAGE_EXTS):
                 images.append(
@@ -1320,7 +1362,24 @@ def _check_appendix_console_noise(markdown: str) -> dict:
 def _find_markdown_tables(markdown: str) -> list[list[str]]:
     tables: list[list[str]] = []
     current: list[str] = []
+    in_fence = False
+    fence_marker = ""
     for line in markdown.splitlines():
+        fence_match = FENCE_START_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker[0]
+            elif marker.startswith(fence_marker):
+                in_fence = False
+                fence_marker = ""
+            if current:
+                tables.append(current)
+                current = []
+            continue
+        if in_fence:
+            continue
         if line.strip().startswith("|") and line.strip().endswith("|"):
             current.append(line.strip())
             continue
@@ -1398,6 +1457,10 @@ def ensure_table_captions(markdown: str) -> str:
                     if output and output[-1].strip():
                         output.append("")
                     output.append(f"表{table_index} {title}")
+                # Pandoc requires a blank line between a standalone caption and
+                # a pipe table. Enforce it even when Writer already supplied
+                # the caption; otherwise the raw Markdown may leak into PDF.
+                if output and output[-1].strip():
                     output.append("")
                 output.extend(table)
                 table_index += 1
@@ -1407,6 +1470,125 @@ def ensure_table_captions(markdown: str) -> str:
         index += 1
 
     return "\n".join(output).rstrip() + ("\n" if markdown.endswith("\n") else "")
+
+
+def _check_markdown_structure(markdown: str) -> dict:
+    """Reject source structures known to render incorrectly through Pandoc."""
+    visible = _without_fenced_code_blocks(normalize_markdown_headings(markdown))
+    reference_headings = list(REFERENCE_HEADING_RE.finditer(visible))
+    lines = visible.splitlines()
+    caption_table_spacing: list[dict] = []
+    for index, line in enumerate(lines[:-1]):
+        if TABLE_CAPTION_RE.match(line.strip()) and _is_markdown_table_line(lines[index + 1]):
+            caption_table_spacing.append(
+                {
+                    "line": index + 1,
+                    "caption": line.strip(),
+                    "reason": "表题与 Markdown 表格之间缺少空行",
+                }
+            )
+    issues: list[dict] = []
+    if len(reference_headings) > 1:
+        issues.append(
+            {
+                "type": "duplicate_reference_sections",
+                "count": len(reference_headings),
+            }
+        )
+    issues.extend(
+        {"type": "caption_table_spacing", **item}
+        for item in caption_table_spacing
+    )
+    for table_index, table in enumerate(_find_markdown_tables(visible), 1):
+        column_counts = [max(0, line.count("|") - 1) for line in table]
+        separator_cells: list[str] = []
+        if len(table) >= 2:
+            separator_cells = [
+                cell.strip()
+                for cell in table[1].strip().strip("|").split("|")
+            ]
+        separator_valid = bool(separator_cells) and all(
+            re.fullmatch(r":?-{3,}:?", cell) for cell in separator_cells
+        )
+        consistent_columns = bool(column_counts) and len(set(column_counts)) == 1
+        if len(table) < 2 or not separator_valid or not consistent_columns:
+            issues.append(
+                {
+                    "type": "invalid_markdown_table",
+                    "table_index": table_index,
+                    "line_count": len(table),
+                    "column_counts": column_counts,
+                    "separator_valid": separator_valid,
+                }
+            )
+    return {
+        "passed": not issues,
+        "issues": issues,
+        "reference_section_count": len(reference_headings),
+    }
+
+
+def _check_figure_references(markdown: str) -> dict:
+    """Require numbered prose references for figures used in the paper body."""
+    visible = _without_fenced_code_blocks(markdown)
+    appendix_match = re.search(r"(?m)^#{1,6}\s+附录", visible)
+    body = visible[: appendix_match.start()] if appendix_match else visible
+    figures = list(IMAGE_MARKDOWN_RE.finditer(body))
+    prose = IMAGE_MARKDOWN_RE.sub("", body)
+    referenced_numbers = {
+        int(match.group(1)) for match in re.finditer(r"图\s*(\d+)", prose)
+    }
+    missing = [
+        {
+            "figure_number": index,
+            "caption": _clean_image_caption_text(match.group(1), match.group(2)),
+            "path": match.group(2).replace("\\", "/"),
+        }
+        for index, match in enumerate(figures, 1)
+        if index not in referenced_numbers
+    ]
+    return {
+        "passed": not missing,
+        "figure_count": len(figures),
+        "referenced_numbers": sorted(referenced_numbers),
+        "missing_references": missing,
+    }
+
+
+def _check_continuous_quantity_wording(markdown: str) -> dict:
+    """Flag decimal production results that are presented as literal whole pieces.
+
+    A continuous LP may legitimately return a fractional production quantity, but a
+    paper should call that value a continuous production equivalent (or explicitly
+    switch to an integer model) instead of presenting it as a directly executable
+    number of ``件``. This is a conditional content-quality warning because some
+    domains do allow divisible batches.
+    """
+    visible = _without_fenced_code_blocks(markdown)
+    appendix_match = re.search(r"(?m)^#{1,6}\s+附录", visible)
+    body = visible[: appendix_match.start()] if appendix_match else visible
+    continuous_declared = bool(
+        re.search(
+            r"连续型?线性规划|连续变量|允许小数解|任意非负实数|资源可分割",
+            body,
+        )
+    )
+    ambiguous_units: list[dict] = []
+    if continuous_declared:
+        for line_number, line in enumerate(body.splitlines(), 1):
+            for match in re.finditer(r"(?<![\w.])\d+\.\d+\s*件", line):
+                ambiguous_units.append(
+                    {
+                        "line": line_number,
+                        "text": match.group(0),
+                        "context": line.strip()[:240],
+                    }
+                )
+    return {
+        "passed": not ambiguous_units,
+        "continuous_model_declared": continuous_declared,
+        "ambiguous_units": ambiguous_units,
+    }
 
 
 def _check_tables(markdown: str) -> dict:
@@ -2362,7 +2544,16 @@ def build_preflight_report(
         "appendix_console_noise": _with_severity(
             _check_appendix_console_noise(markdown), "fail"
         ),
+        "markdown_structure": _with_severity(
+            _check_markdown_structure(markdown), "fail"
+        ),
         "tables": _with_severity(_check_tables(markdown_without_code), "conditional"),
+        "figure_references": _with_severity(
+            _check_figure_references(markdown), "conditional"
+        ),
+        "continuous_quantity_wording": _with_severity(
+            _check_continuous_quantity_wording(markdown), "conditional"
+        ),
         "extra_problem_labels": _with_severity(extra_problem_labels_check, "conditional"),
         "result_consistency": _with_severity(result_consistency_check, "fail"),
         "freeze_integrity": _with_severity(freeze_integrity_check, "fail"),
@@ -2381,6 +2572,7 @@ def build_preflight_report(
         "status": status,
         "conclusion": _conclusion_for_status(status),
         "generated_at": datetime.datetime.now().isoformat(),
+        "source_sha256": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
         "checks": checks,
     }
 
@@ -2413,6 +2605,16 @@ def _format_check_detail(check: dict) -> str:
         return (
             f"wide_tables={len(check['wide_tables'])}; "
             f"uncaptioned={len(check.get('uncaptioned_tables', []))}"
+        )
+    if "missing_references" in check and "figure_count" in check:
+        return (
+            f"figures={check['figure_count']}; "
+            f"missing_references={len(check['missing_references'])}"
+        )
+    if "ambiguous_units" in check:
+        return (
+            f"continuous_model={check['continuous_model_declared']}; "
+            f"ambiguous_decimal_piece_units={len(check['ambiguous_units'])}"
         )
     if "conflicts" in check:
         return (
@@ -2527,6 +2729,9 @@ def prepare_paper_markdown(
         markdown = f.read()
 
     markdown = normalize_markdown_headings(markdown)
+    markdown, removed_duplicate_reference_fragments = (
+        remove_duplicate_reference_fragments(markdown)
+    )
     markdown, normalised_bold_standalone_labels = normalize_bold_standalone_labels(
         markdown
     )
@@ -2578,6 +2783,10 @@ def prepare_paper_markdown(
     fixups = {}
     if removed_missing_images:
         fixups["removed_missing_images"] = removed_missing_images
+    if removed_duplicate_reference_fragments:
+        fixups["removed_duplicate_reference_fragments"] = (
+            removed_duplicate_reference_fragments
+        )
     if removed_unmatched_references:
         fixups["removed_unmatched_references"] = removed_unmatched_references
     if removed_empty_references:
@@ -2613,6 +2822,10 @@ def prepare_paper_markdown(
 
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(markdown)
+    # Hash the actual bytes written on this platform. Text-mode newline
+    # translation on Windows must not make a fresh report look stale.
+    with open(md_path, "rb") as f:
+        report["source_sha256"] = hashlib.sha256(f.read()).hexdigest()
 
     report_path = os.path.join(work_dir, "paper_preflight_report.json")
     md_report_path = os.path.join(work_dir, "paper_preflight_report.md")

@@ -52,22 +52,22 @@ _active_tasks: Dict[str, Tuple[asyncio.Task, asyncio.Event]] = {}
 def _finalize_docx_and_manifest(
     task_id: str,
     export_profile: ExportProfile | str | None = DEFAULT_MODELING_EXPORT_PROFILE,
-) -> None:
-    """生成 DOCX 后刷新审核报告和候选清单，确保收尾产物不读取旧状态。"""
+) -> dict:
+    """完成 DOCX、审计、候选清单和最终技术验收。
+
+    任一步失败都会向调用方抛出异常，任务不得提前标记为 completed。
+    """
     md_2_docx(task_id, export_profile=export_profile)
     work_dir = get_work_dir(task_id)
-    try:
-        write_submission_audit_report(work_dir)
-    except Exception as e:
-        logger.error(f"submission_audit_report 刷新失败: {type(e).__name__}")
-    # The final report requires a manifest as a primary deliverable.  Refresh
-    # once before and once after it so the manifest also records the report.
+    write_submission_audit_report(work_dir)
+    # Final acceptance validates the manifest hashes, so write a current
+    # manifest before the report, then refresh it once more to include the
+    # report filenames without changing the artifact set.
     write_candidate_manifest(work_dir, task_id)
-    try:
-        write_final_acceptance_report(work_dir)
-    except Exception as e:
-        logger.error(f"final_acceptance_report 生成失败: {type(e).__name__}")
+    report = write_final_acceptance_report(work_dir)
     write_candidate_manifest(work_dir, task_id)
+    return report
+
 
 
 class ValidateApiKeyRequest(BaseModel):
@@ -458,7 +458,7 @@ async def run_modeling_task_async(
     task = asyncio.create_task(workflow.execute(problem))
     _active_tasks[task_id] = (task, cancel_event)
 
-    task_completed = False
+    workflow_completed = False
     try:
         # 设置超时时间（5 小时）
         workflow_result = await asyncio.wait_for(task, timeout=3600 * 5)
@@ -469,9 +469,26 @@ async def run_modeling_task_async(
             )
             write_task_status(task_id, "waiting_review", "任务等待人工确认建模方案")
             return
-        task_completed = True
 
-        # 发送任务完成状态
+        workflow_completed = True
+        write_task_status(task_id, "finalizing", "工作流完成，正在生成并验收最终产物")
+        await redis_manager.publish_message(
+            task_id,
+            SystemMessage(content="工作流完成，正在生成并验收最终产物"),
+        )
+        final_report = _finalize_docx_and_manifest(task_id, export_profile)
+        if final_report.get("technical_status") != "TECHNICAL_PASS":
+            await redis_manager.publish_message(
+                task_id,
+                SystemMessage(
+                    content=(
+                        "主交付产物已生成，但正式技术验收仍有待处理项；"
+                        "请查看 final_acceptance_report.json"
+                    ),
+                    type="warning",
+                ),
+            )
+
         await redis_manager.publish_message(
             task_id,
             SystemMessage(content="任务处理完成", type="success"),
@@ -485,29 +502,17 @@ async def run_modeling_task_async(
         )
         write_task_status(task_id, "cancelled", "任务已停止")
     except Exception as e:
-        logger.error(f"任务 {task_id} 执行失败: {type(e).__name__}")
+        phase = "最终产物收尾失败" if workflow_completed else "任务执行失败"
+        logger.error(f"任务 {task_id} {phase}: {type(e).__name__}")
         await redis_manager.publish_message(
             task_id,
-            SystemMessage(content=f"任务执行失败: {str(e)}", type="error"),
+            SystemMessage(content=f"{phase}: {str(e)}", type="error"),
         )
-        write_task_status(task_id, "failed", str(e))
+        write_task_status(task_id, "failed", f"{phase}: {e}")
     finally:
-        # 从注册表中清理
         _active_tasks.pop(task_id, None)
         user_input_queue.clear(task_id)
-        # 仅在正常完成时转换 md 为 docx
-        if task_completed:
-            try:
-                _finalize_docx_and_manifest(task_id, export_profile)
-            except Exception as e:
-                logger.error(f"任务 {task_id} DOCX 转换失败: {type(e).__name__}")
-                await redis_manager.publish_message(
-                    task_id,
-                    SystemMessage(
-                        content=f"DOCX 转换失败: {str(e)}，Markdown/PDF 结果不受影响",
-                        type="warning",
-                    ),
-                )
+
 
 
 class CancelTaskResponse(BaseModel):
@@ -653,11 +658,33 @@ async def run_resume_task_async(task_id: str):
     task = asyncio.create_task(workflow.resume(task_id))
     _active_tasks[task_id] = (task, cancel_event)
 
-    task_completed = False
+    workflow_completed = False
     try:
-        # 设置超时时间（5 小时）
         await asyncio.wait_for(task, timeout=3600 * 5)
-        task_completed = True
+        workflow_completed = True
+        checkpoint = CheckpointManager(get_work_dir(task_id)).load()
+        export_profile = (
+            checkpoint.export_profile
+            if checkpoint is not None
+            else DEFAULT_MODELING_EXPORT_PROFILE
+        )
+        write_task_status(task_id, "finalizing", "续传完成，正在生成并验收最终产物")
+        await redis_manager.publish_message(
+            task_id,
+            SystemMessage(content="续传完成，正在生成并验收最终产物"),
+        )
+        final_report = _finalize_docx_and_manifest(task_id, export_profile)
+        if final_report.get("technical_status") != "TECHNICAL_PASS":
+            await redis_manager.publish_message(
+                task_id,
+                SystemMessage(
+                    content=(
+                        "主交付产物已生成，但正式技术验收仍有待处理项；"
+                        "请查看 final_acceptance_report.json"
+                    ),
+                    type="warning",
+                ),
+            )
 
         await redis_manager.publish_message(
             task_id,
@@ -672,30 +699,13 @@ async def run_resume_task_async(task_id: str):
         )
         write_task_status(task_id, "cancelled", "任务已停止")
     except Exception as e:
-        logger.error(f"任务 {task_id} 续传失败: {type(e).__name__}")
+        phase = "最终产物收尾失败" if workflow_completed else "任务续传失败"
+        logger.error(f"任务 {task_id} {phase}: {type(e).__name__}")
         await redis_manager.publish_message(
             task_id,
-            SystemMessage(content=f"任务续传失败: {str(e)}", type="error"),
+            SystemMessage(content=f"{phase}: {str(e)}", type="error"),
         )
-        write_task_status(task_id, "failed", str(e))
+        write_task_status(task_id, "failed", f"{phase}: {e}")
     finally:
         _active_tasks.pop(task_id, None)
         user_input_queue.clear(task_id)
-        if task_completed:
-            try:
-                checkpoint = CheckpointManager(get_work_dir(task_id)).load()
-                export_profile = (
-                    checkpoint.export_profile
-                    if checkpoint is not None
-                    else DEFAULT_MODELING_EXPORT_PROFILE
-                )
-                _finalize_docx_and_manifest(task_id, export_profile)
-            except Exception as e:
-                logger.error(f"任务 {task_id} DOCX 转换失败: {type(e).__name__}")
-                await redis_manager.publish_message(
-                    task_id,
-                    SystemMessage(
-                        content=f"DOCX 转换失败: {str(e)}，Markdown/PDF 结果不受影响",
-                        type="warning",
-                    ),
-                )

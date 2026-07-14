@@ -9,7 +9,7 @@
   `backend/app/templates/export_profiles/cumcm2025_docx/format2025_reference.docx`
 - 当前 LaTeX sidecar 暂时复用 2025 模板资源目录：
   `backend/app/templates/export_profiles/cumcm2025/`
-- 当前 LaTeX 2026 main 模板由 `backend/app/tools/tex_project_exporter.py` 中的 `_CUMCM2026_MAIN_TEX_TEMPLATE` 派生实现，主要区别是移除了目录。
+- 当前 LaTeX 2026 main 模板由 `backend/app/tools/tex_project_exporter.py` 中的 `_CUMCM2026_MAIN_TEX_TEMPLATE` 派生实现，主要区别是移除了目录；默认、CUMCM 2025/2026 与华数杯 sidecar 均将 `listings` 代码字号统一为 `\ttfamily\footnotesize`，并开启自动换行，减少完整源码附录出现孤立尾页。
 - 当前 LaTeX sidecar 导出器会复制正文引用的本地图片到 `latex_project/` /
   `latex_project/figures/`，并在 `tex_export_status.json` 记录 `copied_assets` /
   `missing_assets`。
@@ -23,11 +23,8 @@
   `res.json`
   `candidate_manifest.json`
 - `latex_project/` 是候选 sidecar，不是当前主交付链路。
-- **当前正式提交缺口**：官方 2026 规范要求论文附录包含全部完整、可运行源程序；当前
-  `paper_postprocessor.append_code_appendix()` 只写核心代码摘录，完整 notebook/脚本只保留在
-  任务目录并列入支撑材料清单。preflight、PDF visual check、submission audit 和 manifest
-  当前均不验证论文附录源码是否完整；这些技术报告 `PASS` 不得表述为该项正式规则已通过。
-  正式提交前必须人工补入完整源码，或先改造并验证导出链路。
+- 当前 `paper_postprocessor.append_code_appendix()` 默认在附录 B 写入任务目录发现的完整可运行脚本及 notebook 代码单元（不含 notebook 输出），逐份记录原始 SHA-256；`final_acceptance_report.json -> complete_source_appendix` 会核对源码覆盖、哈希和正文代码内容。若启用 `paper_appendix_config.json -> mode=key`，只展示关键算法，技术验收会刻意保持非 `TECHNICAL_PASS`，正式提交必须恢复 `full`。
+- 自动完整性门禁仍不能替代人工运行源码、核对数学推导与数值、逐页审查 PDF/DOCX 和确认比赛平台最终规则；`TECHNICAL_PASS` 仍标记 `PENDING_HUMAN_REVIEW`。
 
 ## 官方资料入口
 
@@ -55,8 +52,8 @@
 | 主 PDF 导出 | `backend/app/tools/pdf_exporter.py` | Pandoc + XeLaTeX，主交付 PDF | 仅当官方要求 raw TeX、目录、特殊参数时调整 |
 | DOCX reference | `backend/app/templates/export_profiles/cumcm2025_docx/format2025_reference.docx` | 当前 2026 暂时复用 2025 | 官方给 Word/DOCX 模板后新增 `cumcm2026_docx/format2026_reference.docx` 并切换 |
 | LaTeX 模板资源 | `backend/app/templates/export_profiles/cumcm2025/` | 当前 2026 sidecar 暂时复用 2025 `gmcmthesis` | 官方给 LaTeX 模板后新增 `cumcm2026/` 并切换 |
-| LaTeX sidecar main 模板 | `backend/app/tools/tex_project_exporter.py` | `_CUMCM2026_MAIN_TEX_TEMPLATE` | 官方 LaTeX 模板结构变化时修改 |
-| 论文后处理/预检 | `backend/app/tools/paper_postprocessor.py` | 参考文献、附录、支撑材料、路径、宽表、claim trace；当前附录 B 只保留核心代码摘录 | 官方附录或提交规则变化时修改；若要满足全文源码要求，先改 `append_code_appendix()` 并新增回归验证 |
+| LaTeX sidecar main 模板 | `backend/app/tools/tex_project_exporter.py` | `_CUMCM2026_MAIN_TEX_TEMPLATE`；无目录，`listings` 使用 `\ttfamily\footnotesize` 并自动换行 | 官方 LaTeX 模板结构变化时修改；保留 `% MMA_SECTION_INPUTS` 与代码换行/字号回归 |
+| 论文后处理/预检 | `backend/app/tools/paper_postprocessor.py` | 参考文献、附录、支撑材料、路径、宽表、claim trace；默认附录 B 写入完整脚本/notebook 代码单元及 SHA-256 | 官方附录或提交规则变化时修改；同步更新 `complete_source_appendix` 验收与回归测试 |
 | PDF 后验检查 | `backend/app/tools/pdf_visual_checker.py` | A4、非空、文本可提取、边缘溢出 | 官方尺寸/边距变化时调整 |
 | 使用文档 | `STARTUP.md`、`docs/md/PDF模板导出说明.md` | 使用与验收入口 | 每次模板替换后同步更新 |
 
@@ -168,5 +165,4 @@ uv run python scripts/smoke_pdf_export.py
   `paper_preflight_report.json`
   `pdf_visual_check.json`
   `candidate_manifest.json`
-- [ ] 不以技术报告 `PASS` 代替附录源码人工复核；确认最终论文附录中已有全部完整、可运行
-  源程序，或明确该产物仅为候选稿、尚不可按 2026 正式要求提交。
+- [ ] 确认 `final_acceptance_report.json -> complete_source_appendix=PASS`，且未启用仅供阅读的 `mode=key`；再人工运行源码、核对正文结果与完整附录内容。不得以技术报告 `PASS` 替代数学、排版和平台规则复核。

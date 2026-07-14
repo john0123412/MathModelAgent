@@ -194,3 +194,26 @@
 - 如官方发布新模板，已按 `docs/md/CUMCM2026模板替换指南.md` 替换。
 - 提交系统要求的文件格式、大小限制和命名要求已人工确认。
 - 最终提交文件只包含竞赛允许提交的内容。
+
+## P0-P2 补充复核项（2026-07）
+
+### P0：产物与报告必须属于同一次导出
+
+- [ ] `docx_export_status.json.success=true`，其 `source_sha256` 等于当前 `res.md`，`output_sha256` 等于当前 `res.docx`。
+- [ ] `export_status.json` 的 PDF 源/输出哈希与当前文件一致；失败重导后目录中不存在冒充当前结果的旧 PDF。
+- [ ] `candidate_manifest.json.schema_version=1.1`，`artifact_set_id` 与 `artifact_hashes` 已生成。
+- [ ] `task_status.json` 为权威状态；`finalizing` / `failed` 不因旧 `res.md` 或 `res.docx` 存在而显示为 completed。
+
+### P1：结构与逐页视觉
+
+- [ ] `pdf_visual_check.json.scan_scope=all_pages` 且 `pages_checked=page_count`。
+- [ ] 正文没有 Markdown 表格源码泄漏、重复参考文献章节、孤立文献编号或内部审查图片。
+- [ ] 人工逐页确认图题没有跨页误配、最后一页没有仅剩极少量代码、附录代码可读。
+
+### P2：内容语义与复现
+
+- [ ] 每张正文图都有“图N”正文引用，并与图题和分析结论对应。
+- [ ] 连续型模型的小数解写为“连续生产当量”；若业务要求整件，单独求解整数规划，不直接四舍五入。
+- [ ] 影子价格写明有效区间/最优基条件，不能把局部边际价值无限外推。
+- [ ] 坐标轴顶点由哪条约束决定的解释，与实际等式和可行性计算一致。
+- [ ] 附录代码包含完整导入、参数、求解、校验断言、结果文件和作图调用；正式支撑材料另保留依赖锁定与运行说明。

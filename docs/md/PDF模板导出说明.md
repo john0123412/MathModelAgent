@@ -389,3 +389,27 @@ uv run python -m app.tools.export_cli pdf --input project\work_dir\<task_id>\res
 当前项目没有内置稳定的 `DOCX -> PDF` 后端能力。本机也未确认安装
 LibreOffice / `soffice`。如必须走 DOCX 转 PDF，需要额外安装 LibreOffice
 或使用 Word 自动化，并另行验证字体、页边距、目录和公式渲染是否符合模板。
+
+## P0-P2 新鲜度、全页检查与内容表达规则（2026-07）
+
+1. **新鲜度**
+   - `export_status.json` 记录 PDF 的 `source_sha256` / `output_sha256`；`docx_export_status.json` 对 DOCX 记录同类字段。
+   - 重导开始前先删除旧 `res.pdf` / `res.docx`。导出失败时不得继续把旧文件当成当前候选。
+   - `submission_audit_report.json` 会核对当前 Markdown、PDF 与预检/视觉报告的哈希；`final_acceptance_report.json` 还会核对 manifest 中的主产物哈希。
+
+2. **视觉覆盖**
+   - `pdf_visual_check.json` 默认全页扫描，正式验收要求 `scan_scope=all_pages` 且 `pages_checked=page_count`。
+   - 检查包括 A4、非空页、文本可提取、边距、匿名、目录禁用、正文 Markdown 表格源码泄漏等；通过后仍须人工逐页看图题、分页、公式和附录代码。
+
+3. **结构与正文闭环**
+   - 重复参考文献章节、孤立 `[n]` 片段、非法 pipe table、表题与表格之间缺空行属于硬失败。
+   - 正文图片必须在正文中以“图N”引用；缺失时为 `CONDITIONAL_PASS`，不自动猜测应插入的语义句。
+   - 已声明连续变量或允许小数解时，`46.67件` 等表达会触发 `continuous_quantity_wording` 条件项。推荐写作“46.67个连续生产当量”，并在实施边界中另报整数规划结果。
+
+4. **附录代码版式**
+   - PDF/LaTeX sidecar 的代码块使用 `\ttfamily\footnotesize`，目的是减少仅有一两行代码的孤立尾页，同时保留可读性。
+   - 附录仍必须保留完整可运行代码、源码 SHA-256、必要断言和输出文件生成逻辑；缩小字体不能替代代码完整性检查。
+
+5. **候选包**
+   - `candidate_manifest.json` schema `1.1` 写入 `artifact_set_id` 与 `artifact_hashes`。
+   - `recovery_review_pages/`、`failed_attempts/`、`.ipython/`、`.jupyter_runtime/`、`.matplotlib/`、`latex_project/` 等内部或 sidecar 目录不作为正式图表候选。

@@ -1,6 +1,7 @@
 """PDF 导出工具模块，负责将 Markdown 论文转换为 PDF。"""
 
 import os
+import hashlib
 import re
 import shutil
 # subprocess is limited to the controlled Pandoc export invocation below.
@@ -242,6 +243,19 @@ def _resolve_pdf_variables(
     return resolved, warnings, font_resolution
 
 
+def _file_sha256(path: str) -> str | None:
+    if not os.path.isfile(path):
+        return None
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
 def export_markdown_to_pdf(
     md_path: str,
     pdf_path: str,
@@ -282,7 +296,18 @@ def export_markdown_to_pdf(
         "export_profile": get_export_profile_config(export_profile).key.value,
         "font_warnings": [],
         "font_resolution": [],
+        "source_sha256": _file_sha256(md_path),
+        "output_sha256": None,
     }
+
+    # A failed re-export must never leave an older PDF looking current.
+    try:
+        if os.path.exists(pdf_path):
+            os.remove(pdf_path)
+    except OSError as exc:
+        result["reason"] = f"无法清理旧 PDF: {exc}"
+        logger.error("PDF 导出前旧产物清理失败")
+        return result
 
     if not os.path.exists(md_path):
         result["reason"] = f"Markdown 文件不存在: {md_path}"
@@ -363,6 +388,7 @@ def export_markdown_to_pdf(
     if proc.returncode == 0 and os.path.exists(pdf_path):
         result["success"] = True
         result["pdf_path"] = pdf_path
+        result["output_sha256"] = _file_sha256(pdf_path)
         logger.info(f"PDF 生成成功: {pdf_path}")
     else:
         result["reason"] = f"pandoc 返回码非 0: {proc.returncode}"

@@ -51,6 +51,16 @@ _MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 \usepackage{hyperref}
 \usepackage{longtable}
 \usepackage{listings}
+\lstset{
+  breaklines=true,
+  breakatwhitespace=false,
+  columns=fullflexible,
+  keepspaces=true,
+  showspaces=false,
+  showstringspaces=false,
+  showtabs=false,
+  basicstyle=\ttfamily\footnotesize
+}
 \providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
 
 % 兼容新版 pandoc 图片片段：限制图片不超过文本区域，并定义 \pandocbounded。
@@ -94,6 +104,16 @@ _CUMCM2025_MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 \usepackage{booktabs}
 \usepackage{longtable}
 \usepackage{listings}
+\lstset{
+  breaklines=true,
+  breakatwhitespace=false,
+  columns=fullflexible,
+  keepspaces=true,
+  showspaces=false,
+  showstringspaces=false,
+  showtabs=false,
+  basicstyle=\ttfamily\footnotesize
+}
 \providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
 
 % 兼容新版 pandoc 图片片段：限制图片不超过文本区域，并定义 \pandocbounded。
@@ -207,7 +227,7 @@ _HUASHUBEI_MAIN_TEX_TEMPLATE = rf"""% !TEX program = xelatex
 
 \setlist[enumerate]{{label=\arabic*、, leftmargin=2em}}
 \lstset{{
-  basicstyle=\ttfamily\small,
+  basicstyle=\ttfamily\footnotesize,
   backgroundcolor=\color{{black!3}},
   frame=single,
   framesep=6pt,

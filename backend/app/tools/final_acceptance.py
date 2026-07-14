@@ -34,6 +34,9 @@ _REQUIRED_REPORTS = (
     "execution_validation_report.json",
     "paper_preflight_report.json",
     "pdf_visual_check.json",
+    "submission_audit_report.json",
+    "docx_export_status.json",
+    "export_status.json",
 )
 _SOURCE_HEADING_RE = re.compile(r"(?m)^###\s+B\.\d+\s+(?P<name>.+?)\s*$")
 _LEGACY_SOURCE_HEADING_RE = re.compile(
@@ -73,6 +76,60 @@ def _status_check(work_dir: str, filename: str, expected: str) -> dict[str, Any]
         passed,
         f"{filename} = {expected}。" if passed else f"{filename} 必须为 {expected}。",
         actual=report.get("status") if report else None,
+    )
+
+
+def _sha256_file(path: str) -> str | None:
+    if not os.path.isfile(path):
+        return None
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def _check_artifact_freshness(work_dir: str) -> dict[str, Any]:
+    current = {
+        name: _sha256_file(os.path.join(work_dir, name))
+        for name in ("res.md", "res.json", "res.docx", "res.pdf", "frozen_results.json")
+    }
+    export_status = _read_json(os.path.join(work_dir, "export_status.json")) or {}
+    pdf_status = export_status.get("pdf") if isinstance(export_status.get("pdf"), dict) else {}
+    docx_status = _read_json(os.path.join(work_dir, "docx_export_status.json")) or {}
+    manifest = _read_json(os.path.join(work_dir, "candidate_manifest.json")) or {}
+    manifest_hashes = manifest.get("artifact_hashes")
+    if not isinstance(manifest_hashes, dict):
+        manifest_hashes = {}
+
+    mismatches: list[str] = []
+    if not pdf_status.get("success"):
+        mismatches.append("PDF 导出状态不是 success")
+    if pdf_status.get("source_sha256") != current["res.md"]:
+        mismatches.append("PDF 来源 res.md 哈希不匹配")
+    if pdf_status.get("output_sha256") != current["res.pdf"]:
+        mismatches.append("PDF 输出哈希不匹配")
+    if not docx_status.get("success"):
+        mismatches.append("DOCX 导出状态不是 success")
+    if docx_status.get("source_sha256") != current["res.md"]:
+        mismatches.append("DOCX 来源 res.md 哈希不匹配")
+    if docx_status.get("output_sha256") != current["res.docx"]:
+        mismatches.append("DOCX 输出哈希不匹配")
+    for name, digest in current.items():
+        if digest is not None and manifest_hashes.get(name) != digest:
+            mismatches.append(f"candidate_manifest 中 {name} 哈希不匹配")
+
+    return _check(
+        "artifact_freshness",
+        not mismatches,
+        "PDF、DOCX、候选清单均绑定当前交付文件哈希。"
+        if not mismatches
+        else "导出产物或候选清单与当前源文件不是同一批次。",
+        mismatches=mismatches,
+        artifact_set_id=manifest.get("artifact_set_id"),
     )
 
 
@@ -164,6 +221,8 @@ def audit_final_acceptance(work_dir: str) -> dict[str, Any]:
     checks.append(_status_check(work_dir, "execution_validation_report.json", "PASS"))
     checks.append(_status_check(work_dir, "paper_preflight_report.json", "PASS"))
     checks.append(_status_check(work_dir, "pdf_visual_check.json", "PASS"))
+    checks.append(_status_check(work_dir, "submission_audit_report.json", "PASS"))
+    checks.append(_check_artifact_freshness(work_dir))
 
     freeze = validate_result_freeze(work_dir)
     checks.append(
@@ -198,7 +257,7 @@ def audit_final_acceptance(work_dir: str) -> dict[str, Any]:
 
     technical_pass = all(item["passed"] for item in checks)
     return {
-        "schema_version": "mathmodel.final-acceptance.v1",
+        "schema_version": "mathmodel.final-acceptance.v2",
         "generated_at": datetime.datetime.now().isoformat(),
         "work_dir": work_dir,
         "technical_status": "TECHNICAL_PASS" if technical_pass else "TECHNICAL_FAIL",

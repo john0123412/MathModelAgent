@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 from typing import Any
@@ -29,6 +30,19 @@ def _read_json(path: str) -> dict[str, Any] | None:
     except (OSError, json.JSONDecodeError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def _file_sha256(path: str) -> str | None:
+    if not os.path.isfile(path):
+        return None
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
 
 
 def _issue(
@@ -127,19 +141,30 @@ def _audit_reports(work_dir: str) -> list[dict[str, Any]]:
         )
     else:
         preflight_status = preflight.get("status")
-        passed = preflight_status == "PASS" or preflight.get("success") is True
+        current_md_hash = _file_sha256(os.path.join(work_dir, "res.md"))
+        source_hash_matches = preflight.get("source_sha256") == current_md_hash
+        passed = (
+            preflight_status == "PASS" or preflight.get("success") is True
+        ) and source_hash_matches
         conditional = preflight_status == "CONDITIONAL_PASS"
         issues.append(
             _issue(
                 "paper_preflight",
                 passed,
-                "warning" if conditional else "error",
-                "paper_preflight_report.json = PASS。"
+                "warning" if conditional and source_hash_matches else "error",
+                "paper_preflight_report.json = PASS，且绑定当前 res.md。"
                 if passed
+                else "paper_preflight_report.json 已过期或未绑定当前 res.md。"
+                if not source_hash_matches
                 else "paper_preflight_report.json = CONDITIONAL_PASS，存在需人工复核的条件项。"
                 if conditional
                 else "paper_preflight_report.json 未通过。",
-                {"status": preflight_status, "success": preflight.get("success")},
+                {
+                    "status": preflight_status,
+                    "success": preflight.get("success"),
+                    "source_sha256": preflight.get("source_sha256"),
+                    "current_res_md_sha256": current_md_hash,
+                },
             )
         )
 
@@ -149,16 +174,34 @@ def _audit_reports(work_dir: str) -> list[dict[str, Any]]:
             _issue("pdf_visual_check", False, "error", "无法读取 pdf_visual_check.json。")
         )
     else:
-        passed = visual.get("status") == "PASS" or visual.get("success") is True
+        current_pdf_hash = _file_sha256(os.path.join(work_dir, "res.pdf"))
+        pdf_hash_matches = visual.get("pdf_sha256") == current_pdf_hash
+        full_scan = (
+            visual.get("scan_scope") == "all_pages"
+            and visual.get("pages_checked") == visual.get("page_count")
+        )
+        passed = (
+            visual.get("status") == "PASS" or visual.get("success") is True
+        ) and pdf_hash_matches and full_scan
         issues.append(
             _issue(
                 "pdf_visual_check",
                 passed,
                 "error",
-                "pdf_visual_check.json = PASS。"
+                "pdf_visual_check.json = PASS，且已覆盖当前 PDF 全部页面。"
                 if passed
+                else "pdf_visual_check.json 已过期、未绑定当前 PDF 或未覆盖全部页面。"
+                if not pdf_hash_matches or not full_scan
                 else "pdf_visual_check.json 未通过。",
-                {"status": visual.get("status"), "success": visual.get("success")},
+                {
+                    "status": visual.get("status"),
+                    "success": visual.get("success"),
+                    "pdf_sha256": visual.get("pdf_sha256"),
+                    "current_res_pdf_sha256": current_pdf_hash,
+                    "scan_scope": visual.get("scan_scope"),
+                    "pages_checked": visual.get("pages_checked"),
+                    "page_count": visual.get("page_count"),
+                },
             )
         )
     return issues
@@ -241,11 +284,16 @@ def audit_submission(
 
     status = _status_from_issues(issues)
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "generated_at": datetime.datetime.now().isoformat(),
         "work_dir": work_dir,
         "status": status,
         "require_official_fonts": require_official_fonts,
+        "inputs": {
+            "res_md_sha256": _file_sha256(os.path.join(work_dir, "res.md")),
+            "res_docx_sha256": _file_sha256(os.path.join(work_dir, "res.docx")),
+            "res_pdf_sha256": _file_sha256(os.path.join(work_dir, "res.pdf")),
+        },
         "checks": issues,
         "font_summary": font_summary,
     }

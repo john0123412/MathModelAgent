@@ -51,6 +51,13 @@ class TestPdfTemplateCommand(unittest.TestCase):
         self.assertTrue(
             any("header-includes=" in item and "breaklines=true" in item for item in command)
         )
+        self.assertTrue(
+            any(
+                "header-includes=" in item
+                and r"basicstyle=\ttfamily\footnotesize" in item
+                for item in command
+            )
+        )
         self.assertIn("geometry:left=3.17cm,right=3.17cm,top=2.6cm,bottom=2.6cm", command)
         self.assertNotIn("--toc", command)
         self.assertNotIn("--number-sections", command)

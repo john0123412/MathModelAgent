@@ -227,13 +227,14 @@ async def list_tasks():
             "files": files_exist,
         }
         persisted_status = read_task_status(task_path)
-        if persisted_status and isinstance(persisted_status.get("status"), str):
+        has_persisted_status = bool(
+            persisted_status and isinstance(persisted_status.get("status"), str)
+        )
+        if has_persisted_status:
+            # Persisted workflow/finalization state is authoritative. Merely
+            # finding an old res.md or res.docx must not turn failed/finalizing
+            # tasks back into completed.
             task_info["status"] = persisted_status["status"]
-        if task_info["has_result"] and task_info["status"] not in {
-            "failed",
-            "cancelled",
-        }:
-            task_info["status"] = "completed"
 
         # 从消息文件获取标题和状态
         msg_file = os.path.join("logs", "messages", f"{task_id}.json")
@@ -266,9 +267,16 @@ async def list_tasks():
                         if msg.get("msg_type") != "system":
                             continue
                         # 只检查最终完成消息，避免中间步骤的"完成"误判
-                        if content and "任务处理完成" in content:
+                        if (
+                            not has_persisted_status
+                            and content
+                            and "任务处理完成" in content
+                        ):
                             task_info["status"] = "completed"
-                        elif "失败" in content or "停止" in content:
+                        elif (
+                            not has_persisted_status
+                            and ("失败" in content or "停止" in content)
+                        ):
                             if not task_info["has_result"]:
                                 task_info["status"] = (
                                     "interrupted"
@@ -288,6 +296,7 @@ async def list_tasks():
                             "running",
                             "resuming",
                             "waiting_review",
+                            "finalizing",
                         }
                     ):
                         task_info["status"] = (

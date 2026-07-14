@@ -2,6 +2,7 @@
 
 ## 当前稳定状态
 
+- 2026-07-14：仓库级 `AGENTS.md` 与 `skills/1start-mathmodel/SKILL.md` 已增加 Codex 多智能体限制：禁止 `fork_turns:"all"`，必须显式使用 `"none"` 或不大于 5 的历史窗口，并行子 agent 最多 2 个；子任务仅接收阶段摘要和文件路径。真实建模任务如需断点续传优先走后端 `POST /modeling`。发起子线程前必须确认经用户授权的隔离计费与预算限制。
 - 默认新建建模任务使用 `cumcm2026`。
 - 主交付链路是：
   - `res.md`

@@ -117,6 +117,18 @@ workflow:
 | 竞赛论文撰写 | `5writing` | 基于分析、建模、代码结果和图表撰写最终竞赛论文，并按章节直接插入图表。 | `paper/` |
 | 验证和验收 | `6verity` | 检查可复现性、一致性、产物完整性、格式规范和提交就绪状态。 | `VERIFY_REPORT.md` |
 
+## 多智能体 / Subagent 调用限制（Codex spawn_agent）
+
+本 skill 的 `allowed-tools` 包含 `Agent`，可用于调用 Codex 内置的
+`spawn_agent`。为控制上下文继承和 token 消耗，必须遵守以下规则：
+
+- 禁止 `spawn_agent` 使用 `fork_turns:"all"`；必须显式传入
+  `fork_turns:"none"` 或不大于 `5` 的整数。
+- 同一时刻并行子 agent 不超过 2 个；本工作流的 8 个阶段默认串行执行，不依赖并行 subagent 加速。
+- 子 agent 只接收阶段摘要和明确文件路径；不得回灌整段工具输出或全量上下文。
+- 真实建模任务如需断点续传，优先走后端 `POST /modeling`，不要把 Codex 原生子线程当作项目级 checkpoint 机制。
+- 发起多智能体调用前，确认当前账户或代理具备经用户授权的隔离计费与预算限制；未确认时不得 spawn。
+
 ## 阶段边界
 
 - `3coding-visual` 负责生成所有依赖计算结果或实验输出的数据图表。

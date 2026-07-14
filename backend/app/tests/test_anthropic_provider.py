@@ -12,9 +12,12 @@ class AnthropicProviderToolConversionTest(unittest.TestCase):
 
         converted = provider._convert_tools(coder_tools_anthropic)
 
-        self.assertEqual(len(converted), 1)
-        self.assertEqual(converted[0]["name"], "execute_code")
-        self.assertIn("input_schema", converted[0])
+        self.assertEqual(len(converted), len(coder_tools_anthropic))
+        self.assertEqual(
+            [tool["name"] for tool in converted],
+            ["execute_code", "record_execution_evidence"],
+        )
+        self.assertEqual(converted, coder_tools_anthropic)
 
 
 class AnthropicProviderAuthenticationTest(unittest.IsolatedAsyncioTestCase):

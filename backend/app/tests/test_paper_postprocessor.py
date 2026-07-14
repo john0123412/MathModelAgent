@@ -1,5 +1,6 @@
 """论文导出后处理测试。"""
 
+import hashlib
 import json
 import os
 import tempfile
@@ -886,6 +887,117 @@ class TestPreparePaperMarkdown(unittest.TestCase):
         check = report["checks"]["result_consistency"]
         self.assertTrue(check["passed"])
         self.assertEqual(check["conflicts"], [])
+
+    def test_frozen_result_consistency_distinguishes_result_claims_from_context(self):
+        """Sensitivity prose and unit parameters must not be treated as frozen results."""
+        metrics = [
+            {
+                "id": "optimal_profit",
+                "base_id": "optimal_profit",
+                "subtask_id": "ques1",
+                "label": "最优利润",
+                "aliases": ["最大利润"],
+                "value": 2200.0,
+                "unit": "元",
+                "explanation": "原始生产方案的最优目标值",
+            },
+            {
+                "id": "original_profit",
+                "base_id": "original_profit",
+                "subtask_id": "ques2",
+                "label": "原始利润",
+                "value": 2200.0,
+                "unit": "元",
+                "explanation": "敏感性分析前的目标值",
+            },
+            {
+                "id": "new_profit",
+                "base_id": "new_profit",
+                "subtask_id": "ques2",
+                "label": "新利润",
+                "value": 2366.666667,
+                "unit": "元",
+                "explanation": "机器时间增加后的目标值",
+            },
+            {
+                "id": "machine_time_used",
+                "base_id": "machine_time_used",
+                "subtask_id": "ques1",
+                "label": "机器时间使用量",
+                "aliases": ["机器时间消耗"],
+                "value": 100.0,
+                "unit": "小时",
+                "explanation": "原始最优方案的机器时间使用量",
+            },
+            {
+                "id": "labor_time_used",
+                "base_id": "labor_time_used",
+                "subtask_id": "ques1",
+                "label": "人工时间使用量",
+                "aliases": ["人工时间消耗"],
+                "value": 80.0,
+                "unit": "小时",
+                "explanation": "原始最优方案的人工时间使用量",
+            },
+        ]
+        correct_markdown = (
+            "最优利润从2200元提升至2366.666667元。\n\n"
+            "新最优利润达到2366.666667元，较原始利润增加166.666667元，增长率达7.575758%。\n\n"
+            "当机器时间约束增加10小时（即从100小时增加到110小时）时，分析最优生产方案和最大利润的变化。\n\n"
+            "产品A的机器时间消耗效率（2小时/件）与人工时间消耗效率（1小时/件）更有利。"
+        )
+        wrong_markdown = (
+            "最优利润为2600元。原始利润为2600元。新利润达到2500元。"
+            "机器时间使用量为90小时。"
+        )
+        mixed_metric_markdown = "原始利润为2100元，调整后最优利润为2366.666667元。"
+        repeated_alias_markdown = "原始利润的变化情况，原始利润为2100元。"
+        with tempfile.TemporaryDirectory() as work_dir:
+            source_path = os.path.join(work_dir, "result.csv")
+            with open(source_path, "w", encoding="utf-8") as handle:
+                handle.write("verified result evidence\n")
+            with open(source_path, "rb") as handle:
+                source_sha256 = hashlib.sha256(handle.read()).hexdigest()
+            with open(os.path.join(work_dir, "frozen_results.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "schema": "mathmodel.result-freeze",
+                        "version": 1,
+                        "metrics": metrics,
+                        "sources": [
+                            {
+                                "relative_path": "result.csv",
+                                "sha256": source_sha256,
+                                "role": "evidence",
+                            }
+                        ],
+                    },
+                    handle,
+                    ensure_ascii=False,
+                )
+
+            correct = build_preflight_report(work_dir, correct_markdown, code_sources=[])
+            wrong = build_preflight_report(work_dir, wrong_markdown, code_sources=[])
+            mixed_metric = build_preflight_report(work_dir, mixed_metric_markdown, code_sources=[])
+            repeated_alias = build_preflight_report(work_dir, repeated_alias_markdown, code_sources=[])
+
+        self.assertTrue(correct["checks"]["result_consistency"]["passed"])
+        self.assertEqual(correct["checks"]["result_consistency"]["conflicts"], [])
+        self.assertFalse(wrong["checks"]["result_consistency"]["passed"])
+        self.assertEqual(
+            {item["fact"] for item in wrong["checks"]["result_consistency"]["conflicts"]},
+            {"最优利润", "原始利润", "新利润", "机器时间使用量"},
+        )
+        self.assertFalse(mixed_metric["checks"]["result_consistency"]["passed"])
+        self.assertEqual(
+            mixed_metric["checks"]["result_consistency"]["conflicts"][0]["fact"],
+            "原始利润",
+        )
+        self.assertFalse(repeated_alias["checks"]["result_consistency"]["passed"])
+        self.assertEqual(
+            repeated_alias["checks"]["result_consistency"]["conflicts"][0]["fact"],
+            "原始利润",
+        )
 
     def test_preflight_ignores_symbol_subscripts_in_result_consistency(self):
         with tempfile.TemporaryDirectory() as work_dir:

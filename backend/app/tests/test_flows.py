@@ -73,6 +73,34 @@ class TestFlows(unittest.TestCase):
         self.assertIn("ques1_results.csv", prompt)
         self.assertIn("objective_value", prompt)
 
+    def test_writer_prompt_uses_persisted_response_when_resume_cache_is_missing(self):
+        class MissingOutputCacheInterpreter(FakeCodeInterpreter):
+            def get_code_output(self, section: str) -> str:
+                raise KeyError(section)
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            flows = Flows(
+                {
+                    "ques_count": 1,
+                    "background": "生产计划优化。",
+                    "ques1": "求最优生产方案。",
+                }
+            )
+
+            prompt = flows.get_writer_prompt(
+                "eda",
+                "从检查点恢复的 EDA 代码说明。",
+                MissingOutputCacheInterpreter(work_dir),
+                {
+                    "eda": "EDA模板",
+                    "ques1": "模板",
+                    "sensitivity_analysis": "敏感性模板",
+                },
+            )
+
+        self.assertIn("从检查点恢复的 EDA 代码说明。", prompt)
+        self.assertIn("EDA模板", prompt)
+
     def test_writer_prompt_includes_structured_result_facts(self):
         with tempfile.TemporaryDirectory() as work_dir:
             with open(

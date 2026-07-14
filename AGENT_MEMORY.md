@@ -2,7 +2,7 @@
 
 ## 当前稳定状态
 
-- 2026-07-14：仓库级 `AGENTS.md` 与 `skills/1start-mathmodel/SKILL.md` 已增加 Codex 多智能体限制：禁止 `fork_turns:"all"`，必须显式使用 `"none"` 或不大于 5 的历史窗口，并行子 agent 最多 2 个；子任务仅接收阶段摘要和文件路径。真实建模任务如需断点续传优先走后端 `POST /modeling`。发起子线程前必须确认经用户授权的隔离计费与预算限制。
+- 2026-07-14：仓库级 `AGENTS.md`、`skills/1start-mathmodel/SKILL.md` 与全局 `C:\Users\Johnny\.codex\AGENTS.md` 已按当前 Codex `spawn_agent` 接口更新多智能体限制：主 agent 创建子任务必须显式使用 `fork_context:false`，严禁 `fork_context:true`，不再使用不属于当前接口的 `fork_turns`；只有主 agent 可 spawn，subagent 不得嵌套 spawn；同一时刻活动的直接 subagent 最多 5 个，且仅接收阶段摘要、明确目标和文件路径。真实建模任务如需断点续传优先走后端 `POST /modeling`；发起子线程前必须确认经用户授权的隔离计费与预算限制。
 
 - 2026-07-14：主工作流的最终执行验证失败会保留已通过 `quesN` 的代码检查点，并对报告中定位到的失败题目最多进行一次自动定向回修；回修后再次失败或同一任务已记录两次真实验证失败时，停止 Writer/PDF 和自动重试，要求按恢复规程人工切换已验证 provider 或确认低开销算法。执行冻结通过后，若 `paper_preflight_report.json` 的硬失败只定位到 `result_consistency` 等可归属正文的检查项，工作流还会把冲突证据和冻结事实只交回受影响章节的 Writer 一次，再重新预检；无法归属的失败、或回修后仍为 `FAIL`，会停止候选 PDF 导出而不是生成貌似完成的论文。DOCX 收尾后生成 `final_acceptance_report.json/md`：`TECHNICAL_PASS` 同时要求执行验证、冻结来源哈希、preflight、PDF visual、正式字体、主交付文件/manifest 和论文附录完整源码通过；数学、引用、版式及平台规则始终是 `PENDING_HUMAN_REVIEW`。论文后处理不再将附录源码截断为 240 行，而是写入完整脚本/notebook 代码单元及 SHA-256；完整源码可能增加页数，仍须实际 PDF 视觉检查。
 
@@ -528,3 +528,15 @@ uv run python scripts/smoke_pdf_export.py
 - 不要打印 API key、token、私钥、完整环境变量。
 - 未运行验证时必须明确说“未验证”。
 - 诊断任务失败时先给结论，再列证据文件和字段。
+
+- [2026-07-14] 真实轻量线性规划验收任务 `20260714-060406-1fb71cbf5669243532c3eff5f57486f2`：因 `E2B_API_KEY` 未配置，按受控本地恢复路径临时启用 Docker `mode=auto, allow_local=True`。Modeler/Coder 与本地代码执行、变量快照、`execution_validation_report.json = PASS`、`frozen_results.json` 均已生成；任务在 Writer/收尾前持续运行超过约 9 分钟，尚未生成 `res.md`/`res.json`/`res.docx`/`candidate_manifest.json`，为避免无界 provider 消耗已人工取消，终态为 `interrupted`。期间仅见 Semantic Scholar `HTTPStatusError` 警告，未见执行验证失败。当前处置：不对同一任务重试，已执行 `RestoreRemote`，运行时 `EXECUTION_MODE` 与 `EXECUTION_ALLOW_LOCAL` 均恢复未设置；该次仅证明执行冻结链路通过，不能视为完整端到端交付验收通过。
+
+- [2026-07-14] 真实任务 `20260714-060406-1fb71cbf5669243532c3eff5f57486f2` 的一次受控续传失败：在临时 `mode=auto, allow_local=True` 下，变量快照已恢复（105 个变量）且快照后未完成代码被丢弃，但 `POST /modeling/{task_id}/resume` 随后因 `KeyError: 'eda'` 终止，`task_status.json` 为 `failed`，未生成主交付物。触发条件：任务此前在 Writer/收尾前被有界取消后续传。当前处置：不再对该任务重复续传；先恢复默认远程安全模式，并以最小复现/单元测试定位 checkpoint/工作流恢复对 `eda` 字段的假设后再决定修复。
+
+- [2026-07-14] 真实任务 `20260714-060406-1fb71cbf5669243532c3eff5f57486f2` 在修复解释器分段输出缓存恢复后，用已配置真实 provider 完成一次受控续传：变量快照恢复、已保存 Coder 阶段复用和 Writer 均实际运行，`execution_validation_report.json = PASS`；随后 `paper_preflight_report.json = FAIL`，仅硬失败为 `result_consistency`，其将“新最优利润/原始利润/资源参数”出现在同一句的正确敏感性描述误判为各冻结事实冲突，停止在 PDF 候选导出前。当前处置：已按两次真实失败规程停止对该任务再次调用 provider；先最小复现并修复结果一致性匹配，再以现有 `res.md` 走本地确定性导出/验收，不重复消耗真实 API。
+
+- [2026-07-14] 修复 `paper_postprocessor._sentence_mentions_metric()`：冻结结果一致性检查现仅在指标别名后的**本地分句**出现明确结果赋值（如“为”“达到”“分别为”）时才比较数值；对“较原始利润增加…，增长率达…”、资源约束描述、每件消耗效率/消耗率等上下文不再误报。兼容旧 `objective_value` 和当前 `optimal_profit`：明确“新/调整后/增加后最优利润”不会被当作原始最优利润。回归测试同时覆盖真实敏感性描述通过、`最优利润为2600元` / `原始利润为2600元` / `新利润达到2500元` / `机器时间使用量为90小时` 仍硬失败。
+
+- [2026-07-14] 真实任务 `20260714-060406-1fb71cbf5669243532c3eff5f57486f2` 未再调用 provider：修复后对现有 `res.md` 重新运行确定性论文后处理，`paper_preflight_report.json = PASS`、`execution_validation_report.json = PASS`、冻结结果哈希有效；已在 Windows 本机正式字体环境重导 `res.docx`、`res.pdf`，PDF 视觉检查 PASS，严格字体 `submission_audit_report.json = PASS`，LaTeX sidecar 自动编译成功，`final_acceptance_report.json = TECHNICAL_PASS`（人工复核仍为 `PENDING_HUMAN_REVIEW`）。已在这些证据完成后将任务状态恢复为 `completed`；Docker `GET /tasks` 已实际显示 completed。说明文件同步需求：本次只改变内部预检语义和修复记录，已更新本记忆；未改变用户启动、模板或导出命令，故无需更新 STARTUP / 模板说明。
+
+- [2026-07-14] `result_consistency` 二次强化：按每个指标别名 occurrence 的本地分句抽取明确赋值数值，并把“从/由基线值提升至/降至新值”识别为基线指标声明；避免同句其他数字掩盖错误。最新 Docker 后端镜像重建后，全量单测与 Ruff 均通过；真实任务 `20260714-060406-1fb71cbf5669243532c3eff5f57486f2` 再次核验为 `completed`，执行验证、论文预检、PDF 视觉检查、严格字体审计均为 PASS，最终技术状态为 `TECHNICAL_PASS`。

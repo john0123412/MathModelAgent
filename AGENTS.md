@@ -136,15 +136,18 @@ B 需要 1 小时机器时间、2 小时人工时间，利润 30 元；
 
 ## 多智能体 Subagent 调用限制（Codex spawn_agent）
 
-在 Codex Desktop 中修改本仓库代码时，主 agent 可能调用内置的
-`spawn_agent`（或 `Agent` 工具）拉起子线程。子线程继承过长对话历史会显著增加
-token 消耗，因此强制遵守以下限制：
+在 Codex Desktop 当前的 `spawn_agent` 接口中，上下文继承由布尔字段
+`fork_context` 控制；不得使用不属于当前接口的 `fork_turns` 参数。为控制 token
+消耗、避免任务树失控并保证职责清晰，强制遵守以下限制：
 
-- 禁止 `spawn_agent` 使用 `fork_turns:"all"`。必须显式传入
-  `fork_turns:"none"` 或不大于 `5` 的整数；不得让子 agent 继承全量父对话历史。
-- 同一时刻并行子 agent 不超过 2 个；工作流各阶段默认由主线程串行执行，不以
-  `spawn_agent` 并行加速。
-- 子 agent 的任务说明只提供阶段性摘要和明确文件路径；不得回灌整段工具输出或全量上下文。
+- 主 agent 发起子任务时必须显式传入 `fork_context:false`；严禁传入
+  `fork_context:true`，确保子 agent 不继承父线程上下文。
+- 只有主 agent 可以调用 `spawn_agent`（或 `Agent` 工具）。任何 subagent 均不得再创建
+  subagent、不得形成嵌套任务树；需要继续拆分时，subagent 应把建议和阶段摘要返回主 agent。
+- 同一时刻活动的直接 subagent 最多 5 个；各工作流阶段默认仍由主线程串行执行，只有互不依赖的
+  旁路任务才可并行，且不得为加速而无边界拆分。
+- 子 agent 的任务说明只提供阶段性摘要、明确目标和文件路径；不得回灌整段工具输出、完整父对话或
+  与本任务无关的上下文。
 - 真实建模任务如需断点续传，优先走后端 `POST /modeling`；其工作流具备 checkpoint
   与局部回修能力，Codex 原生子线程不提供这些项目级保障。
 - 发起多智能体调用前，确认当前账户或代理具备经用户授权的隔离计费与预算限制；未确认时不得 spawn。

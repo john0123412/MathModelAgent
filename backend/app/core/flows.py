@@ -1,5 +1,6 @@
 """工作流程定义模块，管理建模任务的求解和写作流程。"""
 
+import logging
 import re
 
 from app.models.user_output import UserOutput
@@ -11,6 +12,7 @@ from app.schemas.problem_contract import ProblemContract
 
 
 _COMPUTED_NUMBER_RE = re.compile(r"(?<![A-Za-z_])[-+]?\d+(?:\.\d+)?(?![A-Za-z_])")
+logger = logging.getLogger(__name__)
 
 
 def _redact_computed_numbers(text: str) -> str:
@@ -173,7 +175,17 @@ class Flows:
         Returns:
             str: 生成的writer_prompt
         """
-        code_output = code_interpreter.get_code_output(key)
+        try:
+            code_output = code_interpreter.get_code_output(key)
+        except KeyError:
+            # Resume restores the notebook kernel (or a variable snapshot), but
+            # older checkpoints do not persist the interpreter's per-section
+            # output cache.  The durable Coder response and frozen result facts
+            # remain available, so a missing cache entry must not block Writer.
+            logger.warning(
+                "代码输出缓存缺失，使用已持久化的 Coder 响应继续写作: %s", key
+            )
+            code_output = ""
         result_fact_summary = build_result_fact_summary(code_interpreter.work_dir)
         freeze_validation = validate_result_freeze(code_interpreter.work_dir)
         if freeze_validation["active"]:

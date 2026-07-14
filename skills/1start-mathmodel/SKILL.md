@@ -144,13 +144,18 @@ python "<1start-mathmodel skill 目录>/scripts/workflow_guard.py" --workspace .
 ## 多智能体 / Subagent 调用限制（Codex spawn_agent）
 
 本 skill 的 `allowed-tools` 包含 `Agent`，可用于调用 Codex 内置的
-`spawn_agent`。为控制上下文继承和 token 消耗，必须遵守以下规则：
+`spawn_agent`。当前接口使用 `fork_context` 布尔字段控制上下文继承，不能使用
+`fork_turns` 参数。为控制 token 消耗和任务复杂度，必须遵守以下规则：
 
-- 禁止 `spawn_agent` 使用 `fork_turns:"all"`；必须显式传入
-  `fork_turns:"none"` 或不大于 `5` 的整数。
-- 同一时刻并行子 agent 不超过 2 个；本工作流的 8 个阶段默认串行执行，不依赖并行 subagent 加速。
-- 子 agent 只接收阶段摘要和明确文件路径；不得回灌整段工具输出或全量上下文。
-- 真实建模任务如需断点续传，优先走后端 `POST /modeling`，不要把 Codex 原生子线程当作项目级 checkpoint 机制。
+- 主 agent 创建子任务时必须显式传入 `fork_context:false`；严禁使用
+  `fork_context:true`，确保子 agent 不继承父线程上下文。
+- 只有主 agent 可以调用 `spawn_agent`（或 `Agent` 工具）；subagent 不得再创建
+  subagent 或形成嵌套任务树。需要追加拆分时，先将建议和阶段摘要交回主 agent。
+- 同一时刻活动的直接 subagent 最多 5 个；本工作流的 8 个阶段默认串行执行，只允许将
+  互不依赖的旁路任务有限并行，不能为了加速无边界拆分。
+- 子 agent 只接收阶段摘要、明确目标和文件路径；不得回灌整段工具输出、完整父对话或无关上下文。
+- 真实建模任务如需断点续传，优先走后端 `POST /modeling`，不要把 Codex 原生子线程当作
+  项目级 checkpoint 机制。
 - 发起多智能体调用前，确认当前账户或代理具备经用户授权的隔离计费与预算限制；未确认时不得 spawn。
 
 ## 阶段边界

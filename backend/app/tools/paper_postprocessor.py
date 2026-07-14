@@ -1943,29 +1943,63 @@ def _check_result_consistency(work_dir: str, markdown: str) -> dict:
     }
 
 
-def _sentence_mentions_metric(sentence: str, metric: dict) -> bool:
+def _metric_claim_numbers(sentence: str, metric: dict) -> list[float]:
+    """Return values explicitly assigned to a metric in local prose clauses.
+
+    Alias mentions alone are not results: they can be comparisons, task
+    requirements, or per-unit parameters.  Each alias occurrence is therefore
+    checked independently and only the first number after a local assignment
+    verb is used.  This prevents a correct value for another metric in the same
+    sentence from masking an incorrect claim.
+    """
+    base_id = metric.get("base_id", metric.get("id"))
+    numbers: list[float] = []
     for alias in metric_aliases(metric):
-        if len(alias) < 2 or alias not in sentence:
+        if len(alias) < 2:
             continue
-        # “利润增长率” is a rate, not the frozen scalar “利润增加量”.
-        if alias.endswith("增长") and f"{alias}率" in sentence:
-            continue
-        # The original optimum and an explicitly named new optimum are
-        # distinct facts in sensitivity-analysis problems.
-        if metric.get("base_id", metric.get("id")) == "objective_value" and re.search(
-            r"(?:新|调整后|增加后)\s*(?:最大|最优)?利润", sentence
-        ):
-            continue
-        if metric.get("base_id", metric.get("id")) == "objective_value":
-            suffix = sentence[sentence.find(alias) + len(alias) :]
-            if not re.search(r"(?:为|=|达到|提升至|降至)", suffix):
+        for match in re.finditer(re.escape(alias), sentence):
+            # “利润增长率” is a rate, not the frozen scalar “利润增加量”.
+            if alias.endswith("增长") and sentence[match.end() :].startswith("率"):
                 continue
-        if metric.get("base_id", metric.get("id")) in {"profit_increase", "marginal_profit"}:
-            suffix = sentence[sentence.find(alias) + len(alias) :]
-            if not re.search(r"(?:为|=|约为|分别为)", suffix):
+            prefix = sentence[max(0, match.start() - 16) : match.start()]
+            # The original optimum and an explicitly named new optimum are
+            # distinct facts in sensitivity-analysis problems.  The generated
+            # freeze uses ``optimal_profit`` as the base id, while older
+            # freezes used ``objective_value``.  Inspect only this occurrence's
+            # prefix so a different clause can still state the old optimum.
+            if base_id in {"objective_value", "optimal_profit"} and re.search(
+                r"(?:新|调整后|增加后)(?:的)?\s*(?:最大|最优)?\s*$", prefix
+            ):
                 continue
-        return True
-    return False
+            suffix = sentence[match.end() :]
+            # A later clause's “达到/为” must not attach to this alias:
+            # “较原始利润增加 …，增长率达 …” is not an original-profit value.
+            local_clause = re.split(r"[，。；;！？!?]", suffix, maxsplit=1)[0]
+            # A transition statement such as “最优利润从 2200 元提升至
+            # 2366.67 元” explicitly states the baseline value for this metric;
+            # the later value belongs to a separately named adjusted/new metric.
+            baseline = re.search(
+                r"(?:从|由)\s*(?P<value>[-+]?\d+(?:\.\d+)?)\s*(?:元|小时|件|吨|亩|分|倍|年|万元|%)?"
+                r"\s*(?:提升至|降至|增加到|减少到|变为)",
+                local_clause,
+            )
+            if baseline is not None:
+                number = _parse_float(baseline.group("value"))
+            else:
+                assignment = re.search(
+                    r"(?:分别为|取值为|约为|达到|提升至|降至|为|=|达|是)", local_clause
+                )
+                if assignment is None:
+                    continue
+                number = _parse_float(local_clause[assignment.end() :])
+            if number is not None:
+                numbers.append(number)
+    return numbers
+
+
+def _sentence_mentions_metric(sentence: str, metric: dict) -> bool:
+    """Return whether prose explicitly assigns at least one value to ``metric``."""
+    return bool(_metric_claim_numbers(sentence, metric))
 
 
 def _numbers_in_sentence(sentence: str) -> list[float]:
@@ -2006,11 +2040,9 @@ def _check_frozen_result_consistency(markdown: str, validation: dict) -> dict:
         for metric in validation["metrics"]:
             if not _sentence_matches_metric_scope(sentence, section, metric):
                 continue
-            if not _sentence_mentions_metric(sentence, metric):
-                continue
-            numbers = _numbers_in_sentence(sentence)
+            numbers = _metric_claim_numbers(sentence, metric)
             expected = float(metric["value"])
-            if not numbers or _numbers_close_to_expected(numbers, expected):
+            if not numbers or all(_number_close_to_expected(number, expected) for number in numbers):
                 continue
             conflicts.append(
                 {
@@ -2159,10 +2191,11 @@ def _check_figure_result_consistency(work_dir: str, markdown: str) -> dict:
             nearby = markdown[max(0, image_match.start() - 600) : image_match.end() + 600]
             for _, sentence in _sentences_with_offsets(nearby):
                 for metric in bound_metrics:
-                    if not _sentence_mentions_metric(sentence, metric):
-                        continue
-                    numbers = _numbers_in_sentence(sentence)
-                    if not numbers or _numbers_close_to_expected(numbers, float(metric["value"])):
+                    numbers = _metric_claim_numbers(sentence, metric)
+                    expected = float(metric["value"])
+                    if not numbers or all(
+                        _number_close_to_expected(number, expected) for number in numbers
+                    ):
                         continue
                     conflicts.append(
                         {

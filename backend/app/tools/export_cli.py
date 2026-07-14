@@ -149,7 +149,6 @@ def _refresh_task_status(
         task_id = manifest.get("task_id") or os.path.basename(os.path.abspath(work_dir))
         write_candidate_manifest(work_dir, str(task_id))
         write_final_acceptance_report(work_dir)
-        write_candidate_manifest(work_dir, str(task_id))
 
 
 def cmd_check(args: argparse.Namespace) -> int:

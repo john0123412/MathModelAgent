@@ -83,6 +83,10 @@ docker compose down -v      # 停止并删除数据卷（⚠️ 清空 Redis 数
 
 启动后访问 http://localhost:5173。Compose 将 `5173` 和 `8000` 都绑定到
 `127.0.0.1`，默认只适合本机单用户使用；不要直接把开发 Compose 反向代理或暴露到公网。
+如确需在受信网络之外暴露后端，可在后端环境中设置 `API_AUTH_TOKEN=<随机令牌>`：
+设置后所有非豁免 HTTP 接口要求 `Authorization: Bearer <令牌>`，WebSocket 要求
+`?token=<令牌>` 查询参数；`/docs`、`/redoc`、`/openapi.json` 与 `/static/` 产物路径豁免。
+注意当前前端尚未适配令牌模式，该开关仅供 API 直连部署方 opt-in，默认留空保持原行为。
 `--wait` 会等待 Redis、后端和前端的本地健康检查通过，避免容器刚启动时 HTTP 探测出现
 短暂的连接重置或代理 `500`。
 

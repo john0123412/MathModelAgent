@@ -12,6 +12,7 @@ from app.services.redis_manager import redis_manager
 from app.services.ws_manager import ws_manager
 from app.utils.common_utils import ensure_safe_task_id
 from app.utils.log_util import logger
+from app.utils.security import is_valid_websocket_token
 from app.config.setting import settings
 
 router = APIRouter()
@@ -47,6 +48,16 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
     if not _is_allowed_websocket_origin(websocket.headers.get("origin")):
         logger.warning("拒绝未受信任 Origin 的 WebSocket 连接")
         await websocket.close(code=1008, reason="Untrusted origin")
+        return
+
+    # 可选令牌鉴权（与 HTTP 中间件同一开关）：浏览器 WebSocket 无法自定义
+    # Authorization 头，改用查询参数 token 携带。前端尚未适配令牌模式，
+    # 该开关由部署方 opt-in；默认 None 保持原有行为。
+    if settings.API_AUTH_TOKEN and not is_valid_websocket_token(
+        websocket.query_params.get("token"), settings.API_AUTH_TOKEN
+    ):
+        logger.warning("拒绝缺少或无效令牌的 WebSocket 连接")
+        await websocket.close(code=1008, reason="Invalid token")
         return
 
     try:
@@ -156,8 +167,12 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
                 continue
             content = data.get("content")
             if data.get("type") == "user_input" and isinstance(content, str) and content.strip():
-                user_input_queue.push(safe_task_id, content)
-                logger.info(f"收到用户实时输入 task_id: {safe_task_id}")
+                if user_input_queue.push(safe_task_id, content):
+                    logger.info(f"收到用户实时输入 task_id: {safe_task_id}")
+                else:
+                    # 队列满（容量上限见 user_input_queue.MAX_QUEUE_SIZE）：
+                    # 丢弃并记录，防止未消费消息无限累积占用内存
+                    logger.warning(f"用户实时输入队列已满，丢弃消息 task_id: {safe_task_id}")
 
     try:
         forward_task = asyncio.create_task(_forward_loop())

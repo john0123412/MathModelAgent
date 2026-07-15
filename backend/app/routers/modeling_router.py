@@ -162,11 +162,58 @@ def _resolve_example_dir(source: str) -> str:
     return example_dir
 
 
+def _normalize_base_url_for_comparison(base_url: object) -> str:
+    """将 Base URL 归一化用于等价比较（去空白与尾部斜杠）。"""
+    if base_url is None:
+        return ""
+    return str(base_url).strip().rstrip("/")
+
+
+def _require_api_key_for_new_base_url(
+    block: dict, current_base_url: str | None
+) -> None:
+    """更换 LLM 端点时强制同请求携带 API Key，否则整个请求 422。
+
+    仅换 baseUrl 而保留原有 apiKey 会把现有真实密钥随 Authorization 头
+    发往新端点，构成密钥外泄链；SSRF 校验（validate_llm_base_url）防不了
+    这条路径，因此在保存前强制"新端点 + 新密钥"成对提交。
+    与当前端点等价的重复提交不受影响。
+
+    Args:
+        block: 单个 agent 的配置块（来自请求体）。
+        current_base_url: 当前 settings 中该 agent 的 BASE_URL。
+
+    Raises:
+        HTTPException: 提供了不同的非空 baseUrl 但未携带非空 apiKey 时抛出 422。
+    """
+    if not block:
+        return
+    new_base_url = _normalize_base_url_for_comparison(block.get("baseUrl"))
+    if not new_base_url:
+        return
+    if new_base_url == _normalize_base_url_for_comparison(current_base_url):
+        return
+    if not block.get("apiKey"):
+        raise HTTPException(
+            status_code=422,
+            detail="更换 Base URL 必须同时提供该端点的 API Key，防止现有密钥被发往新端点",
+        )
+
+
 @router.post("/save-api-config", response_model=SaveApiConfigResponse)
 async def save_api_config(request: SaveApiConfigRequest):
     """
     保存验证成功的 API 配置到当前进程 settings，不写入 .env.dev。
     """
+    # 换端点必须同请求携带该端点的 API Key；先校验全部四个块再落任何字段，
+    # 保证请求原子性（部分合法块不会先生效）。
+    _require_api_key_for_new_base_url(
+        request.coordinator, settings.COORDINATOR_BASE_URL
+    )
+    _require_api_key_for_new_base_url(request.modeler, settings.MODELER_BASE_URL)
+    _require_api_key_for_new_base_url(request.coder, settings.CODER_BASE_URL)
+    _require_api_key_for_new_base_url(request.writer, settings.WRITER_BASE_URL)
+
     try:
         # 更新各个模块的设置：仅当字段非空时才覆盖，空字段保留 .env.dev 中
         # 已加载的默认配置，避免前端未填写时把可用的 key 覆盖成空字符串

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import secrets
 import socket
 import time
 from collections.abc import Callable
@@ -12,6 +13,53 @@ _PRIVATE_HOST_SUFFIXES = (".local", ".internal", ".localhost")
 _PRIVATE_HOSTNAMES = {"localhost", "localhost.localdomain"}
 _DNS_RESOLUTION_ATTEMPTS = 3
 _DNS_RETRY_DELAY_SECONDS = 0.1
+_BEARER_PREFIX = "Bearer "
+
+
+def _compare_tokens(candidate: str, expected_token: str) -> bool:
+    """恒定时间比较两个令牌字符串。
+
+    compare_digest 对混合非 ASCII 的 str 会抛 TypeError，统一按 UTF-8
+    编码为 bytes 后比较，保证任意外部输入都不会触发异常。
+    """
+    return secrets.compare_digest(
+        candidate.encode("utf-8"), expected_token.encode("utf-8")
+    )
+
+
+def is_valid_bearer_authorization(
+    authorization: str | None, expected_token: str
+) -> bool:
+    """校验 HTTP Authorization 头是否为精确匹配的 Bearer 令牌。
+
+    Args:
+        authorization: 请求携带的 Authorization 头原文，可能缺失。
+        expected_token: 部署方配置的 API_AUTH_TOKEN。
+
+    Returns:
+        头部为 "Bearer <expected_token>" 精确匹配时返回 True。
+    """
+    if not authorization or not expected_token:
+        return False
+    # 前缀要求精确的 "Bearer "（区分大小写），避免宽松解析引入歧义
+    if not authorization.startswith(_BEARER_PREFIX):
+        return False
+    return _compare_tokens(authorization[len(_BEARER_PREFIX) :], expected_token)
+
+
+def is_valid_websocket_token(token: str | None, expected_token: str) -> bool:
+    """校验 WebSocket 查询参数 token 是否与配置令牌精确匹配。
+
+    Args:
+        token: 连接 URL 中的 token 查询参数，可能缺失。
+        expected_token: 部署方配置的 API_AUTH_TOKEN。
+
+    Returns:
+        完全一致时返回 True。
+    """
+    if not token or not expected_token:
+        return False
+    return _compare_tokens(token, expected_token)
 
 
 def validate_llm_base_url(

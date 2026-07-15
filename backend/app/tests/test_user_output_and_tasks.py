@@ -3,6 +3,7 @@
 import inspect
 import json
 import os
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -85,6 +86,102 @@ class TestUserOutputReferences(unittest.TestCase):
         self.assertNotIn("Writer 不应在分段中生成的局部参考文献", result)
         self.assertNotIn("Writer 也不应在分段末尾生成裸编号参考文献", result)
         self.assertIn("[1] Example reference.", result)
+
+
+class TestReferenceNumberingDeterminism(unittest.TestCase):
+    """验证引用编号跨章节复用、同章节去重且连续无悬空。"""
+
+    # 论文九个章节的固定键，测试时只覆盖需要注入引用的章节
+    _REQUIRED_KEYS = (
+        "firstPage",
+        "RepeatQues",
+        "analysisQues",
+        "modelAssumption",
+        "symbol",
+        "eda",
+        "ques1",
+        "sensitivity_analysis",
+        "judge",
+    )
+
+    def _build_output(self, work_dir: str, overrides: dict[str, str]) -> UserOutput:
+        """构造 UserOutput 并填充全部章节，未覆盖章节使用占位文本。
+
+        Args:
+            work_dir: 临时工作目录。
+            overrides: 需要注入引用标记的章节内容。
+
+        Returns:
+            已填充所有章节的 UserOutput 实例。
+        """
+        output = UserOutput(work_dir=work_dir, ques_count=1)
+        for key in self._REQUIRED_KEYS:
+            content = overrides.get(key, f"{key} content")
+            output.set_res(
+                key, WriterResponse(response_content=content, footnotes=[])
+            )
+        return output
+
+    @staticmethod
+    def _split_markers(result: str) -> tuple[list[str], list[str]]:
+        """拆分正文内联标记编号与文末参考文献编号。
+
+        Args:
+            result: get_result_to_save 输出的论文全文。
+
+        Returns:
+            (正文中按出现顺序的内联编号, 参考文献列表中的条目编号)。
+        """
+        body, _, references = result.partition("## 参考文献")
+        inline = re.findall(r"\[\^(\d+)\]", body)
+        ref_numbers = re.findall(r"(?m)^\[(\d+)\]", references)
+        return inline, ref_numbers
+
+    def test_shared_reference_across_sections_shares_number(self):
+        """同一文献在两个章节引用时应共用编号，文末列表仅一条且无悬空。"""
+        with tempfile.TemporaryDirectory() as work_dir:
+            output = self._build_output(
+                work_dir,
+                {
+                    "firstPage": "摘要中引用{[^1] Shared Ref. 2020}",
+                    "ques1": "建模中再次引用{[^1] Shared Ref. 2020}",
+                },
+            )
+            result = output.get_result_to_save()
+
+        inline, ref_numbers = self._split_markers(result)
+
+        # 两个章节的内联标记编号一致（复用首次分配的编号）
+        self.assertEqual(inline, ["1", "1"])
+        # 文末参考文献恰好一条，编号与正文一致
+        self.assertEqual(ref_numbers, ["1"])
+        self.assertEqual(result.count("Shared Ref. 2020"), 1)
+        # 正文每个标记都能在参考文献列表找到对应条目（无悬空 [^n]）
+        self.assertTrue(set(inline).issubset(set(ref_numbers)))
+
+    def test_repeated_reference_in_one_section_keeps_numbers_consecutive(self):
+        """同一章节内重复引用不应跳号，另一引用应顺延为下一个编号。"""
+        with tempfile.TemporaryDirectory() as work_dir:
+            output = self._build_output(
+                work_dir,
+                {
+                    "ques1": (
+                        "先引用{[^1] Ref A. 2020}，"
+                        "随后再次引用{[^1] Ref A. 2020}，"
+                        "另引用{[^2] Ref B. 2021}"
+                    ),
+                },
+            )
+            result = output.get_result_to_save()
+
+        inline, ref_numbers = self._split_markers(result)
+
+        # 同一引用两次共用编号 1，另一引用为编号 2
+        self.assertEqual(inline, ["1", "1", "2"])
+        # 参考文献编号连续无跳号
+        self.assertEqual(ref_numbers, ["1", "2"])
+        # 正文标记均能在参考文献列表找到对应条目（无悬空 [^n]）
+        self.assertTrue(set(inline).issubset(set(ref_numbers)))
 
 
 class TestTaskListStatus(unittest.TestCase):

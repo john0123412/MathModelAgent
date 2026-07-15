@@ -118,6 +118,10 @@ class Settings(BaseSettings):
         DEFAULT_TRUSTED_HOSTS
     )
     ALLOW_PRIVATE_LLM_BASE_URLS: bool = False
+    # 可选令牌鉴权：配置后所有非公开 HTTP 接口与 WebSocket 都要求携带该令牌
+    # （HTTP 用 Authorization: Bearer <token>，WebSocket 用查询参数 token）。
+    # 默认 None 保持原有无鉴权行为，适用于纯本机部署。
+    API_AUTH_TOKEN: Optional[str] = None
     MAX_UPLOAD_FILE_SIZE_BYTES: int = 50 * 1024 * 1024
     MAX_UPLOAD_TOTAL_SIZE_BYTES: int = 200 * 1024 * 1024
     MAX_PROBLEM_TEXT_CHARS: int = 100_000

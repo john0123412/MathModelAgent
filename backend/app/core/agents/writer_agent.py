@@ -5,6 +5,7 @@ import re
 from typing import Callable
 from app.core.agents.agent import Agent
 from app.core.llm.llm import LLM
+from app.core.llm.types import StandardResponse, ToolCall
 from app.core.prompts import get_writer_prompt
 from app.schemas.enums import CompTemplate, FormatOutPut
 from app.config.setting import ApiType
@@ -20,6 +21,11 @@ from app.schemas.A2A import WriterResponse
 # TODO: 并行 parallel
 # TODO: 获取当前文件下的文件
 # TODO: 引用cites tool
+
+# 真工具调用的最大往返轮数。reasoning 模型可能连续多轮只返回 tool_calls
+# （content 为空），若不设上限会无限搜索文献；若只允许一轮（旧行为），
+# 第二轮 tool_calls 的 content 为空会被直接当成章节正文，静默产出空章节。
+MAX_TOOL_ROUNDS = 3
 
 PSEUDO_SEARCH_TOOL_RE = re.compile(
     r"<tool_call>\s*<function=search_papers>(?P<body>.*?)</function>\s*</tool_call>",
@@ -146,81 +152,83 @@ class WriterAgent(Agent):
 
         footnotes = []
         response_content: str = ""
+        # 记录“产生最终正文的那次响应”，最终 assistant 历史消息的
+        # reasoning_content 必须取自它，否则会把第一轮的推理错配到
+        # 后续轮次生成的正文上。
+        content_response: StandardResponse = response
 
         if response.tool_calls:
             logger.info("检测到工具调用")
-            # 更新对话历史 - 添加助手的工具调用响应。必须先记录完整工具调用，
-            # 再逐一追加 tool 结果，避免多工具调用时上下文不一致。
-            assistant_msg: dict = {"role": "assistant", "content": response.content}
-            if response.reasoning_content:
-                assistant_msg["reasoning_content"] = response.reasoning_content
-            assistant_msg["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.name, "arguments": tc.arguments},
-                }
-                for tc in response.tool_calls
-            ]
-            await self.append_chat_history(assistant_msg)
+            # 有界循环处理真工具调用：reasoning 模型常连续多轮只返回
+            # tool_calls（此时 content 为空）。旧实现只跟进一轮，第二轮
+            # 工具调用响应会被直接当作正文，导致章节静默为空。
+            tool_rounds = 0
+            while response.tool_calls and tool_rounds < MAX_TOOL_ROUNDS:
+                tool_rounds += 1
+                await self._append_assistant_tool_calls_msg(response)
 
-            for tool_call in response.tool_calls:
-                tool_id = tool_call.id
-                if tool_call.name != "search_papers":
-                    logger.warning(f"未知写作工具调用: {tool_call.name}")
-                    continue
-
-                logger.info("调用工具: search_papers")
-                await redis_manager.publish_message(
-                    self.task_id,
-                    SystemMessage(content=f"写作手调用{tool_call.name}工具"),
-                )
-
-                arguments = json.loads(tool_call.arguments or "{}")
-                query = arguments.get("query", "")
-
-                await redis_manager.publish_message(
-                    self.task_id,
-                    WriterMessage(content=query),
-                )
-
-                scholar = self.scholar
-                try:
-                    if scholar is None:
-                        raise RuntimeError("scholar 未初始化")
-                    papers = await scholar.search_papers(
-                        query=query,
-                        limit=arguments.get("limit", 8),
-                        year_from=arguments.get("year_from"),
-                        year_to=arguments.get("year_to"),
-                        min_citations=arguments.get("min_citations"),
-                        source_types=arguments.get("source_types"),
-                        include_web=arguments.get("include_web"),
+                for tool_call in response.tool_calls:
+                    if tool_call.name != "search_papers":
+                        logger.warning(f"未知写作工具调用: {tool_call.name}")
+                        # 未知工具也必须补占位 tool 响应：OpenAI 协议要求
+                        # 每个 tool_call 都有对应的 role=tool 消息，否则
+                        # 孤儿 tool_call 会被历史修复逻辑剔除或使请求报错。
+                        papers_str = f"工具 {tool_call.name} 不受支持，未执行。"
+                    else:
+                        papers_str = await self._execute_search_papers(tool_call)
+                    await self.append_chat_history(
+                        {
+                            "role": "tool",
+                            "content": papers_str,
+                            "tool_call_id": tool_call.id,
+                            "name": tool_call.name,
+                        }
                     )
-                except Exception as exc:
-                    error_msg = f"搜索文献失败: {type(exc).__name__}"
-                    logger.error(error_msg)
-                    papers_str = error_msg
-                else:
-                    papers_str = scholar.papers_to_str(papers)
-                # TODO: pass to frontend
-                logger.info(f"搜索文献结果已获取: count={len(papers)}")
+
+                response = await self._chat(
+                    history=self.chat_history,
+                    tools=tools,
+                    tool_choice="auto",
+                    agent_name=self.__class__.__name__,
+                    sub_title=sub_title,
+                )
+
+            if response.tool_calls:
+                # 超过轮次上限仍要求调用工具：先写入本轮 assistant(tool_calls)
+                # 与占位 tool 响应保持协议配对，再禁用工具强制输出正文，
+                # 避免无限检索文献而始终不产出章节内容。
+                logger.warning(
+                    f"写作手工具往返超过 {MAX_TOOL_ROUNDS} 轮，禁用工具强制收尾"
+                )
+                await self._append_assistant_tool_calls_msg(response)
+                for tool_call in response.tool_calls:
+                    await self.append_chat_history(
+                        {
+                            "role": "tool",
+                            "content": "文献检索轮次已达上限，该工具调用未执行。",
+                            "tool_call_id": tool_call.id,
+                            "name": tool_call.name,
+                        }
+                    )
                 await self.append_chat_history(
                     {
-                        "role": "tool",
-                        "content": papers_str,
-                        "tool_call_id": tool_id,
-                        "name": "search_papers",
+                        "role": "user",
+                        "content": (
+                            "文献检索已充分，现在禁止再调用任何工具，"
+                            "请直接输出本章节完整正文。"
+                        ),
                     }
                 )
-            next_response = await self._chat(
-                history=self.chat_history,
-                tools=tools,
-                tool_choice="auto",
-                agent_name=self.__class__.__name__,
-                sub_title=sub_title,
-            )
-            response_content = next_response.content or ""
+                response = await self._chat(
+                    history=self.chat_history,
+                    tools=[],
+                    tool_choice=None,
+                    agent_name=self.__class__.__name__,
+                    sub_title=sub_title,
+                )
+
+            response_content = response.content or ""
+            content_response = response
         else:
             response_content = response.content or ""
             pseudo_arguments = _parse_pseudo_search_tool_call(response_content)
@@ -271,6 +279,7 @@ class WriterAgent(Agent):
                     sub_title=sub_title,
                 )
                 response_content = next_response.content or ""
+                content_response = next_response
                 if _has_pseudo_tool_call(response_content):
                     await self.append_chat_history(
                         {"role": "assistant", "content": response_content}
@@ -293,9 +302,109 @@ class WriterAgent(Agent):
                         sub_title=sub_title,
                     )
                     response_content = final_response.content or ""
-        self.chat_history.append({"role": "assistant", "content": response_content, "reasoning_content": response.reasoning_content} if response.reasoning_content else {"role": "assistant", "content": response_content})
+                    content_response = final_response
+
+        if not response_content.strip():
+            # 终局空内容防线：无论走哪条路径，空正文都不允许静默进入
+            # user_output——否则要到论文预检才暴露，届时只剩一次定向回修。
+            # 只重试一次，仍为空则记录错误并原样返回，让上游门禁可见。
+            logger.warning("写作手输出为空，追加提示并禁用工具重试一次")
+            await self.append_chat_history(
+                {
+                    "role": "user",
+                    "content": "上一轮输出为空，请直接输出本章节完整正文。",
+                }
+            )
+            retry_response = await self._chat(
+                history=self.chat_history,
+                tools=[],
+                tool_choice=None,
+                agent_name=self.__class__.__name__,
+                sub_title=sub_title,
+            )
+            response_content = retry_response.content or ""
+            content_response = retry_response
+            if not response_content.strip():
+                logger.error("写作手空内容重试后仍为空，原样返回交由上游门禁处理")
+
+        final_assistant_msg: dict = {"role": "assistant", "content": response_content}
+        if content_response.reasoning_content:
+            # reasoning_content 必须取产生本次正文那轮响应的值：旧实现固定取
+            # 第一轮 response 的推理，多轮工具往返后会张冠李戴。
+            final_assistant_msg["reasoning_content"] = (
+                content_response.reasoning_content
+            )
+        self.chat_history.append(final_assistant_msg)
         logger.info(f"{self.__class__.__name__}:完成:执行对话")
         return WriterResponse(response_content=response_content, footnotes=footnotes)
+
+    async def _append_assistant_tool_calls_msg(
+        self, response: StandardResponse
+    ) -> None:
+        """把带 tool_calls 的 assistant 响应写入对话历史。
+
+        必须先记录完整工具调用，再逐一追加 tool 结果，避免多工具调用时
+        上下文不一致。
+
+        Args:
+            response: 含 tool_calls 的 LLM 标准响应。
+        """
+        assistant_msg: dict = {"role": "assistant", "content": response.content}
+        if response.reasoning_content:
+            assistant_msg["reasoning_content"] = response.reasoning_content
+        assistant_msg["tool_calls"] = [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {"name": tc.name, "arguments": tc.arguments},
+            }
+            for tc in response.tool_calls
+        ]
+        await self.append_chat_history(assistant_msg)
+
+    async def _execute_search_papers(self, tool_call: ToolCall) -> str:
+        """执行 search_papers 工具调用并返回文本结果。
+
+        Args:
+            tool_call: search_papers 工具调用。
+
+        Returns:
+            文献检索结果文本；失败时返回错误说明。
+        """
+        logger.info("调用工具: search_papers")
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(content=f"写作手调用{tool_call.name}工具"),
+        )
+
+        arguments = json.loads(tool_call.arguments or "{}")
+        query = arguments.get("query", "")
+
+        await redis_manager.publish_message(
+            self.task_id,
+            WriterMessage(content=query),
+        )
+
+        scholar = self.scholar
+        try:
+            if scholar is None:
+                raise RuntimeError("scholar 未初始化")
+            papers = await scholar.search_papers(
+                query=query,
+                limit=arguments.get("limit", 8),
+                year_from=arguments.get("year_from"),
+                year_to=arguments.get("year_to"),
+                min_citations=arguments.get("min_citations"),
+                source_types=arguments.get("source_types"),
+                include_web=arguments.get("include_web"),
+            )
+        except Exception as exc:
+            error_msg = f"搜索文献失败: {type(exc).__name__}"
+            logger.error(error_msg)
+            return error_msg
+        # TODO: pass to frontend
+        logger.info(f"搜索文献结果已获取: count={len(papers)}")
+        return scholar.papers_to_str(papers)
 
     async def summarize(self) -> str:
         """总结对话内容，生成任务执行摘要。"""

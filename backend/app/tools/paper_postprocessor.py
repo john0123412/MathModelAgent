@@ -2173,17 +2173,66 @@ def _check_result_consistency(work_dir: str, markdown: str) -> dict:
     }
 
 
-def _metric_claim_numbers(sentence: str, metric: dict) -> list[float]:
-    """Return values explicitly assigned to a metric in local prose clauses.
+_NEW_VARIANT_METRIC_ID_RE = re.compile(
+    r"(?:^|_)(?:new|adjusted|updated|revised)(?:_|$)", re.IGNORECASE
+)
+_NEW_VARIANT_PREFIX_RE = re.compile(
+    r"(?:新|调整后|增加后|变化后|更新后)(?:的)?(?:生产方案|方案|约束|条件|情况)?"
+    r"(?:下)?(?:的)?\s*(?:最大|最优)?\s*$"
+)
+_BASE_VARIANT_PREFIX_RE = re.compile(
+    r"(?:原始|原|旧|初始|调整前|变化前)(?:的)?(?:生产方案|方案|约束|条件|情况)?"
+    r"(?:下)?(?:的)?\s*(?:最大|最优)?\s*$"
+)
+
+
+def _is_new_variant_metric(metric: dict) -> bool:
+    """判断冻结指标是否为“新/调整后方案”变体（相对基线指标）。
+
+    敏感性分析类冻结通常同时包含基线与调整后两份同名指标（如
+    ``optimal_profit`` 与 ``new_optimal_profit``、``machine_time_used`` 与
+    ``machine_time_used_new``），二者共享正文别名。变体身份由冻结数据自身
+    的 id/label 命名约定判定，不依赖题目领域词，保持通用。
+    """
+    for key in ("base_id", "id"):
+        identifier = str(metric.get(key) or "")
+        if _NEW_VARIANT_METRIC_ID_RE.search(identifier):
+            return True
+    label = str(metric.get("label") or "")
+    return label.startswith(("新", "调整后"))
+
+
+def _metric_claim_occurrences(
+    sentence: str, metric: dict
+) -> list[tuple[list[float], bool]]:
+    """Return per-occurrence candidate values explicitly assigned to ``metric``.
 
     Alias mentions alone are not results: they can be comparisons, task
     requirements, or per-unit parameters.  Each alias occurrence is therefore
-    checked independently and only the first number after a local assignment
-    verb is used.  This prevents a correct value for another metric in the same
-    sentence from masking an incorrect claim.
+    checked independently.  For every occurrence with a local assignment the
+    function returns a small CANDIDATE set instead of a single number, because
+    prose legitimately states a metric through an equation chain in two ways:
+
+    - subject position — “最大利润为 z* = 40×40 + 30×20 = 2200 元”: the claimed
+      value sits after the LAST ``=`` (result position), while the first number
+      is merely a coefficient;
+    - operand position — “影子价格 = 利润增加量 / 机器时间增加量 = 166.67 / 10
+      = 16.67”: the mentioned metric’s own value (166.67) appears right after
+      the first assignment, while the chain result belongs to another metric.
+
+    An occurrence is treated as consistent when ANY candidate matches the
+    frozen value, so neither position masks a claim that matches nothing.
+
+    Occurrence attribution: a “新/调整后” (or “原/调整前”) prefix explicitly
+    assigns the occurrence to the adjusted (or baseline) variant; the other
+    variant skips it entirely.  This generalises the former hardcoded
+    ``objective_value``/``optimal_profit`` prefix rule to every metric family.
+    The returned flag marks occurrences explicitly attributed to THIS metric’s
+    own variant; checks use it to disable cross-variant value exemptions so a
+    misattributed value (“新的最大利润为2200元”) still conflicts.
     """
-    base_id = metric.get("base_id", metric.get("id"))
-    numbers: list[float] = []
+    kind_is_new = _is_new_variant_metric(metric)
+    occurrences: list[tuple[list[float], bool]] = []
     for alias in metric_aliases(metric):
         if len(alias) < 2:
             continue
@@ -2192,14 +2241,13 @@ def _metric_claim_numbers(sentence: str, metric: dict) -> list[float]:
             if alias.endswith("增长") and sentence[match.end() :].startswith("率"):
                 continue
             prefix = sentence[max(0, match.start() - 16) : match.start()]
-            # The original optimum and an explicitly named new optimum are
-            # distinct facts in sensitivity-analysis problems.  The generated
-            # freeze uses ``optimal_profit`` as the base id, while older
-            # freezes used ``objective_value``.  Inspect only this occurrence's
-            # prefix so a different clause can still state the old optimum.
-            if base_id in {"objective_value", "optimal_profit"} and re.search(
-                r"(?:新|调整后|增加后)(?:的)?\s*(?:最大|最优)?\s*$", prefix
-            ):
+            attribution: str | None = None
+            if _NEW_VARIANT_PREFIX_RE.search(prefix):
+                attribution = "new"
+            elif _BASE_VARIANT_PREFIX_RE.search(prefix):
+                attribution = "base"
+            kind = "new" if kind_is_new else "base"
+            if attribution is not None and attribution != kind:
                 continue
             suffix = sentence[match.end() :]
             # A later clause's “达到/为” must not attach to this alias:
@@ -2213,23 +2261,92 @@ def _metric_claim_numbers(sentence: str, metric: dict) -> list[float]:
                 r"\s*(?:提升至|降至|增加到|减少到|变为)",
                 local_clause,
             )
+            candidates: list[float] = []
             if baseline is not None:
                 number = _parse_float(baseline.group("value"))
+                if number is not None:
+                    candidates.append(number)
             else:
                 assignment = re.search(
                     r"(?:分别为|取值为|约为|达到|提升至|降至|为|=|达|是)", local_clause
                 )
-                if assignment is None:
-                    continue
-                number = _parse_float(local_clause[assignment.end() :])
-            if number is not None:
-                numbers.append(number)
-    return numbers
+                if assignment is not None:
+                    remainder = local_clause[assignment.end() :]
+                    first_number = _parse_float(remainder)
+                    if first_number is not None:
+                        candidates.append(first_number)
+                    if "=" in remainder:
+                        result_number = _parse_float(remainder.rsplit("=", 1)[1])
+                        if result_number is not None and result_number not in candidates:
+                            candidates.append(result_number)
+                else:
+                    # “可获得最大利润2200.0元”：别名后紧跟数字（无赋值动词）
+                    # 同样是明确声明；只接受紧邻数字，避免把“增加10小时”等
+                    # 后续叙述误当成本指标的值。
+                    direct = re.match(r"\s*约?\s*([-+]?\d+(?:\.\d+)?)", local_clause)
+                    if direct is None:
+                        continue
+                    number = _parse_float(direct.group(1))
+                    if number is not None:
+                        candidates.append(number)
+            if candidates:
+                occurrences.append((candidates, attribution == kind))
+    return occurrences
+
+
+def _shared_alias_metric_values(metric: dict, metrics: list[dict]) -> list[float]:
+    """Return frozen values of other metrics sharing a prose alias with ``metric``.
+
+    Baseline and adjusted variants of the same fact share surface names in
+    prose (both “最优利润” and “新最优利润” may be written as “最大利润”), so a
+    sentence stating one variant is inevitably scanned by the other.  A number
+    matching ANY alias-sharing sibling is consistent with the freeze and must
+    not be reported as a conflict of the sibling it was not about.
+    """
+    own_aliases = set(metric_aliases(metric))
+    own_id = str(metric.get("id"))
+    values: list[float] = []
+    for other in metrics:
+        if str(other.get("id")) == own_id:
+            continue
+        if not own_aliases & set(metric_aliases(other)):
+            continue
+        value = other.get("value")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            values.append(float(value))
+    return values
+
+
+def _frozen_claim_conflict_numbers(
+    sentence: str, metric: dict, sibling_values: list[float]
+) -> list[float]:
+    """Return claimed numbers conflicting with ``metric`` in ``sentence``.
+
+    Per occurrence: consistent if any candidate matches the metric's own
+    frozen value; otherwise, an occurrence NOT explicitly attributed to this
+    metric's variant is exempt when a candidate matches an alias-sharing
+    sibling (the sentence states the other variant).  Explicitly attributed
+    occurrences never get the sibling exemption, so misattributed values
+    still conflict.
+    """
+    expected = float(metric["value"])
+    conflicting: list[float] = []
+    for candidates, explicit in _metric_claim_occurrences(sentence, metric):
+        if any(_number_close_to_expected(number, expected) for number in candidates):
+            continue
+        if not explicit and any(
+            _number_close_to_expected(number, sibling)
+            for number in candidates
+            for sibling in sibling_values
+        ):
+            continue
+        conflicting.extend(candidates)
+    return conflicting
 
 
 def _sentence_mentions_metric(sentence: str, metric: dict) -> bool:
     """Return whether prose explicitly assigns at least one value to ``metric``."""
-    return bool(_metric_claim_numbers(sentence, metric))
+    return bool(_metric_claim_occurrences(sentence, metric))
 
 
 def _numbers_in_sentence(sentence: str) -> list[float]:
@@ -2264,15 +2381,17 @@ def _check_frozen_result_consistency(markdown: str, validation: dict) -> dict:
     markdown_without_code = _without_fenced_code_blocks(markdown)
     abstract = _extract_abstract(markdown_without_code)
     abstract_start = markdown_without_code.find(abstract) if abstract else -1
+    metrics = validation["metrics"]
     conflicts: list[dict] = []
     for offset, sentence in _sentences_with_offsets(markdown_without_code):
         section = _current_section_for_offset(markdown_without_code, offset)
-        for metric in validation["metrics"]:
+        for metric in metrics:
             if not _sentence_matches_metric_scope(sentence, section, metric):
                 continue
-            numbers = _metric_claim_numbers(sentence, metric)
-            expected = float(metric["value"])
-            if not numbers or all(_number_close_to_expected(number, expected) for number in numbers):
+            numbers = _frozen_claim_conflict_numbers(
+                sentence, metric, _shared_alias_metric_values(metric, metrics)
+            )
+            if not numbers:
                 continue
             conflicts.append(
                 {
@@ -2421,11 +2540,16 @@ def _check_figure_result_consistency(work_dir: str, markdown: str) -> dict:
             nearby = markdown[max(0, image_match.start() - 600) : image_match.end() + 600]
             for _, sentence in _sentences_with_offsets(nearby):
                 for metric in bound_metrics:
-                    numbers = _metric_claim_numbers(sentence, metric)
-                    expected = float(metric["value"])
-                    if not numbers or all(
-                        _number_close_to_expected(number, expected) for number in numbers
-                    ):
+                    # 图表绑定指标与正文共享同一取数架构：演算链候选值、
+                    # 新旧变体归属和共享别名豁免的口径必须一致，否则正文
+                    # 通过而图注误报（或相反）。sibling 取全部冻结指标，
+                    # 而非仅本图绑定的指标——邻近句可以合法陈述未绑定变体。
+                    numbers = _frozen_claim_conflict_numbers(
+                        sentence,
+                        metric,
+                        _shared_alias_metric_values(metric, validation["metrics"]),
+                    )
+                    if not numbers:
                         continue
                     conflicts.append(
                         {

@@ -1135,6 +1135,236 @@ class TestPreparePaperMarkdown(unittest.TestCase):
             "原始利润",
         )
 
+    def test_frozen_result_consistency_reads_result_position_and_variant_scope(self):
+        """演算链取等号后的结果位；共享别名的新旧变体按语境归属，不交叉误报。"""
+        metrics = [
+            {
+                "id": "optimal_profit",
+                "base_id": "optimal_profit",
+                "subtask_id": "ques1",
+                "label": "最优利润",
+                "aliases": ["最大利润"],
+                "value": 2200.0,
+                "unit": "元",
+                "explanation": "原始生产方案的最优目标值",
+            },
+            {
+                "id": "new_optimal_profit",
+                "base_id": "new_optimal_profit",
+                "subtask_id": "ques2",
+                "label": "新最优利润",
+                "aliases": ["最大利润"],
+                "value": 2366.666667,
+                "unit": "元",
+                "explanation": "机器时间增加后的目标值",
+            },
+            {
+                "id": "machine_time_used",
+                "base_id": "machine_time_used",
+                "subtask_id": "ques1",
+                "label": "机器时间使用量",
+                "aliases": ["机器时间消耗"],
+                "value": 100.0,
+                "unit": "小时",
+                "explanation": "原始最优方案的机器时间使用量",
+            },
+            {
+                "id": "machine_time_used_new",
+                "base_id": "machine_time_used_new",
+                "subtask_id": "ques2",
+                "label": "机器时间使用量",
+                "aliases": ["机器时间消耗"],
+                "value": 110.0,
+                "unit": "小时",
+                "explanation": "调整后方案的机器时间使用量",
+            },
+            {
+                "id": "labor_time_used",
+                "base_id": "labor_time_used",
+                "subtask_id": "ques1",
+                "label": "人工时间使用量",
+                "value": 80.0,
+                "unit": "小时",
+                "explanation": "原始最优方案的人工时间使用量",
+            },
+            {
+                "id": "profit_increase",
+                "base_id": "profit_increase",
+                "subtask_id": "ques2",
+                "label": "利润增加量",
+                "value": 166.666667,
+                "unit": "元",
+                "explanation": "机器时间增加后的利润增量",
+            },
+            {
+                "id": "shadow_price",
+                "base_id": "shadow_price",
+                "subtask_id": "ques2",
+                "label": "影子价格",
+                "aliases": ["对偶价格"],
+                "value": 16.666667,
+                "unit": "元/小时",
+                "explanation": "机器时间约束的影子价格",
+            },
+        ]
+        # 全部句式取自真实任务 20260715-083558 被误报的正文
+        correct_markdown = (
+            "此时，最大利润为\\(z^{*} = 40 \\times 40 + 30 \\times 20 = 2200\\)元。\n\n"
+            "最优生产方案下，机器时间使用量为\\(2 \\times 40 + 20 = 100\\)小时，"
+            "人工时间使用量为\\(40 + 2 \\times 20 = 80\\)小时，恰好达到资源上限。\n\n"
+            "机器时间约束的影子价格计算为"
+            "\\(\\frac{\\Delta z}{\\Delta b} = \\frac{166.67}{10} = 16.67\\)元/小时。\n\n"
+            "影子价格 = 利润增加量 / 机器时间增加量 = 166.67元 / 10小时 = 16.67元/小时。\n\n"
+            "重新求解模型，最大利润提升至约2366.67元。\n\n"
+            "新方案下的最大利润为2366.67元，相较于原利润增加了166.67元。\n\n"
+            "将该坐标代入目标函数，得到新的最大利润为"
+            "\\(z' = 40 \\times 46.67 + 30 \\times 16.67 = 2366.67\\)元。\n\n"
+            "根据冻结结果，原问题的最优生产方案对应最大利润为2200.0元。"
+        )
+        wrong_markdown = (
+            "此时，最大利润为\\(z^{*} = 40 \\times 40 + 30 \\times 20 = 2400\\)元。\n\n"
+            "新方案下的最大利润为2500元。\n\n"
+            "机器时间使用量为\\(2 \\times 40 + 20 = 90\\)小时。"
+        )
+        with tempfile.TemporaryDirectory() as work_dir:
+            source_path = os.path.join(work_dir, "result.csv")
+            with open(source_path, "w", encoding="utf-8") as handle:
+                handle.write("verified result evidence\n")
+            with open(source_path, "rb") as handle:
+                source_sha256 = hashlib.sha256(handle.read()).hexdigest()
+            with open(
+                os.path.join(work_dir, "frozen_results.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(
+                    {
+                        "schema": "mathmodel.result-freeze",
+                        "version": 1,
+                        "metrics": metrics,
+                        "sources": [
+                            {
+                                "relative_path": "result.csv",
+                                "sha256": source_sha256,
+                                "role": "evidence",
+                            }
+                        ],
+                    },
+                    handle,
+                    ensure_ascii=False,
+                )
+
+            correct = build_preflight_report(work_dir, correct_markdown, code_sources=[])
+            wrong = build_preflight_report(work_dir, wrong_markdown, code_sources=[])
+
+        self.assertTrue(
+            correct["checks"]["result_consistency"]["passed"],
+            correct["checks"]["result_consistency"]["conflicts"],
+        )
+        self.assertEqual(correct["checks"]["result_consistency"]["conflicts"], [])
+        wrong_check = wrong["checks"]["result_consistency"]
+        self.assertFalse(wrong_check["passed"])
+        # 无归属前缀的错误值（“最大利润为2400元”）无法判定新旧变体，
+        # 同句对共享别名的两个变体各报一次冲突是保守且可接受的
+        self.assertEqual(
+            {item["fact"] for item in wrong_check["conflicts"]},
+            {"最优利润", "新最优利润", "机器时间使用量"},
+        )
+        # 带“新方案下”归属的错误值只归属新变体，不得再挂到基线指标
+        explicit_new = [
+            item
+            for item in wrong_check["conflicts"]
+            if "2500" in str(item["paper_numbers"])
+        ]
+        self.assertEqual({item["fact"] for item in explicit_new}, {"新最优利润"})
+
+    def test_figure_result_consistency_uses_result_position_and_variant_scope(self):
+        """图表邻近句复用同一取数架构：演算链结果位与新旧变体归属。"""
+        metrics = [
+            {
+                "id": "optimal_profit",
+                "base_id": "optimal_profit",
+                "subtask_id": "ques1",
+                "label": "最优利润",
+                "aliases": ["最大利润"],
+                "value": 2200.0,
+                "unit": "元",
+                "explanation": "原始生产方案的最优目标值",
+            },
+            {
+                "id": "new_optimal_profit",
+                "base_id": "new_optimal_profit",
+                "subtask_id": "ques2",
+                "label": "新最优利润",
+                "aliases": ["最大利润"],
+                "value": 2366.666667,
+                "unit": "元",
+                "explanation": "机器时间增加后的目标值",
+            },
+        ]
+        markdown_ok = (
+            "![问题1可行域](问题1_可行域与最优解.png)\n\n"
+            "将该坐标代入目标函数，得到最大利润为"
+            "\\(z^{*} = 40 \\times 40 + 30 \\times 20 = 2200\\)元。"
+            "重新求解模型，得到对应的最大利润提升至约2366.67元。\n"
+        )
+        markdown_bad = (
+            "![问题1可行域](问题1_可行域与最优解.png)\n\n"
+            "将该坐标代入目标函数，得到最大利润为"
+            "\\(z^{*} = 40 \\times 40 + 30 \\times 20 = 2400\\)元。\n"
+        )
+        with tempfile.TemporaryDirectory() as work_dir:
+            source_path = os.path.join(work_dir, "result.csv")
+            with open(source_path, "w", encoding="utf-8") as handle:
+                handle.write("verified result evidence\n")
+            with open(source_path, "rb") as handle:
+                source_sha256 = hashlib.sha256(handle.read()).hexdigest()
+            with open(
+                os.path.join(work_dir, "问题1_可行域与最优解.png"), "wb"
+            ) as handle:
+                handle.write(b"png placeholder for text-level test")
+            with open(
+                os.path.join(work_dir, "frozen_results.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(
+                    {
+                        "schema": "mathmodel.result-freeze",
+                        "version": 1,
+                        "metrics": metrics,
+                        "sources": [
+                            {
+                                "relative_path": "result.csv",
+                                "sha256": source_sha256,
+                                "role": "evidence",
+                            }
+                        ],
+                        "figures": [
+                            {
+                                "path": "问题1_可行域与最优解.png",
+                                "metric_ids": ["optimal_profit", "new_optimal_profit"],
+                            }
+                        ],
+                    },
+                    handle,
+                    ensure_ascii=False,
+                )
+
+            report_ok = build_preflight_report(work_dir, markdown_ok, code_sources=[])
+            report_bad = build_preflight_report(work_dir, markdown_bad, code_sources=[])
+
+        ok_check = report_ok["checks"]["figure_result_consistency"]
+        self.assertTrue(ok_check["passed"], ok_check["conflicts"])
+        bad_check = report_bad["checks"]["figure_result_consistency"]
+        self.assertFalse(bad_check["passed"])
+        # 2400 与两个变体的冻结值都不一致且无归属前缀：对共享别名的两个
+        # 绑定指标各报一次是保守行为；关键断言是错误值被拦截且句子正确
+        self.assertEqual(
+            {item["fact"] for item in bad_check["conflicts"]},
+            {"最优利润", "新最优利润"},
+        )
+        self.assertTrue(
+            all(2400.0 in item["paper_numbers"] for item in bad_check["conflicts"])
+        )
+
+
     def test_preflight_ignores_symbol_subscripts_in_result_consistency(self):
         with tempfile.TemporaryDirectory() as work_dir:
             with open(

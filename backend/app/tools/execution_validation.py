@@ -494,9 +494,10 @@ def _subtask_evidence_issues(
     """Reject result labels that openly admit no formal numerical solve occurred.
 
     A matching hash only proves that a CSV was written.  It does not turn an
-    inherited estimate into a simulation/optimization result.  The Coder is
-    required to record subtask metrics, including a balance residual, so this
-    check remains independent of the Writer's prose.
+    inherited estimate into a simulation/optimization result. Physical-system
+    tasks must record a balance residual; linear-programming tasks instead
+    prove feasibility through their resource constraints plus objective and
+    decision-variable evidence.
     """
     metrics = item.get("metrics")
     if not _metrics_valid(metrics):
@@ -521,19 +522,20 @@ def _subtask_evidence_issues(
         ),
         {"unsupported_terms": unsupported},
     )]
-    has_balance_residual = any(
-        "残差" in metric["label"] or "守恒" in metric["label"]
-        for metric in metrics
-    )
-    issues.append(_issue(
-        f"{subtask_id}.balance_residual",
-        has_balance_residual,
-        (
-            f"{subtask_id} 已报告质量/流量或等价守恒残差。"
-            if has_balance_residual
-            else f"{subtask_id} 缺少由真实数组计算的质量/流量（或等价守恒）残差。"
-        ),
-    ))
+    if not linear_programming_evidence_required:
+        has_balance_residual = any(
+            "残差" in metric["label"] or "守恒" in metric["label"]
+            for metric in metrics
+        )
+        issues.append(_issue(
+            f"{subtask_id}.balance_residual",
+            has_balance_residual,
+            (
+                f"{subtask_id} 已报告质量/流量或等价守恒残差。"
+                if has_balance_residual
+                else f"{subtask_id} 缺少由真实数组计算的质量/流量（或等价守恒）残差。"
+            ),
+        ))
 
     if linear_programming_evidence_required:
         metric_text = "\n".join(

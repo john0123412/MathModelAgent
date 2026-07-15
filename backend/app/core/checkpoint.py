@@ -45,6 +45,10 @@ class TaskCheckpoint(BaseModel):
     # 静默绕过第二次预检失败。
     paper_repair_attempts: int = 0
     last_paper_preflight_failure: dict = Field(default_factory=dict)
+    # 连续两次真实验证失败后，只允许经人工明确批准的一次恢复；这不是
+    # 自动重试预算，且会保留批准理由供任务审计。
+    manual_recovery_attempts: int = 0
+    last_manual_recovery: dict = Field(default_factory=dict)
 
 
 class CheckpointManager:
@@ -182,6 +186,31 @@ class CheckpointManager:
             self._checkpoint is not None
             and self._checkpoint.targeted_repair_attempts >= 2
         )
+
+    def authorize_manual_execution_recovery(self, mode: str, note: str = "") -> None:
+        """Authorize exactly one post-exhaustion Coder attempt.
+
+        The caller must explicitly attest to a verified provider change or a
+        lower-cost reproducible algorithm.  Starting from attempt count one
+        lets the next failed validation consume the final budget immediately,
+        so this path never creates another automatic repair loop.
+        """
+        if self._checkpoint is None:
+            raise RuntimeError("CheckpointManager 尚未初始化")
+        if self._checkpoint.manual_recovery_attempts >= 1:
+            raise RuntimeError("本任务已使用过一次人工执行恢复授权")
+        if not self.repair_attempts_exhausted():
+            raise RuntimeError("当前执行验证失败次数未耗尽，无需人工恢复授权")
+        self._checkpoint.manual_recovery_attempts += 1
+        self._checkpoint.targeted_repair_attempts = 1
+        self._checkpoint.workflow_state = "manual_recovery"
+        self._checkpoint.last_manual_recovery = {
+            "mode": mode,
+            "note": note[:1000],
+            "authorized_at": datetime.datetime.now().isoformat(),
+        }
+        self._checkpoint.updated_at = datetime.datetime.now().isoformat()
+        self.save(self._checkpoint)
 
     def record_paper_preflight_failure(self, report: dict) -> int:
         """Persist a post-writing preflight failure before one targeted rewrite."""

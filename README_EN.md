@@ -37,8 +37,8 @@ Automatically generate an award-level modeling paper
 
 ## Current Implementation Status (Code Audit: 2026-07-11)
 
-- Implemented: FastAPI/Vue WebUI workflow, default isolated E2B execution, OpenAI/Responses/Anthropic providers, checkpoint resume, variable snapshots, live user-message injection, multi-source literature search, modeling approval, filtered task archive downloads, aggregate token tracking, CUMCM2026 exports, and submission audits.
-- Important CUMCM 2026 boundary: the automatic Appendix B currently contains core code excerpts only, while complete notebooks/scripts remain listed as support material. A technical audit `PASS` does not prove compliance with the official requirement that the paper appendix contain complete runnable source; add it manually or extend and verify the export pipeline before formal submission.
+- Implemented: FastAPI/Vue WebUI workflow, default isolated E2B execution, OpenAI/Responses/Anthropic providers, checkpoint resume (including durable early-failure requests and restart interruption recovery), variable snapshots, live user-message injection, multi-source literature search, modeling approval, filtered task archive downloads, aggregate token tracking, CUMCM2026 exports, and submission audits.
+- Important CUMCM 2026 boundary: Appendix B writes complete runnable scripts and notebook code cells by default, with coverage and SHA-256 verified through `final_acceptance_report.json -> complete_source_appendix`. The optional `paper_appendix_config.json -> mode=key` intentionally shows excerpts only and cannot receive `TECHNICAL_PASS`. Technical acceptance still does not replace human source execution, mathematical review, or final submission-rule checks.
 - Explicit boundaries: `/save-api-config` changes runtime settings only; browser-entered keys are not persisted; task artifacts use controlled downloads; `/track` is best-effort single-process aggregation, not provider billing.
 - Not wired into the main workflow: RAG, generic six-action HIL, Fallback Hand Off, Evaluator Shadow Mode, Feedback Rerun, Daytona, LiteLLM runtime, vision models, and R/MATLAB execution.
 
@@ -188,7 +188,7 @@ Results and outputs are generated in the `backend/project/work_dir/xxx/*` direct
 - submission_audit_report.json / submission_audit_report.md: pre-submission audit report
 
 The file panel can request a filtered `all.zip`; symlinks, temporary files, existing archives,
-common cache directories, and oversized inputs are excluded or rejected.
+internal recovery-candidate PDFs, common cache directories, and oversized inputs are excluded or rejected.
 
 ### 🚀 Option 3: Automated Script Deployment (Community Contribution)
 Need an automatic deployment script?

@@ -12,6 +12,7 @@ from app.schemas.A2A import (
     ModelerToCoder,
     SubtaskPlan,
 )
+from app.schemas.problem_contract import ContractRequirement, ProblemContract
 
 
 class FakeCodeInterpreter:
@@ -72,6 +73,27 @@ class TestFlows(unittest.TestCase):
         self.assertIn("建模手结构化交接", prompt)
         self.assertIn("ques1_results.csv", prompt)
         self.assertIn("objective_value", prompt)
+
+    def test_linear_programming_prompt_requires_resource_evidence_not_physical_residual(self):
+        flows = Flows(
+            {"ques_count": 1, "ques1": "求最优生产方案。"},
+            ProblemContract(
+                required_requirements=[
+                    ContractRequirement(
+                        key="linear_programming_evidence",
+                        label="线性规划证据",
+                        source="test",
+                        plugin="linear_programming",
+                    )
+                ]
+            ),
+        )
+        prompt = flows.get_solution_flows(
+            flows.questions, ModelerToCoder(questions_solution={})
+        )["ques1"]["coder_prompt"]
+
+        self.assertIn("每条资源约束", prompt)
+        self.assertIn("不要求质量/流量守恒残差", prompt)
 
     def test_writer_prompt_uses_persisted_response_when_resume_cache_is_missing(self):
         class MissingOutputCacheInterpreter(FakeCodeInterpreter):

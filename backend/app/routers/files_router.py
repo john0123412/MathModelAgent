@@ -31,6 +31,12 @@ EXCLUDED_ARCHIVE_SUFFIXES = (
     ".part",
     ".lock",
 )
+INTERNAL_ARCHIVE_FILENAMES = {
+    # A manually preserved recovery PDF is useful for diagnosis, but is not a
+    # primary deliverable and must not be mixed into the user's download-all
+    # submission bundle.
+    "res_recovery_candidate.pdf",
+}
 INLINE_RASTER_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 
 
@@ -50,7 +56,11 @@ def _require_safe_filename(filename: str) -> str:
 
 def _should_skip_archive_file(filename: str) -> bool:
     lowered = filename.lower()
-    return lowered == ARCHIVE_FILENAME or lowered.endswith(EXCLUDED_ARCHIVE_SUFFIXES)
+    return (
+        lowered == ARCHIVE_FILENAME
+        or lowered in INTERNAL_ARCHIVE_FILENAMES
+        or lowered.endswith(EXCLUDED_ARCHIVE_SUFFIXES)
+    )
 
 
 def _collect_archive_files(work_dir: str) -> list[tuple[str, str, int]]:

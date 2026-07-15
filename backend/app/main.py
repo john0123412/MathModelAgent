@@ -10,6 +10,7 @@ from app.utils.log_util import logger
 from fastapi.responses import JSONResponse
 from app.utils.cli import get_ascii_banner, center_cli_str
 from app.config.setting import settings
+from app.services.task_status import recover_stale_task_statuses
 
 cors_allow_origins = (
     settings.CORS_ALLOW_ORIGINS
@@ -31,6 +32,9 @@ async def lifespan(app: FastAPI):
 
     PROJECT_FOLDER = "./project"
     os.makedirs(PROJECT_FOLDER, exist_ok=True)
+    recovered_tasks = recover_stale_task_statuses()
+    if recovered_tasks:
+        logger.warning("已将 {} 个遗留活动任务标记为 interrupted: {}", len(recovered_tasks), ", ".join(recovered_tasks[:20]))
 
     yield
     logger.info("Stopping MathModelAgent")

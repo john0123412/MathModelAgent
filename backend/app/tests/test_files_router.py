@@ -76,6 +76,25 @@ class TestDownloadAllUrl(unittest.TestCase):
 
         self.assertEqual(names, ["res.md"])
 
+    def test_download_all_url_skips_internal_recovery_candidate_pdf(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            task_dir = os.path.join(temp_dir, "task-1")
+            os.makedirs(task_dir, exist_ok=True)
+            with open(os.path.join(task_dir, "res.pdf"), "wb") as f:
+                f.write(b"current pdf")
+            with open(
+                os.path.join(task_dir, "res_recovery_candidate.pdf"), "wb"
+            ) as f:
+                f.write(b"stale candidate")
+
+            with mock.patch.object(common_utils, "WORK_DIR_ROOT", temp_dir):
+                asyncio.run(files_router.get_download_all_url("task-1"))
+
+            with zipfile.ZipFile(os.path.join(task_dir, "all.zip")) as archive:
+                names = sorted(archive.namelist())
+
+        self.assertEqual(names, ["res.pdf"])
+
     def test_download_all_url_rejects_oversized_single_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             task_dir = os.path.join(temp_dir, "task-1")

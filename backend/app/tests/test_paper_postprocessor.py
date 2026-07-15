@@ -10,6 +10,7 @@ from app.tools.paper_postprocessor import (
     append_code_appendix,
     build_claim_trace,
     build_preflight_report,
+    ensure_figure_references,
     ensure_table_captions,
     normalize_bold_standalone_labels,
     normalize_cjk_inline_spacing,
@@ -322,6 +323,17 @@ class TestNormalizeChineseReferences(unittest.TestCase):
         )
 
         self.assertTrue(report["checks"]["figure_references"]["passed"])
+
+    def test_missing_body_figure_reference_is_inserted_idempotently(self):
+        markdown = "正文分析。\n\n![灵敏度分析](result.png)\n\n# 附录\n\n![附录图](appendix.png)\n"
+
+        normalized, inserted = ensure_figure_references(markdown)
+        repeated, repeated_inserted = ensure_figure_references(normalized)
+
+        self.assertEqual(inserted, 1)
+        self.assertIn("如图1所示，灵敏度分析展示了本节相关计算结果。", normalized)
+        self.assertEqual(repeated, normalized)
+        self.assertEqual(repeated_inserted, 0)
 
     def test_fractional_piece_wording_in_continuous_model_is_conditional(self):
         markdown = (

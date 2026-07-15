@@ -75,7 +75,11 @@ class ModelerAgent(Agent):
         )
         self.system_prompt = MODELER_PROMPT
 
-    async def run(self, coordinator_to_modeler: CoordinatorToModeler) -> ModelerToCoder:  # type: ignore[reportIncompatibleMethodOverride]
+    async def run(
+        self,
+        coordinator_to_modeler: CoordinatorToModeler,
+        recovery_context: str = "",
+    ) -> ModelerToCoder:  # type: ignore[reportIncompatibleMethodOverride]
         """根据协调者拆解的问题生成建模方案。
 
         Args:
@@ -97,6 +101,16 @@ class ModelerAgent(Agent):
                             coordinator_to_modeler.problem_contract.model_dump()
                             if coordinator_to_modeler.problem_contract
                             else None
+                        ),
+                        **(
+                            {
+                                "recovery_context": (
+                                    recovery_context[:2400]
+                                    + "\n请据此重新审视方案；不得将失败或恢复过程写进论文。"
+                                )
+                            }
+                            if recovery_context
+                            else {}
                         ),
                     },
                     ensure_ascii=False,

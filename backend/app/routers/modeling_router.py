@@ -7,7 +7,8 @@ from app.schemas.enums import CompTemplate, ExportProfile, FormatOutPut
 from app.utils.log_util import logger
 from app.services.redis_manager import redis_manager
 from app.services import user_input_queue
-from app.services.task_status import write_task_status
+from app.services.task_recovery import load_task_request_snapshot
+from app.services.task_status import read_task_status, write_task_status
 from app.schemas.request import DEFAULT_MODELING_EXPORT_PROFILE, Problem
 from app.schemas.response import SystemMessage
 from app.utils.common_utils import (
@@ -28,7 +29,7 @@ import asyncio
 import shutil
 import datetime
 import json
-from typing import Dict, Tuple
+from typing import Dict, Literal, Tuple
 from fastapi import HTTPException
 from icecream import ic  # type: ignore[import-unresolved]
 from app.schemas.request import ExampleRequest
@@ -67,6 +68,30 @@ def _finalize_docx_and_manifest(
     report = write_final_acceptance_report(work_dir)
     write_candidate_manifest(work_dir, task_id)
     return report
+
+
+async def _apply_final_acceptance_status(task_id: str, report: dict) -> bool:
+    """Persist the only task status that matches the final technical gate.
+
+    A completed workflow is not a completed delivery when final acceptance has
+    hard failures.  Keep the persisted status authoritative so the task list
+    cannot promote stale output files to a successful task.
+    """
+    if report.get("technical_status") != "TECHNICAL_PASS":
+        message = "最终技术验收未通过，请查看 final_acceptance_report.json"
+        await redis_manager.publish_message(
+            task_id,
+            SystemMessage(content=message, type="error"),
+        )
+        write_task_status(task_id, "failed", message)
+        return False
+
+    await redis_manager.publish_message(
+        task_id,
+        SystemMessage(content="任务处理完成", type="success"),
+    )
+    write_task_status(task_id, "completed", "任务处理完成")
+    return True
 
 
 
@@ -418,6 +443,7 @@ async def run_modeling_task_async(
     comp_template: CompTemplate,
     format_output: FormatOutPut,
     export_profile: ExportProfile = DEFAULT_MODELING_EXPORT_PROFILE,
+    recovery_context: str = "",
 ):
     """异步执行建模任务。
 
@@ -455,7 +481,9 @@ async def run_modeling_task_async(
     workflow.cancel_event = cancel_event
 
     # 创建任务并注册到全局表
-    task = asyncio.create_task(workflow.execute(problem))
+    task = asyncio.create_task(
+        workflow.execute(problem, recovery_context=recovery_context)
+    )
     _active_tasks[task_id] = (task, cancel_event)
 
     workflow_completed = False
@@ -477,23 +505,8 @@ async def run_modeling_task_async(
             SystemMessage(content="工作流完成，正在生成并验收最终产物"),
         )
         final_report = _finalize_docx_and_manifest(task_id, export_profile)
-        if final_report.get("technical_status") != "TECHNICAL_PASS":
-            await redis_manager.publish_message(
-                task_id,
-                SystemMessage(
-                    content=(
-                        "主交付产物已生成，但正式技术验收仍有待处理项；"
-                        "请查看 final_acceptance_report.json"
-                    ),
-                    type="warning",
-                ),
-            )
-
-        await redis_manager.publish_message(
-            task_id,
-            SystemMessage(content="任务处理完成", type="success"),
-        )
-        write_task_status(task_id, "completed", "任务处理完成")
+        if not await _apply_final_acceptance_status(task_id, final_report):
+            return
     except asyncio.CancelledError:
         logger.info(f"任务 {task_id} 被取消")
         await redis_manager.publish_message(
@@ -545,8 +558,42 @@ class ResumeTaskResponse(BaseModel):
     status: str
 
 
+class ResumeTaskRequest(BaseModel):
+    """An explicit, bounded authorization for a post-failure recovery."""
+
+    recovery_mode: Literal["provider_changed", "low_cost_algorithm"] | None = None
+    note: str = ""
+
+
 class ApproveModelingRequest(BaseModel):
     comment: str = ""
+
+
+def _build_recovery_context(
+    prior_status: dict | None,
+    checkpoint,
+    request: ResumeTaskRequest | None,
+) -> str:
+    """Pass concise, factual recovery evidence to agents without leaking it to papers."""
+    facts: list[str] = [
+        "这是一次受控恢复。保留已验证的结果，只重新解决未完成或未通过验证的阶段。",
+        "最终论文只能写经验证的数学结论，不得提及失败、重试或恢复过程。",
+    ]
+    if prior_status and prior_status.get("message"):
+        facts.append("上次任务状态：" + str(prior_status["message"])[:1200])
+    if checkpoint and checkpoint.last_validation_failure:
+        failed = checkpoint.last_validation_failure.get("failed_subtasks", [])
+        if failed:
+            facts.append("待重新检查的子题：" + "、".join(map(str, failed)))
+    if request and request.recovery_mode:
+        labels = {
+            "provider_changed": "已由人工确认切换到已验证的 provider 配置。",
+            "low_cost_algorithm": "已由人工确认改用低开销、可复核算法。",
+        }
+        facts.append(labels[request.recovery_mode])
+        if request.note.strip():
+            facts.append("人工恢复说明：" + request.note.strip()[:1000])
+    return "\n".join(facts)
 
 
 def _mark_modeling_decision_approved(work_dir: str, comment: str = "") -> None:
@@ -609,30 +656,79 @@ async def approve_modeling(
 
 
 @router.post("/modeling/{task_id}/resume", response_model=ResumeTaskResponse)
-async def resume_task(task_id: str, background_tasks: BackgroundTasks):
-    """从检查点续传一个中断的建模任务。"""
+async def resume_task(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    request: ResumeTaskRequest | None = None,
+):
+    """从检查点续传，或从早期失败前保存的请求快照重新开始。"""
     safe_task_id = _require_safe_task_id(task_id)
     try:
         work_dir = get_work_dir(safe_task_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="任务不存在")
 
-    checkpoint = CheckpointManager(work_dir).load()
-    if checkpoint is None:
-        raise HTTPException(status_code=404, detail="未找到可续传的检查点")
-
     if safe_task_id in _active_tasks:
         raise HTTPException(status_code=409, detail="任务仍在运行中")
+
+    prior_status = read_task_status(work_dir)
+    prior_state = (prior_status or {}).get("status")
+    if prior_state == "completed":
+        raise HTTPException(status_code=409, detail="任务已完成，无需续传")
+    if prior_state == "waiting_review":
+        raise HTTPException(status_code=409, detail="任务等待建模方案确认，请使用 approve-modeling")
+
+    checkpoint_manager = CheckpointManager(work_dir)
+    checkpoint = checkpoint_manager.load()
+    if checkpoint is not None and checkpoint_manager.repair_attempts_exhausted():
+        if request is None or request.recovery_mode is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "执行验证已连续两次失败。请先由指定决策人切换已验证 provider "
+                    "或确认低开销算法，再在请求体中声明 recovery_mode。"
+                ),
+            )
+        try:
+            checkpoint_manager.authorize_manual_execution_recovery(
+                request.recovery_mode, request.note
+            )
+            checkpoint = checkpoint_manager.load()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    recovery_context = _build_recovery_context(prior_status, checkpoint, request)
+    snapshot = None if checkpoint is not None else load_task_request_snapshot(work_dir)
+    if checkpoint is None and snapshot is None:
+        raise HTTPException(
+            status_code=404,
+            detail="未找到检查点或任务请求快照；该历史任务无法安全自动重启",
+        )
+    if snapshot is not None and snapshot["task_id"] != safe_task_id:
+        raise HTTPException(status_code=409, detail="任务请求快照与任务 ID 不一致")
 
     # 存储任务ID，续期供 ws 鉴权使用
     await redis_manager.set(f"task_id:{safe_task_id}", safe_task_id)
 
     logger.info(f"Adding resume background task for task_id: {safe_task_id}")
-    background_tasks.add_task(run_resume_task_async, safe_task_id)
+    if checkpoint is not None:
+        write_task_status(safe_task_id, "resuming", "从检查点受控续传中")
+        background_tasks.add_task(run_resume_task_async, safe_task_id, recovery_context)
+    else:
+        write_task_status(safe_task_id, "resuming", "早期失败后从任务请求快照重新开始")
+        background_tasks.add_task(
+            run_modeling_task_async,
+            safe_task_id,
+            snapshot["ques_all"],
+            CompTemplate(snapshot["comp_template"]),
+            FormatOutPut(snapshot["format_output"]),
+            ExportProfile(snapshot["export_profile"]),
+            recovery_context,
+        )
     return ResumeTaskResponse(task_id=safe_task_id, status="resuming")
 
 
-async def run_resume_task_async(task_id: str):
+async def run_resume_task_async(task_id: str, recovery_context: str = ""):
     """异步执行任务续传。
 
     Args:
@@ -655,7 +751,9 @@ async def run_resume_task_async(task_id: str):
     workflow = MathModelWorkFlow()
     workflow.cancel_event = cancel_event
 
-    task = asyncio.create_task(workflow.resume(task_id))
+    task = asyncio.create_task(
+        workflow.resume(task_id, recovery_context=recovery_context)
+    )
     _active_tasks[task_id] = (task, cancel_event)
 
     workflow_completed = False
@@ -674,23 +772,8 @@ async def run_resume_task_async(task_id: str):
             SystemMessage(content="续传完成，正在生成并验收最终产物"),
         )
         final_report = _finalize_docx_and_manifest(task_id, export_profile)
-        if final_report.get("technical_status") != "TECHNICAL_PASS":
-            await redis_manager.publish_message(
-                task_id,
-                SystemMessage(
-                    content=(
-                        "主交付产物已生成，但正式技术验收仍有待处理项；"
-                        "请查看 final_acceptance_report.json"
-                    ),
-                    type="warning",
-                ),
-            )
-
-        await redis_manager.publish_message(
-            task_id,
-            SystemMessage(content="任务处理完成", type="success"),
-        )
-        write_task_status(task_id, "completed", "任务处理完成")
+        if not await _apply_final_acceptance_status(task_id, final_report):
+            return
     except asyncio.CancelledError:
         logger.info(f"任务 {task_id} 被取消")
         await redis_manager.publish_message(

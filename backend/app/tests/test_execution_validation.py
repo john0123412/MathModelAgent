@@ -279,6 +279,42 @@ class TestExecutionValidation(unittest.TestCase):
             )
             self.assertFalse(check["passed"])
 
+    def test_linear_programming_contract_does_not_require_physical_balance_residual(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_notebook(work_dir)
+            _write_manifest(work_dir)
+            manifest_path = os.path.join(work_dir, "execution_validation.json")
+            with open(manifest_path, encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            manifest["subtasks"][0]["metrics"] = [
+                {
+                    "id": "optimal_profit",
+                    "label": "最优利润",
+                    "value": 2200.0,
+                    "unit": "元",
+                    "explanation": "由线性规划实际求解结果读取。",
+                },
+                {
+                    "id": "optimal_production_a",
+                    "label": "A 产品最优产量",
+                    "value": 40.0,
+                    "unit": "件",
+                    "explanation": "由最优决策变量读取。",
+                },
+            ]
+            with open(os.path.join(work_dir, "problem_contract.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {"required_requirements": [{"plugin": "linear_programming"}]},
+                    handle,
+                )
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                json.dump(manifest, handle, ensure_ascii=False)
+
+            report = validate_execution_artifacts(work_dir, required_subtasks=["ques3"])
+
+        self.assertEqual(report["status"], "PASS")
+        self.assertFalse(any(item["id"] == "ques3.balance_residual" for item in report["checks"]))
+
     def test_notebook_error_without_manifest_blocks_completion(self):
         with tempfile.TemporaryDirectory() as work_dir:
             _write_notebook(work_dir, error=True)

@@ -34,12 +34,12 @@
 - 🌐 文献与网页检索：Writer 的 `search_papers` 聚合 OpenAlex、Semantic Scholar、Crossref、arXiv；Tavily 仅在 `SEARCH_ENABLED=true` 且 `TAVILY_API_KEY` 存在时作为网页资料补充
 - 📚 RAG 知识库：配置项已预留，但主工作流尚未接入 ChromaDB/Rerank 检索
 - 🤝 HIL 人机协作：当前只实现 `HUMAN_MODEL_GATE_ENABLED` 的建模方案确认门禁；通用 6 种动作尚未接入前端/工作流
-- 🛡️ 容错与续传：已实现基础重试、错误反思、断点续传和变量快照；Fallback Hand Off / Evaluator Shadow Mode / Feedback Rerun 尚未形成完整闭环
+- 🛡️ 容错与续传：已实现基础重试、错误反思、断点续传、早期失败请求快照、重启中断恢复和变量快照；Fallback Hand Off / Evaluator Shadow Mode / Feedback Rerun 尚未形成完整闭环
 
 ## 当前代码实现状态（2026-07-13 核对）
 
-- 已实现：FastAPI/Vue WebUI 主流程、默认 E2B 隔离代码执行、OpenAI/Responses/Anthropic provider、断点续传、变量快照、实时消息注入、多源文献检索、建模方案审批、任务文件打包下载、token 聚合统计、CUMCM2026 导出和提交审计。
-- 有明确边界：`/save-api-config` 只修改当前进程配置，前后端都不持久化浏览器填写的密钥；`/track` 是 best-effort 单进程聚合，不是供应商账单。Docker 默认仅监听本机，任务文件下载受单文件名和附件策略限制。CUMCM 2026 当前自动附录 B 仅输出核心代码摘录，完整 notebook/脚本只列入支撑材料；技术审计 `PASS` 不代表已满足“论文附录含全部完整可运行源码”的正式要求，提交前必须人工补入或改造导出链路。
+- 已实现：FastAPI/Vue WebUI 主流程、默认 E2B 隔离代码执行、OpenAI/Responses/Anthropic provider、断点续传（含早期失败请求快照与重启中断恢复）、变量快照、实时消息注入、多源文献检索、建模方案审批、任务文件打包下载、token 聚合统计、CUMCM2026 导出和提交审计。
+- 有明确边界：`/save-api-config` 只修改当前进程配置，前后端都不持久化浏览器填写的密钥；`/track` 是 best-effort 单进程聚合，不是供应商账单。Docker 默认仅监听本机，任务文件下载受单文件名和附件策略限制。CUMCM 2026 默认会把完整可运行脚本和 notebook 代码单元写入附录 B，并以 `final_acceptance_report.json -> complete_source_appendix` 核验覆盖与哈希；只有显式启用 `paper_appendix_config.json -> mode=key` 才仅展示核心摘录，且该模式不能得到 `TECHNICAL_PASS`。技术通过仍不替代人工运行源码、复核数学与确认最终提交规则。
 - 未接入主流程：RAG、通用 HIL 6 种动作、Fallback Hand Off、Evaluator Shadow Mode、Feedback Rerun、Daytona、LiteLLM runtime、视觉模型、R/MATLAB 执行链路。
 - 最近验证：Docker 容器内后端单测、Ruff（含安全规则）、Bandit、pip-audit、前端 TypeScript/生产构建和生产依赖审计均已运行；Windows 本机 Node 工具链仍不主动使用。
 
@@ -359,7 +359,7 @@ pnpm run dev
 - pdf_visual_check.json: PDF 视觉检查报告
 - submission_audit_report.json / submission_audit_report.md: 提交前审计报告
 
-文件面板支持按需生成经过路径、符号链接、临时文件和大小过滤的 `all.zip`，用于下载当前任务工作区文件。
+文件面板支持按需生成经过路径、符号链接、临时文件、内部恢复候选 PDF 和大小过滤的 `all.zip`，用于下载当前任务工作区文件。
 
 上传带有多个附件的赛题时，建议在 WebUI 第一页一次多选所有题面、数据、图片、压缩包等附件；如果附件来自一个目录且文件很多，可以先压缩为 zip 后上传。第二页仍建议粘贴主题面正文，避免模型先在附件中定位题目而降低稳定性。
 
@@ -396,7 +396,7 @@ Prompt Inject : [prompt](./backend/app/config/md_template.toml)
 接口边界：
 
 - `/track` 返回按任务和 Agent 聚合的 best-effort token 统计，不等同于供应商账单。
-- `/download_all_url` 会按需生成并返回经过路径、符号链接和大小过滤的 `all.zip`。
+- `/download_all_url` 会按需生成并返回经过路径、符号链接、临时文件、内部恢复候选 PDF 和大小过滤的 `all.zip`。
 - `/save-api-config` 当前只修改进程内配置，不会持久化到 `.env.dev`。
 - `/approve-modeling` 已由任务页的“确认建模方案并继续”操作调用；该流程仅在任务状态为 `waiting_review` 时出现。
 

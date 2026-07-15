@@ -279,8 +279,9 @@ pnpm run dev
 
 文件面板支持单文件下载和“下载全部”。后端 `GET /download_all_url?task_id=...`
 会在对应任务目录内按需生成 `all.zip`，然后返回 `/static/<task_id>/all.zip`
-下载链接。压缩包会排除已有 `all.zip`、临时文件和常见缓存目录，并限制单文件和
-总打包大小，避免意外打包过大的工作目录。
+下载链接。压缩包会排除已有 `all.zip`、临时文件、常见缓存目录和内部恢复候选 PDF
+（如 `res_recovery_candidate.pdf`），并限制单文件和总打包大小，避免把旧候选论文
+混入下载包或意外打包过大的工作目录。
 
 `/static/<task_id>/<filename>` 不是目录直出：只允许单层安全文件名，PNG/JPEG/GIF/WebP/BMP
 可供页面预览，其余产物一律以附件下载。这样任务中上传或生成的 HTML/SVG 不能在后端
@@ -793,6 +794,24 @@ B 需要 1 小时机器时间、2 小时人工时间，利润 30 元；
 7. 点击"继续任务"按钮
 8. 观察进度消息和最终产物
 
+恢复边界：后端启动时会把因进程重启遗留的 `running`、`resuming`、`finalizing`
+状态改为 `interrupted`，不会把已经完成的任务重跑。每个新任务在 Coordinator/Modeler
+之前即保存不含凭据的 `task_request.json`；因此早期规划失败、尚未生成 `checkpoint.json`
+时，仍可通过 `POST /modeling/{task_id}/resume` 从原始题面重新思考并开始。
+
+代码执行验证第一次失败会自动进行一次仅针对失败子题的回修，已通过子题保持冻结。连续两次
+真实失败后系统停止自动重试；指定决策人只有在确实切换已验证 provider 或确认低开销可复核
+算法后，才能显式发起一次恢复，且每个任务最多一次：
+
+```powershell
+curl.exe -X POST http://127.0.0.1:5173/api/modeling/<task_id>/resume `
+  -H "Content-Type: application/json" `
+  -d '{"recovery_mode":"provider_changed","note":"已切换到已验证的 provider"}'
+```
+
+`recovery_mode` 也可为 `low_cost_algorithm`。恢复上下文只会指导 Agent 校正未完成或未通过
+的阶段，禁止写入最终论文；外部 provider、执行环境或最终技术验收仍可能失败，不能承诺无条件产出。
+
 ### 测试 B：实时消息干预
 
 1. 提交一个任务
@@ -884,6 +903,6 @@ ls D:\workspace\MathModelAgent\backend\project\work_dir\<task_id>\checkpoint.jso
 
 - **P0 产物新鲜度与状态一致性**：任务先进入 `finalizing`，基础 DOCX / audit / manifest / final acceptance 任一步异常都会形成真实失败；`task_status.json` 是任务状态权威来源。PDF、DOCX 重导前会删除旧文件，避免旧产物冒充本轮结果。`export_status.json` 与 `docx_export_status.json` 分别记录 Markdown 源哈希、输出哈希和导出结果。
 - **P1 结构与全页视觉质量**：预检会拒绝重复参考文献、非法 Markdown 表格、表题紧贴表格等结构问题；`pdf_visual_check.json` 默认扫描全部页面，并把 `pdf_sha256`、`pages_checked`、`page_count` 写入报告。提交审计只接受与当前 `res.md` / `res.pdf` 哈希一致且覆盖全部页面的报告。
-- **P2 论文表达与复现闭环**：正文图片必须有“图1、图2……”编号引用；连续型线性规划若把小数结果直接写成“46.67件”等，会产生 `continuous_quantity_wording` 条件警告，应改写为“连续生产当量”或另建整数规划。PDF/LaTeX 代码附录使用 `\footnotesize` 等宽字体，在保持可读的前提下减少只剩少量代码的尾页。
+- **P2 论文表达与复现闭环**：后处理会为正文中缺少邻近“图1、图2……”引用的图片补入中性图号说明（附录和代码块不改、重复运行不重复插入）；人工仍须确认图号与上下文语义匹配。连续型线性规划若把小数结果直接写成“46.67件”等，会产生 `continuous_quantity_wording` 条件警告，应改写为“连续生产当量”或另建整数规划。PDF/LaTeX 代码附录使用 `\footnotesize` 等宽字体，在保持可读的前提下减少只剩少量代码的尾页。
 
 `candidate_manifest.json` 现使用 schema `1.1`，包含 `artifact_set_id` 和主产物 SHA-256；内部审查目录、失败尝试目录和 `latex_project/figures/` 的 sidecar 复制图片不会进入正式候选图片列表。严格技术验收仍不替代模型、推导、引用和逐页排版的人工复核。

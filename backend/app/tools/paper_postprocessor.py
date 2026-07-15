@@ -629,6 +629,54 @@ def normalize_image_captions(markdown: str) -> str:
     return "\n".join(output) + ("\n" if markdown.endswith("\n") else "")
 
 
+def ensure_figure_references(markdown: str) -> tuple[str, int]:
+    """Close the prose-to-figure loop for generated paper figures.
+
+    Writer output often supplies a caption but omits an explicit ``图N`` prose
+    reference.  Add a neutral, deterministic reference immediately before each
+    body figure that lacks one nearby.  Appendix figures and fenced code are
+    untouched, and the check is idempotent on later exports.
+    """
+    lines = markdown.splitlines()
+    output: list[str] = []
+    figure_number = 0
+    inserted = 0
+    in_fence = False
+    fence_marker = ""
+    in_appendix = False
+
+    for line in lines:
+        fence_match = FENCE_START_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker[0]
+            elif marker.startswith(fence_marker):
+                in_fence = False
+                fence_marker = ""
+            output.append(line)
+            continue
+        if not in_fence and APPENDIX_HEADING_RE.match(line):
+            in_appendix = True
+        if not in_fence and not in_appendix:
+            images = list(IMAGE_MARKDOWN_RE.finditer(line))
+            for image in images:
+                figure_number += 1
+                nearby = "\n".join(output[-3:] + [line])
+                if re.search(rf"图\s*{figure_number}(?!\d)", nearby):
+                    continue
+                caption = _clean_image_caption_text(image.group(1), image.group(2))
+                if output and output[-1].strip():
+                    output.append("")
+                output.append(f"如图{figure_number}所示，{caption}展示了本节相关计算结果。")
+                output.append("")
+                inserted += 1
+        output.append(line)
+
+    return "\n".join(output) + ("\n" if markdown.endswith("\n") else ""), inserted
+
+
 def normalize_english_transitions(markdown: str) -> str:
     """Replace common English transition phrases in Chinese prose."""
     lines = markdown.splitlines()
@@ -2768,6 +2816,7 @@ def prepare_paper_markdown(
     # wording/label cleanup could mutate code after its SHA-256 is recorded.
     markdown, code_sources = append_code_appendix(markdown, work_dir)
     markdown = normalize_image_captions(markdown)
+    markdown, inserted_figure_references = ensure_figure_references(markdown)
     markdown = ensure_table_captions(markdown)
     outline = build_paper_outline(markdown)
     figure_usage = build_figure_usage(work_dir, markdown)
@@ -2817,6 +2866,8 @@ def prepare_paper_markdown(
         fixups["normalised_strong_claim_wording"] = normalised_strong_claim_wording
     if normalised_submission_wording:
         fixups["normalised_submission_wording"] = normalised_submission_wording
+    if inserted_figure_references:
+        fixups["inserted_figure_references"] = inserted_figure_references
     if fixups:
         report["fixups"] = fixups
 

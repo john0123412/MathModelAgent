@@ -238,6 +238,62 @@ class WorkflowExecutionGateTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(checkpoint_manager.get_solution_coder_response("ques1"))
             self.assertIsNotNone(checkpoint_manager.get_solution_coder_response("ques2"))
 
+    async def test_corrected_balance_rule_reuses_only_verified_formal_evidence(self):
+        with tempfile.TemporaryDirectory() as raw_work_dir:
+            work_dir = Path(raw_work_dir)
+            checkpoint_manager = CheckpointManager(str(work_dir))
+            checkpoint_manager.save(
+                TaskCheckpoint(
+                    task_id="task",
+                    ques_all="test",
+                    comp_template="cumcm",
+                    format_output="markdown",
+                    questions={"ques_count": 2, "ques1": "q1", "ques2": "q2"},
+                    ques_count=2,
+                    modeler_response={"questions_solution": {}},
+                    workflow_state="repairing",
+                    targeted_repair_attempts=1,
+                    last_validation_failure={
+                        "report": {
+                            "checks": [
+                                {"id": "ques1.balance_residual", "passed": False},
+                                {"id": "ques2.balance_residual", "passed": False},
+                            ]
+                        }
+                    },
+                    updated_at="now",
+                )
+            )
+            events = []
+            workflow = MathModelWorkFlow()
+            workflow.task_id = "task"
+            workflow.work_dir = str(work_dir)
+
+            def freeze(directory):
+                Path(directory, "frozen_results.json").write_text("{}", encoding="utf-8")
+
+            with (
+                patch("app.core.workflow.redis_manager.publish_message", AsyncMock()),
+                patch("app.core.workflow.write_execution_validation_report", return_value={"status": "PASS"}),
+                patch("app.core.workflow.write_frozen_results_from_execution_validation", side_effect=freeze),
+            ):
+                await workflow._run_solution_flows(
+                    _Flows(),
+                    ModelerToCoder(questions_solution={}),
+                    _Coder(events),
+                    _Writer(events),
+                    _Interpreter(str(work_dir)),
+                    _Output(),
+                    checkpoint_manager,
+                    {},
+                )
+
+            self.assertEqual([event for event in events if event[0] == "code"], [])
+            self.assertEqual(
+                [event[1] for event in events if event[0] == "writer"], ["ques1", "ques2"]
+            )
+            self.assertEqual(checkpoint_manager._checkpoint.workflow_state, "frozen")
+
     async def test_preflight_repair_rewrites_only_reported_question_once(self):
         with tempfile.TemporaryDirectory() as raw_work_dir:
             work_dir = Path(raw_work_dir)

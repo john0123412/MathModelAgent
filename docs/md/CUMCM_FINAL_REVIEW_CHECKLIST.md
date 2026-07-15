@@ -91,6 +91,7 @@
   若为 `false`，先按 `conflicts[].source` 对照结果 CSV 和 `conflicts[].sentence`
   修正文中关键数值。
 - 图表是否被正文引用。
+- 即使后处理已自动补齐缺失的“图N”文字引用，也要确认该引用与图题、前后论证和编号顺序一致。
 - 敏感性分析是否真的回答题目。
 - 敏感性分析是否说明参数变化范围。
 - 敏感性分析结论是否和图表一致。
@@ -184,6 +185,8 @@
 - `res.pdf` 可打开。
 - `res.docx` 可打开。
 - `candidate_manifest.json` 登记主交付文件。
+- 正式上传只选择 `candidate_manifest.json` 所登记的当前 `res.pdf`；不上传工作目录中的
+  内部恢复候选 PDF（如 `res_recovery_candidate.pdf`）。
 - `final_acceptance_report.json -> technical_status = TECHNICAL_PASS`；同时明确理解其
   `human_review.status = PENDING_HUMAN_REVIEW`，不能将技术通过表述为数学正确或可直接提交。
 - 最终论文附录实际包含全部完整、可运行源程序；不要以附录 A 的文件清单、任务目录文件或

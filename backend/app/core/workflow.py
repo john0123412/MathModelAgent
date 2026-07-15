@@ -14,6 +14,7 @@ from app.schemas.enums import CompTemplate, ExportProfile, FormatOutPut
 from app.schemas.request import DEFAULT_MODELING_EXPORT_PROFILE, Problem
 from app.schemas.response import SystemMessage
 from app.services import user_input_queue
+from app.services.task_recovery import write_task_request_snapshot
 from app.tools.base_interpreter import BaseCodeInterpreter
 from app.tools.openalex_scholar import OpenAlexScholar
 from app.utils.log_util import logger
@@ -376,6 +377,54 @@ class MathModelWorkFlow(WorkFlow):
                 lines.append(f"- {check_id}: {check.get('message', '验证失败')}")
         return "\n".join(lines[:40]) or "- 未能从报告中定位到单项失败；请核对 execution_validation_report.json。"
 
+    @staticmethod
+    def _can_reuse_evidence_after_validator_fix(
+        checkpoint: TaskCheckpoint | None,
+        current_report: dict,
+        required_subtasks: list[str],
+    ) -> bool:
+        """Allow a narrowly-scoped recovery from a corrected validator rule.
+
+        This is deliberately not a generic resume bypass.  It applies only when
+        the persisted failure was entirely the old physical balance-residual
+        rule for the same formal questions and the current full validation is
+        already PASS against the durable execution manifest.
+        """
+        if (
+            checkpoint is None
+            or checkpoint.workflow_state != "repairing"
+            or current_report.get("status") != "PASS"
+        ):
+            return False
+        previous_report = checkpoint.last_validation_failure.get("report", {})
+        checks = previous_report.get("checks", [])
+        failed_ids = {
+            str(check.get("id", ""))
+            for check in checks
+            if isinstance(check, dict) and check.get("passed") is False
+        }
+        expected_ids = {f"{key}.balance_residual" for key in required_subtasks}
+        return bool(failed_ids) and failed_ids.issubset(expected_ids)
+
+    def _evidence_backed_coder_response(self, key: str) -> CoderToWriter:
+        """Build a Writer hand-off that carries no unverified model narration."""
+        images = [
+            name
+            for name in os.listdir(self.work_dir)
+            if name.startswith(f"{key}_")
+            and name.lower().endswith((".png", ".jpg", ".jpeg", ".svg"))
+        ]
+        return CoderToWriter(
+            code_response=(
+                "本题既有执行证据已通过当前完整门禁并被冻结；"
+                "正文数值、约束结论和图表说明必须以 frozen_results.json 与结果 CSV 为准。"
+            ),
+            created_images=sorted(images),
+            execution_attempted=True,
+            execution_succeeded=True,
+            execution_error_occurred=False,
+        )
+
     async def _run_solution_flows(
         self,
         flows: Flows,
@@ -386,6 +435,7 @@ class MathModelWorkFlow(WorkFlow):
         user_output: UserOutput,
         checkpoint_manager: CheckpointManager,
         config_template: dict,
+        recovery_context: str = "",
     ) -> None:
         """先完成全部代码求解与验证冻结，再允许论文手撰写。"""
         solution_flows = flows.get_solution_flows(self.questions, modeler_response)
@@ -395,6 +445,27 @@ class MathModelWorkFlow(WorkFlow):
                 "请由指定决策人切换已验证 provider 或确认低开销可复核算法后再续传。"
             )
         coder_responses: dict[str, CoderToWriter] = {}
+        required_subtasks = [
+            flow_key
+            for flow_key in solution_flows
+            if flow_key.startswith("ques") and flow_key != "ques_count"
+        ]
+        checkpoint = checkpoint_manager._checkpoint
+        recovery_reuses_verified_evidence = False
+        if checkpoint is not None and checkpoint.workflow_state == "repairing":
+            current_report = write_execution_validation_report(
+                self.work_dir,
+                required_subtasks=required_subtasks,
+            )
+            recovery_reuses_verified_evidence = self._can_reuse_evidence_after_validator_fix(
+                checkpoint,
+                current_report,
+                required_subtasks,
+            )
+            if recovery_reuses_verified_evidence:
+                logger.warning(
+                    "旧验证器规则已修正；复用当前完整门禁通过的执行证据，避免重复 Coder 调用"
+                )
 
         for key, value in solution_flows.items():
             await self._check_cancelled()
@@ -405,13 +476,36 @@ class MathModelWorkFlow(WorkFlow):
                 coder_responses[key] = CoderToWriter.model_validate(saved_coder_response)
                 continue
 
+            if recovery_reuses_verified_evidence and key in required_subtasks:
+                coder_response = self._evidence_backed_coder_response(key)
+                coder_responses[key] = coder_response
+                checkpoint_manager.mark_solution_coder_completed(
+                    key, coder_response.model_dump()
+                )
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(
+                        content=f"复用已验证执行证据，跳过重复代码调用: {key}",
+                        type="success",
+                    ),
+                )
+                continue
+
             await redis_manager.publish_message(
                 self.task_id,
                 SystemMessage(content=f"代码手开始求解{key}"),
             )
 
+            coder_prompt = value["coder_prompt"]
+            if recovery_context:
+                coder_prompt = (
+                    "【受控恢复上下文】\n"
+                    f"{recovery_context}\n"
+                    "请据此重新检查本题计算路径；不得把恢复过程或失败描述写入论文。\n\n"
+                    + coder_prompt
+                )
             coder_response = await coder_agent.run(
-                prompt=value["coder_prompt"], subtask_title=key
+                prompt=coder_prompt, subtask_title=key
             )
 
             if (
@@ -433,7 +527,7 @@ class MathModelWorkFlow(WorkFlow):
                     ),
                 )
                 raise RuntimeError(
-                    f"代码阶段 {key} 未通过执行门禁: {report.get('status')}"
+                    f"代码阶段 {key} 未提供成功执行证据；诊断报告状态: {report.get('status')}"
                 )
 
             await redis_manager.publish_message(
@@ -469,11 +563,6 @@ class MathModelWorkFlow(WorkFlow):
                     checkpoint_manager.set_variable_snapshot_exists(False)
                     logger.warning(f"保存变量快照失败: {e}")
 
-        required_subtasks = [
-            flow_key
-            for flow_key in solution_flows
-            if flow_key.startswith("ques") and flow_key != "ques_count"
-        ]
         # `execution_validation.json` is assembled by the trusted evidence
         # recorder called within each formal Coder subtask.  Do not ask the
         # model to maintain a second, cross-question manifest here: that was
@@ -624,6 +713,7 @@ class MathModelWorkFlow(WorkFlow):
         checkpoint_manager: CheckpointManager,
         config_template: dict,
         ques_all: str,
+        recovery_context: str = "",
     ) -> None:
         """执行 write_flows 循环（写作手独立撰写各章节），已完成的阶段直接跳过。"""
         write_flows = flows.get_write_flows(user_output, config_template, ques_all)
@@ -643,7 +733,13 @@ class MathModelWorkFlow(WorkFlow):
                 SystemMessage(content=f"论文手开始写{key}部分"),
             )
 
-            writer_response = await writer_agent.run(prompt=value, sub_title=key)
+            writer_prompt = value
+            if recovery_context:
+                writer_prompt = (
+                    "【受控恢复要求】仅使用当前已冻结的计算证据完成论文；"
+                    "不要在论文中提及任何失败、重试或恢复过程。\n\n" + value
+                )
+            writer_response = await writer_agent.run(prompt=writer_prompt, sub_title=key)
 
             user_output.set_res(key, writer_response)
             checkpoint_manager.mark_phase_completed(
@@ -1085,7 +1181,9 @@ class MathModelWorkFlow(WorkFlow):
                 ),
             )
 
-    async def execute(self, problem: Problem):  # type: ignore[reportIncompatibleMethodOverride]
+    async def execute(
+        self, problem: Problem, recovery_context: str = ""
+    ):  # type: ignore[reportIncompatibleMethodOverride]
         """执行数学建模工作流。
 
         Args:
@@ -1093,6 +1191,16 @@ class MathModelWorkFlow(WorkFlow):
         """
         self.task_id = problem.task_id
         self.work_dir = create_work_dir(self.task_id)
+        write_task_request_snapshot(
+            self.work_dir,
+            {
+                "task_id": problem.task_id,
+                "ques_all": problem.ques_all,
+                "comp_template": problem.comp_template.value,
+                "format_output": problem.format_output.value,
+                "export_profile": problem.export_profile.value,
+            },
+        )
         problem_contract = build_problem_contract(problem.ques_all)
         with open(
             os.path.join(self.work_dir, "problem_contract.json"),
@@ -1123,7 +1231,14 @@ class MathModelWorkFlow(WorkFlow):
         await self._check_cancelled()
 
         try:
-            coordinator_response = await coordinator_agent.run(problem.ques_all)
+            coordinator_input = problem.ques_all
+            if recovery_context:
+                coordinator_input += (
+                    "\n\n【受控恢复上下文】\n"
+                    + recovery_context
+                    + "\n请重新拆解并校验题意；不要将恢复过程写入最终论文。"
+                )
+            coordinator_response = await coordinator_agent.run(coordinator_input)
             coordinator_response.problem_contract = problem_contract
             self.questions = coordinator_response.questions
             self.ques_count = coordinator_response.ques_count
@@ -1152,7 +1267,9 @@ class MathModelWorkFlow(WorkFlow):
             user_input_provider=user_input_provider,
         )
 
-        modeler_response = await modeler_agent.run(coordinator_response)
+        modeler_response = await modeler_agent.run(
+            coordinator_response, recovery_context=recovery_context
+        )
         self._write_modeler_plan(modeler_response)
         await redis_manager.publish_message(
             self.task_id,
@@ -1218,6 +1335,7 @@ class MathModelWorkFlow(WorkFlow):
                 user_output,
                 checkpoint_manager,
                 config_template,
+                recovery_context,
             )
 
         ################################################ write steps
@@ -1228,6 +1346,7 @@ class MathModelWorkFlow(WorkFlow):
             checkpoint_manager,
             config_template,
             problem.ques_all,
+            recovery_context,
         )
 
         await self._export_results(
@@ -1237,7 +1356,7 @@ class MathModelWorkFlow(WorkFlow):
             checkpoint_manager=checkpoint_manager,
         )
 
-    async def resume(self, task_id: str) -> None:
+    async def resume(self, task_id: str, recovery_context: str = "") -> None:
         """从检查点恢复并继续执行数学建模工作流。
 
         跳过协调者/建模手，跳过 checkpoint 中已完成的阶段，并通过重放
@@ -1307,7 +1426,8 @@ class MathModelWorkFlow(WorkFlow):
                     questions=self.questions,
                     ques_count=self.ques_count,
                     problem_contract=problem_contract,
-                )
+                ),
+                recovery_context=recovery_context,
             )
             self._archive_unverified_execution_context()
             checkpoint_manager.replace_modeler_response(modeler_response.model_dump())
@@ -1346,6 +1466,7 @@ class MathModelWorkFlow(WorkFlow):
                 user_output,
                 checkpoint_manager,
                 config_template,
+                recovery_context,
             )
 
         ################################################ write steps
@@ -1356,6 +1477,7 @@ class MathModelWorkFlow(WorkFlow):
             checkpoint_manager,
             config_template,
             checkpoint.ques_all,
+            recovery_context,
         )
 
         await self._export_results(

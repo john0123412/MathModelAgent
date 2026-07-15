@@ -70,6 +70,21 @@ class Flows:
         }
         solutions = modeler_response.questions_solution
         contract_prompt = self.problem_contract.to_prompt() if self.problem_contract else ""
+        linear_programming_evidence_required = bool(
+            self.problem_contract
+            and any(
+                item.plugin == "linear_programming"
+                for item in self.problem_contract.required_requirements
+            )
+        )
+        formal_evidence_requirement = (
+            "必须从真实数组/CSV计算并输出：目标值、实际最优决策变量，以及每条资源约束的代入值、"
+            "松弛量或违反量。线性规划题不要求质量/流量守恒残差；不得把未求解的估计值伪装为最优解。"
+            if linear_programming_evidence_required
+            else "必须从真实数组/CSV计算并输出：目标偏差、压力（或其他物理状态）的最小值、"
+            "最大值和波动指标、质量/流量平衡残差。不得以截断/clip 掩盖负压力或无效状态；"
+            "若出现非物理状态，修正控制参数或离散化后重新计算。"
+        )
 
         def plan_context(key: str) -> str:
             subtask_plan = modeler_response.get_subtask_plan(key)
@@ -91,9 +106,7 @@ class Flows:
                         这是正式题 {key}，不是探索性草稿。结束前必须在当前任务目录写入
                         `{key}_results.csv`：每一行必须是本题将写入论文的一个有限数值，至少包括
                         指标名、数值、单位、计算口径；所有图表另存同名或明确关联的 CSV 数据源。
-                        必须从真实数组/CSV计算并输出：目标偏差、压力（或其他物理状态）的最小值、
-                        最大值和波动指标、质量/流量平衡残差。不得以截断/clip 掩盖负压力或无效状态；
-                        若出现非物理状态，修正控制参数或离散化后重新计算。
+                        {formal_evidence_requirement}
                         不得把“估计”“沿用上一问”“同步原则直接取值”伪装成本题的仿真或优化结论：
                         每个正式问题均须实际运行本题模型、保存原始时序/扫描数据，并让结果 CSV 的计算口径
                         明确指向该次计算。涉及阀门控制时，除名义稳态外还须人为施加可复算的扰动/超压工况，

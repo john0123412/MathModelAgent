@@ -212,6 +212,50 @@ class TestTaskFinalization(unittest.TestCase):
             )
 
 
+class TestFinalAcceptanceTaskStatus(unittest.IsolatedAsyncioTestCase):
+    """最终技术门禁必须决定持久化任务状态。"""
+
+    async def test_technical_failure_marks_task_failed(self):
+        with (
+            mock.patch.object(
+                modeling_router.redis_manager,
+                "publish_message",
+                new_callable=mock.AsyncMock,
+            ) as publish_mock,
+            mock.patch.object(modeling_router, "write_task_status") as status_mock,
+        ):
+            accepted = await modeling_router._apply_final_acceptance_status(
+                "task-1", {"technical_status": "TECHNICAL_FAIL"}
+            )
+
+        self.assertFalse(accepted)
+        status_mock.assert_called_once_with(
+            "task-1",
+            "failed",
+            "最终技术验收未通过，请查看 final_acceptance_report.json",
+        )
+        self.assertEqual(publish_mock.await_count, 1)
+        self.assertEqual(publish_mock.await_args.args[1].type, "error")
+
+    async def test_technical_pass_marks_task_completed(self):
+        with (
+            mock.patch.object(
+                modeling_router.redis_manager,
+                "publish_message",
+                new_callable=mock.AsyncMock,
+            ) as publish_mock,
+            mock.patch.object(modeling_router, "write_task_status") as status_mock,
+        ):
+            accepted = await modeling_router._apply_final_acceptance_status(
+                "task-1", {"technical_status": "TECHNICAL_PASS"}
+            )
+
+        self.assertTrue(accepted)
+        status_mock.assert_called_once_with("task-1", "completed", "任务处理完成")
+        self.assertEqual(publish_mock.await_count, 1)
+        self.assertEqual(publish_mock.await_args.args[1].type, "success")
+
+
 class TestModelingExportProfileDefaults(unittest.TestCase):
     """验证新建建模任务默认使用高教社杯/国赛 2026 profile。"""
 

@@ -147,9 +147,11 @@ class Agent:
             logger.info(f"{self.__class__.__name__}:任务被用户停止")
             raise
         except Exception as exc:
-            error_msg = f"执行过程中遇到错误: {type(exc).__name__}"
+            # WHY 必须 raise：若把错误文本 return 给调用方，调用方会把它当成
+            # 正常模型响应继续流程，造成静默失败且难以定位。让异常向上传播，
+            # 由调用方（workflow 层）决定重试或终止。
             logger.error(f"Agent执行失败: {type(exc).__name__}")
-            return error_msg
+            raise
 
     async def append_chat_history(self, msg: dict) -> None:
         """向对话历史追加消息，并在必要时触发记忆压缩。

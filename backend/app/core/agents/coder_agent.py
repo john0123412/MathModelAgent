@@ -124,8 +124,8 @@ class CoderAgent(Agent):
         task_id: str,
         model: LLM,
         work_dir: str,  # 工作目录
-        max_chat_turns: int | None = settings.MAX_CHAT_TURNS,  # 最大聊天次数，None表示无限制
-        max_retries: int | None = settings.MAX_RETRIES,  # 最大反思次数，None表示无限制
+        max_chat_turns: int | None = settings.MAX_CHAT_TURNS,  # 最大聊天次数熔断上限（跨子任务累计）；显式传 None 表示无限制
+        max_retries: int | None = settings.MAX_RETRIES,  # 单子任务最大重试次数熔断上限；显式传 None 表示无限制
         max_successful_tool_calls: int | None = settings.CODER_MAX_SUCCESSFUL_TOOL_CALLS_PER_SUBTASK,
         code_interpreter: BaseCodeInterpreter | None = None,
         context_window: int = 128000,
@@ -729,10 +729,21 @@ class CoderAgent(Agent):
                         execution_error_occurred=execution_error_occurred,
                     )
                     
+            except asyncio.CancelledError:
+                # 用户主动停止任务，向上传播，不做退避重试
+                raise
             except Exception as exc:
                 logger.error(f"执行过程中发生异常: {type(exc).__name__}")
                 retry_count += 1
                 last_error_message = str(exc)
+                # WHY 必须退避：内层 llm.py 每次调用已自带 3 次重试，能走到
+                # 这里说明是持续性故障（欠费/断网等）。若立即 continue 会形成
+                # 无限紧循环持续打 LLM API 烧钱，直到任务超时。指数退避给
+                # 故障恢复留时间，也压低失败期的请求频率。
+                if self.cancel_event is not None and self.cancel_event.is_set():
+                    # 用户已请求停止时不再傻等退避，立即结束
+                    raise asyncio.CancelledError("任务被用户停止") from exc
+                await asyncio.sleep(min(2 ** min(retry_count, 6), 60.0))
                 continue
             logger.info(
                 f"{self.__class__.__name__}:完成执行子任务: "

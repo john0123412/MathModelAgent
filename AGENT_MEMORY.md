@@ -566,3 +566,5 @@ uv run python scripts/smoke_pdf_export.py
   - M2+L1 `agent.py`/`coder_agent.py`/`setting.py`：基类 `run()` 不再把异常吞成字符串返回（防静默失败）；Coder 外层持续故障加指数退避（上限 60s）、尊重取消事件；`MAX_CHAT_TURNS` 默认 200（实例级累计）、`MAX_RETRIES` 默认 20（单子任务），从 None（无限）改为有限熔断保险丝。
   - H1+H2 `main.py`/`ws_router.py`/`security.py`/`user_input_queue.py`/`modeling_router.py`：新增可选 `API_AUTH_TOKEN`（默认 None 不启用；HTTP Bearer + WS `?token=`，`/docs`、`/redoc`、`/openapi.json`、`/static/` 豁免，前端未适配令牌模式）；`save-api-config` 更换 Base URL 必须同请求携带该端点 API Key（先全量校验再落任何字段，防止现有密钥被发往新端点）；WS 实时插话注入文本明确标注为不可信输入，队列单条 4000 字符截断、容量 20 上限。
   - 后续接手注意：`.env.example` 中 `MAX_RETRIES` 语义已改为“单子任务内重试熔断”（非单次 API 网络重试）；STARTUP.md 已补 `API_AUTH_TOKEN` 说明。本轮为纯代码级修复与单测验证，未运行 Docker 真实任务回归。
+
+- [2026-07-15] 已将任务恢复/最终验收加固提交 `46b9e95` 与可靠性/安全分支 `claude/quizzical-dewdney-fa3789`（末提交 `86c9833`）集成，并以 merge commit `c1b2bc9` 快进到本地 `main`。合并仅在 `AGENT_MEMORY.md` 的追加记录处产生冲突，已保留双方完整记录；`backend/app/main.py` 自动合并后同时保留启动时遗留任务恢复和可选 API 令牌鉴权。集成分支及快进后的 `main` 均实际运行 197 项相关后端回归，全部通过；`ruff check app` 两次均通过。未运行本机前端 Node、Docker 或真实 provider 任务；未推送远端。空的 `logs/2026-07-14_error.log` 未提交也未删除。

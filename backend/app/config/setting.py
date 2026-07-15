@@ -87,8 +87,16 @@ class Settings(BaseSettings):
     WRITER_MAX_TOKENS: Optional[int] = None
     WRITER_CONTEXT_WINDOW: int = 128000
 
-    MAX_CHAT_TURNS: Optional[int] = None
-    MAX_RETRIES: Optional[int] = None
+    # 熔断边界：以下两个值是防失控保险丝，不是紧预算。曾经默认 None（无限制），
+    # 当 LLM 持续故障（欠费/断网）时 CoderAgent 外层循环会紧循环打 API 直到
+    # 任务超时，因此默认值必须有限。
+    # MAX_CHAT_TURNS：CoderAgent 实例级累计、跨子任务不重置；一个任务约 6-9
+    # 个子任务、每个正常消耗十几轮，200 轮留足余量，只拦截失控场景。
+    MAX_CHAT_TURNS: Optional[int] = 200
+    # MAX_RETRIES：单个子任务内的重试计数（run() 局部变量、每子任务重置），
+    # 覆盖代码报错反思与 LLM 故障兜底重试；内层 llm.py 每次调用已自带 3 次
+    # 重试，外层 20 次足够跨越常见抖动，同时避免持续故障时无限烧钱。
+    MAX_RETRIES: Optional[int] = 20
     CODER_MAX_SUCCESSFUL_TOOL_CALLS_PER_SUBTASK: Optional[int] = 8
     LLM_REQUEST_TIMEOUT_SECONDS: float = 90.0
     HUMAN_MODEL_GATE_ENABLED: bool = False
@@ -110,6 +118,10 @@ class Settings(BaseSettings):
         DEFAULT_TRUSTED_HOSTS
     )
     ALLOW_PRIVATE_LLM_BASE_URLS: bool = False
+    # 可选令牌鉴权：配置后所有非公开 HTTP 接口与 WebSocket 都要求携带该令牌
+    # （HTTP 用 Authorization: Bearer <token>，WebSocket 用查询参数 token）。
+    # 默认 None 保持原有无鉴权行为，适用于纯本机部署。
+    API_AUTH_TOKEN: Optional[str] = None
     MAX_UPLOAD_FILE_SIZE_BYTES: int = 50 * 1024 * 1024
     MAX_UPLOAD_TOTAL_SIZE_BYTES: int = 200 * 1024 * 1024
     MAX_PROBLEM_TEXT_CHARS: int = 100_000

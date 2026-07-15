@@ -558,3 +558,11 @@ uv run python scripts/smoke_pdf_export.py
 - [2026-07-15] 上述窄范围恢复已完成真实 Docker 续传：变量快照恢复成功，当前完整 `execution_validation_report.json = PASS`，并产出 `res.md/res.json/res.docx/res.pdf`、candidate manifest、LaTeX sidecar（编译成功）及全页 PDF 视觉检查 `PASS`。但最终状态正确为 `failed`/`TECHNICAL_FAIL`：`paper_preflight_report.json = CONDITIONAL_PASS` 的唯一条件项是 9 张正文图没有显式“图N”文字引用，`submission_audit_report.json = WARN` 因此未达到最终验收。当前处置：在任何重导或恢复前，先补齐可确定的图号正文引用并做确定性重新预检/导出/最终验收；不重跑已通过的计算或 Coder。
 
 - [2026-07-15] 图号闭环后处理已补齐：对正文（不含附录/代码）中缺少邻近“图N”引用的 Markdown 图片，确定性插入中性图号说明；重复运行不重复插入。真实任务 `20260715-021632-ec34c8ef9ad8228d3ce94781743f7f2c` 已在 Docker 中重导 PDF/DOCX 并刷新 manifest/审计，9 处图号引用补齐后 `paper_preflight_report.json = PASS`、`pdf_visual_check.json = PASS`（92 页全扫）、`submission_audit_report.json = PASS`、`final_acceptance_report.json = TECHNICAL_PASS`；`/tasks` 已写为 `completed`，保留 checkpoint 与变量快照。该验收使用受控 Docker 本地执行覆盖来处理 E2B 缺失，最终应恢复 remote 默认配置；人工数学、引用、PDF/DOCX 逐页和投稿规则复核仍为 `PENDING_HUMAN_REVIEW`。
+
+- [2026-07-15] 架构审查发现的 5 组可靠性/安全修复已在独立 worktree 并行实现、经审查后合并（M1 引用编号、M4 Writer 工具循环、M3+L5 Coordinator 校验、M2+L1 Coder 熔断退避、H1+H2 API/WS 安全加固），全量 342 单测与 Ruff 在合并分支上通过：
+  - M1 `user_output.py`：正文 `[uuid]` 引用替换先按首次出现顺序去重、复用跨章节已分配编号，修复同章节跳号与跨章节悬空引用（正文标记指向不存在的参考文献条目）。
+  - M4 `writer_agent.py`：真工具调用改为有界循环（`MAX_TOOL_ROUNDS=3`），reasoning 模型连续多轮 tool_calls 不再把空 content 当章节正文；超限后补齐协议配对的占位 tool 响应并禁用工具强制收尾；未知工具也补占位响应避免孤儿 tool_call；终局空内容防线只重试一次；最终 assistant 消息的 `reasoning_content` 取自产生正文那轮响应。
+  - M3+L5 `coordinator_agent.py`：拆题输出在进入下游前做结构校验（`ques_count` 类型/范围、`background` 非空、`ques1..quesN` 齐全、多余 `quesN` 反向拦截），错误反馈改为 assistant 原文 + user 纠错消息，不再堆叠 system 消息（部分网关拒绝 mid-history system）；刻意不加严 `CoordinatorToModeler` schema 以保持旧 checkpoint 可续传。
+  - M2+L1 `agent.py`/`coder_agent.py`/`setting.py`：基类 `run()` 不再把异常吞成字符串返回（防静默失败）；Coder 外层持续故障加指数退避（上限 60s）、尊重取消事件；`MAX_CHAT_TURNS` 默认 200（实例级累计）、`MAX_RETRIES` 默认 20（单子任务），从 None（无限）改为有限熔断保险丝。
+  - H1+H2 `main.py`/`ws_router.py`/`security.py`/`user_input_queue.py`/`modeling_router.py`：新增可选 `API_AUTH_TOKEN`（默认 None 不启用；HTTP Bearer + WS `?token=`，`/docs`、`/redoc`、`/openapi.json`、`/static/` 豁免，前端未适配令牌模式）；`save-api-config` 更换 Base URL 必须同请求携带该端点 API Key（先全量校验再落任何字段，防止现有密钥被发往新端点）；WS 实时插话注入文本明确标注为不可信输入，队列单条 4000 字符截断、容量 20 上限。
+  - 后续接手注意：`.env.example` 中 `MAX_RETRIES` 语义已改为“单子任务内重试熔断”（非单次 API 网络重试）；STARTUP.md 已补 `API_AUTH_TOKEN` 说明。本轮为纯代码级修复与单测验证，未运行 Docker 真实任务回归。

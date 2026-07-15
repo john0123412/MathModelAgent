@@ -9,6 +9,7 @@ from app.routers import modeling_router, ws_router, common_router, files_router
 from app.utils.log_util import logger
 from fastapi.responses import JSONResponse
 from app.utils.cli import get_ascii_banner, center_cli_str
+from app.utils.security import is_valid_bearer_authorization
 from app.config.setting import settings
 from app.services.task_status import recover_stale_task_statuses
 
@@ -51,6 +52,33 @@ app.include_router(modeling_router.router)
 app.include_router(ws_router.router)
 app.include_router(common_router.router)
 app.include_router(files_router.router)
+
+
+# 令牌鉴权豁免路径：仅接口文档保持公开，便于部署方查阅接口说明。
+_AUTH_EXEMPT_PATHS = {"/docs", "/redoc", "/openapi.json"}
+
+
+@app.middleware("http")
+async def require_api_auth_token(request, call_next):
+    """可选令牌鉴权：配置 API_AUTH_TOKEN 后所有非豁免接口要求 Bearer 令牌。
+
+    默认（API_AUTH_TOKEN=None）不启用，保持纯本机部署的零配置行为。
+    前端尚未适配令牌模式，该开关面向需要在受信网络之外暴露服务的部署方
+    opt-in 使用；/static 产物路径依赖 <img> 直连且 task_id 本身是 128 位
+    随机 capability URL，同样豁免以免令牌模式下图表预览完全不可用。
+    """
+    token = settings.API_AUTH_TOKEN
+    if token:
+        path = request.url.path
+        if path not in _AUTH_EXEMPT_PATHS and not path.startswith("/static/"):
+            if not is_valid_bearer_authorization(
+                request.headers.get("authorization"), token
+            ):
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "缺少或无效的 API 访问令牌"},
+                )
+    return await call_next(request)
 
 
 @app.middleware("http")

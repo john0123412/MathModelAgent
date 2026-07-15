@@ -12,6 +12,7 @@ from app.services.redis_manager import redis_manager
 from app.services.ws_manager import ws_manager
 from app.utils.common_utils import ensure_safe_task_id
 from app.utils.log_util import logger
+from app.utils.security import is_valid_websocket_token
 from app.config.setting import settings
 
 router = APIRouter()
@@ -49,6 +50,16 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
         await websocket.close(code=1008, reason="Untrusted origin")
         return
 
+    # 可选令牌鉴权（与 HTTP 中间件同一开关）：浏览器 WebSocket 无法自定义
+    # Authorization 头，改用查询参数 token 携带。前端尚未适配令牌模式，
+    # 该开关由部署方 opt-in；默认 None 保持原有行为。
+    if settings.API_AUTH_TOKEN and not is_valid_websocket_token(
+        websocket.query_params.get("token"), settings.API_AUTH_TOKEN
+    ):
+        logger.warning("拒绝缺少或无效令牌的 WebSocket 连接")
+        await websocket.close(code=1008, reason="Invalid token")
+        return
+
     try:
         safe_task_id = ensure_safe_task_id(task_id)
     except ValueError:
@@ -80,7 +91,13 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
                 logger.info(f"WebSocket 已关闭，停止转发 task_id: {safe_task_id}")
                 break
             try:
-                msg = await pubsub.get_message(ignore_subscribe_messages=True)
+                # 阻塞等待最多 1 秒：redis-py 的 get_message(timeout=...) 在时限内
+                # 等待新消息，替代旧的“非阻塞轮询 + sleep(0.1)”（每连接每秒 10 次
+                # 空转 Redis 往返，且把转发吞吐限在 10 条/秒）。不用 listen() 是
+                # 因为它无限阻塞，循环顶部的 WebSocket 关闭检查会失去时效。
+                msg = await pubsub.get_message(
+                    ignore_subscribe_messages=True, timeout=1.0
+                )
                 if msg:
                     try:
                         msg_dict = json.loads(msg["data"])
@@ -120,7 +137,8 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
                                 )
                                 break
                             raise
-                await asyncio.sleep(0.1)
+                # 无需额外 sleep：get_message(timeout=1.0) 已提供等待节奏；
+                # 有消息时立即进入下一轮，转发不再有人为 0.1s 上限
 
             except WebSocketDisconnect:
                 logger.info("WebSocket disconnected")
@@ -156,8 +174,12 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
                 continue
             content = data.get("content")
             if data.get("type") == "user_input" and isinstance(content, str) and content.strip():
-                user_input_queue.push(safe_task_id, content)
-                logger.info(f"收到用户实时输入 task_id: {safe_task_id}")
+                if user_input_queue.push(safe_task_id, content):
+                    logger.info(f"收到用户实时输入 task_id: {safe_task_id}")
+                else:
+                    # 队列满（容量上限见 user_input_queue.MAX_QUEUE_SIZE）：
+                    # 丢弃并记录，防止未消费消息无限累积占用内存
+                    logger.warning(f"用户实时输入队列已满，丢弃消息 task_id: {safe_task_id}")
 
     try:
         forward_task = asyncio.create_task(_forward_loop())

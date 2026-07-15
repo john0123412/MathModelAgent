@@ -8,7 +8,9 @@ from app.utils.log_util import logger
 
 # TODO: 评估任务完成情况，rethinking
 
-# 每个字符估算的 token 数（中英混合文本的保守估计）
+# 每 token 的字符数估算（len(text) // 该值）。3 对中文/中英混合偏保守；
+# 对英文代码密集的 Coder 历史会高估 token 数并更早触发压缩。当前选择
+# 宁可提前压缩也不冒上下文溢出风险；若后续接入 tokenizer，再替换为精确计数。
 _CHARS_PER_TOKEN = 3
 # 触发压缩的 token 占比阈值（相对 context_window）
 _DEFAULT_TOKEN_THRESHOLD_RATIO = 0.75

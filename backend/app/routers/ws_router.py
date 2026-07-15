@@ -91,7 +91,13 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
                 logger.info(f"WebSocket 已关闭，停止转发 task_id: {safe_task_id}")
                 break
             try:
-                msg = await pubsub.get_message(ignore_subscribe_messages=True)
+                # 阻塞等待最多 1 秒：redis-py 的 get_message(timeout=...) 在时限内
+                # 等待新消息，替代旧的“非阻塞轮询 + sleep(0.1)”（每连接每秒 10 次
+                # 空转 Redis 往返，且把转发吞吐限在 10 条/秒）。不用 listen() 是
+                # 因为它无限阻塞，循环顶部的 WebSocket 关闭检查会失去时效。
+                msg = await pubsub.get_message(
+                    ignore_subscribe_messages=True, timeout=1.0
+                )
                 if msg:
                     try:
                         msg_dict = json.loads(msg["data"])
@@ -131,7 +137,8 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
                                 )
                                 break
                             raise
-                await asyncio.sleep(0.1)
+                # 无需额外 sleep：get_message(timeout=1.0) 已提供等待节奏；
+                # 有消息时立即进入下一轮，转发不再有人为 0.1s 上限
 
             except WebSocketDisconnect:
                 logger.info("WebSocket disconnected")

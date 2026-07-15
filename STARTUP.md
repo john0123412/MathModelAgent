@@ -83,6 +83,8 @@ docker compose down -v      # 停止并删除数据卷（⚠️ 清空 Redis 数
 
 启动后访问 http://localhost:5173。Compose 将 `5173` 和 `8000` 都绑定到
 `127.0.0.1`，默认只适合本机单用户使用；不要直接把开发 Compose 反向代理或暴露到公网。
+后端任务注册、取消与建模审批状态目前依赖进程内 `_active_tasks`，因此正式运行必须保持单个
+uvicorn worker；不要给 Compose/uvicorn 增加 `--workers`，除非先把活动任务注册与取消信号迁移到 Redis 等跨进程协调机制。
 如确需在受信网络之外暴露后端，可在后端环境中设置 `API_AUTH_TOKEN=<随机令牌>`：
 设置后所有非豁免 HTTP 接口要求 `Authorization: Bearer <令牌>`，WebSocket 要求
 `?token=<令牌>` 查询参数；`/docs`、`/redoc`、`/openapi.json` 与 `/static/` 产物路径豁免。

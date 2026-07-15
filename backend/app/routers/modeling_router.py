@@ -46,6 +46,9 @@ EXAMPLE_ROOT = os.path.abspath(os.path.join("app", "example", "example"))
 UPLOAD_CHUNK_SIZE_BYTES = 1024 * 1024
 
 # 任务注册表: task_id -> (asyncio.Task, asyncio.Event)
+# WHY 该表是进程内状态；当前 Docker/uvicorn 以单 worker 运行。
+# 若改成多 worker，cancel / approve / resume 可能路由到不持有任务的进程而失效，
+# 需要先把活动任务注册与取消信号迁移到 Redis 或其他跨进程协调机制。
 _active_tasks: Dict[str, Tuple[asyncio.Task, asyncio.Event]] = {}
 
 

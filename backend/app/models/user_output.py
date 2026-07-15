@@ -156,12 +156,18 @@ class UserOutput:
             text = replace_res[seq_key]["response_content"]
             # 找到[uuid]
             uuid_list = re.findall(r"\[([a-f0-9-]{36})\]", text)
-            for uid in uuid_list:
-                text = text.replace(f"[{uid}]", f"[^{ref_index}]")
-                if self.footnotes[uid].get("number") is None:
-                    self.footnotes[uid]["number"] = ref_index
-
-                ref_index += 1
+            # 去重且保持首次出现顺序：findall 对同一 uuid 的重复出现会返回多个
+            # 元素，而 str.replace 首次迭代已替换全部出现，若不去重则后续空转
+            # 迭代仍使 ref_index 自增，导致编号跳号
+            for uid in dict.fromkeys(uuid_list):
+                # 复用已分配编号：同一文献可能在前面章节已编号，文末参考文献
+                # 列表按该编号输出；若此处重新分配会使正文标记指向不存在的条目
+                num = self.footnotes[uid].get("number")
+                if num is None:
+                    num = ref_index
+                    self.footnotes[uid]["number"] = num
+                    ref_index += 1
+                text = text.replace(f"[{uid}]", f"[^{num}]")
             sort_res[seq_key] = {
                 "response_content": text,
             }

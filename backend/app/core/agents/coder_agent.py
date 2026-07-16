@@ -41,6 +41,7 @@ _WORK_DIR_PATH_PATTERN = re.compile(
 _FORMAL_SUBTASK_PATTERN = re.compile(r"^(ques[1-9][0-9]*)(?:_repair)?$")
 _EVIDENCE_FAILURE_LIMIT = 3
 _CLOSEOUT_WARNING_REMAINING_CALLS = 2
+_CONSECUTIVE_AGENT_EXCEPTION_LIMIT = 2
 
 
 def _looks_like_final_tool_output(output: str) -> bool:
@@ -204,6 +205,7 @@ class CoderAgent(Agent):
         evidence_changed_paths: set[str] = set()
         evidence_failure_count = 0
         last_closeout_warning_remaining: int | None = None
+        consecutive_agent_exceptions = 0
 
         while True:
             if self.max_retries is not None and retry_count >= self.max_retries:
@@ -264,6 +266,7 @@ class CoderAgent(Agent):
                     tool_choice=active_tool_choice,
                     agent_name=self.__class__.__name__,
                 )
+                consecutive_agent_exceptions = 0
 
                 # 如果有工具调用
                 if response.tool_calls:
@@ -824,6 +827,7 @@ class CoderAgent(Agent):
             except Exception as exc:
                 logger.error(f"执行过程中发生异常: {type(exc).__name__}")
                 retry_count += 1
+                consecutive_agent_exceptions += 1
                 last_error_message = str(exc)
                 # WHY 必须退避：内层 llm.py 每次调用已自带 3 次重试，能走到
                 # 这里说明是持续性故障（欠费/断网等）。若立即 continue 会形成
@@ -832,6 +836,37 @@ class CoderAgent(Agent):
                 if self.cancel_event is not None and self.cancel_event.is_set():
                     # 用户已请求停止时不再傻等退避，立即结束
                     raise asyncio.CancelledError("任务被用户停止") from exc
+                if (
+                    consecutive_agent_exceptions
+                    >= _CONSECUTIVE_AGENT_EXCEPTION_LIMIT
+                ):
+                    logger.error(
+                        "Coder 连续 provider/协议异常达到恢复规程上限: "
+                        f"failures={consecutive_agent_exceptions}"
+                    )
+                    await redis_manager.publish_message(
+                        self.task_id,
+                        SystemMessage(
+                            content=(
+                                "代码手连续两次 provider 或协议调用失败，"
+                                "已按恢复规程停止当前子题"
+                            ),
+                            type="error",
+                        ),
+                    )
+                    return CoderToWriter(
+                        code_response=(
+                            "任务失败，代码手连续 "
+                            f"{consecutive_agent_exceptions} 次 provider 或协议异常："
+                            f"{type(exc).__name__}"
+                        ),
+                        created_images=await self.code_interpreter.get_created_images(
+                            subtask_title
+                        ),
+                        execution_attempted=successful_tool_calls > 0,
+                        execution_succeeded=False,
+                        execution_error_occurred=True,
+                    )
                 await asyncio.sleep(min(2 ** min(retry_count, 6), 60.0))
                 continue
             logger.info(

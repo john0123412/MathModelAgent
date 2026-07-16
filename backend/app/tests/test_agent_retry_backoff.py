@@ -2,9 +2,9 @@
 
 覆盖三个熔断相关行为：
 
-- LLM 持续故障（欠费/断网，内层 llm.py 已重试后抛出）时，CoderAgent 必须在
-  有限次数内返回失败的 CoderToWriter，且每次重试之间指数退避，不得紧循环
-  持续打 LLM API；
+- LLM 持续故障（欠费/断网，内层 llm.py 已重试后抛出）时，CoderAgent 必须按
+  恢复规程在连续两次外层异常后返回失败的 CoderToWriter，且首次失败后退避，
+  不得继续打满通用代码错误重试额度；
 - Agent 基类 run() 不得把异常吞成普通字符串返回（调用方会把错误文本当成
   正常响应造成静默失败），必须向上抛出；
 - 配置默认值必须是有限熔断边界，不能回归为 None（无限制）。
@@ -70,13 +70,14 @@ class CoderAgentRetryBackoffTest(unittest.IsolatedAsyncioTestCase):
                 result = await agent.run("solve", "ques1")
 
         self.assertIsInstance(result, CoderToWriter)
-        self.assertIn("超过最大尝试次数", result.code_response or "")
+        self.assertIn("连续 2 次 provider 或协议异常", result.code_response or "")
         self.assertFalse(result.execution_succeeded)
-        # 熔断生效：只允许打满 max_retries 次 LLM 调用后终止，不挂死
-        self.assertEqual(model.calls, 3)
-        # 每次失败后必须指数退避（2^n 秒），防止外层紧循环烧钱
+        self.assertTrue(result.execution_error_occurred)
+        # provider/协议异常使用独立的两次上限，不打满通用 max_retries。
+        self.assertEqual(model.calls, 2)
+        # 首次失败后指数退避；第二次失败直接受控终止。
         delays = [call.args[0] for call in mock_sleep.await_args_list]
-        self.assertEqual(delays, [2, 4, 8])
+        self.assertEqual(delays, [2])
 
     async def test_backoff_is_skipped_and_cancelled_when_cancel_event_set(self):
         cancel_event = asyncio.Event()

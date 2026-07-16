@@ -543,6 +543,113 @@ class TestStructuredModelPlan(unittest.TestCase):
         )
         self.assertTrue(neutral.valid, neutral.model_dump_json())
 
+    def test_empirical_quality_threshold_requires_explicit_target_basis(self):
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(
+                key="rmse_fit",
+                label="反射率拟合均方根误差",
+                comparator="le",
+                target=0.05,
+                unit="%",
+                description="由拟合结果直接计算，目标小于 0.05% 以验证模型",
+            )
+        ]
+        unsupported = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertFalse(unsupported.valid)
+        self.assertIn("rmse_fit", " ".join(unsupported.violations))
+        self.assertIn("目标值依据", " ".join(unsupported.violations))
+
+        plan.subtasks["ques1"].acceptance_metrics[0].description = (
+            "0.05% 阈值依据题面明确给出的测试标准"
+        )
+        supported = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertTrue(supported.valid, supported.model_dump_json())
+
+    def test_common_sense_is_not_a_physical_plausibility_threshold_basis(self):
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(
+                key="physical_plausibility",
+                label="参数物理合理性",
+                comparator="eq",
+                target=1,
+                description="参数处于物理常识范围时记为 1",
+            )
+        ]
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertFalse(result.valid)
+        self.assertIn("physical_plausibility", " ".join(result.violations))
+
+    def test_empirical_fit_completion_flag_remains_conclusion_neutral(self):
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(
+                key="model_fit_completed",
+                label="候选模型拟合完成标志",
+                comparator="eq",
+                target=1,
+                description="1 表示所有候选模型均已拟合并保存可复算结果",
+            )
+        ]
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertTrue(result.valid, result.model_dump_json())
+
+    def test_neutral_words_in_description_cannot_mask_arbitrary_fit_bound(self):
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(
+                key="fit_error_bound",
+                label="模型拟合误差上限",
+                comparator="le",
+                target=100,
+                unit="%",
+                description="RMSE 小于 100%，以确保数值有限且结果可复算",
+            )
+        ]
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertFalse(result.valid)
+        self.assertIn("fit_error_bound", " ".join(result.violations))
+
+    def test_zero_bound_physical_feasibility_is_not_an_empirical_threshold(self):
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(
+                key="thickness_positive",
+                label="外延层厚度为正",
+                comparator="gt",
+                target=0,
+                unit="μm",
+                description="厚度大于零用于验证变量定义和物理可行性",
+            )
+        ]
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertTrue(result.valid, result.model_dump_json())
+
     def test_generic_profiles_are_selected_by_problem_language(self):
         data_contract = build_problem_contract("附件给出样本数据，请清洗数据并建立回归预测模型。")
         physics_contract = build_problem_contract("研究流量和压力随时间演化的物理仿真系统。")

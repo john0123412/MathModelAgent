@@ -124,6 +124,44 @@ _BOOLEAN_OUTCOME_METRIC = re.compile(
     r"(?:existence|occurrence|detected|存在性|是否存在|发生标志|效果标志)",
     re.IGNORECASE,
 )
+_EMPIRICAL_QUALITY_METRIC = re.compile(
+    r"(?:rmse|mae|mse|r[_ -]?(?:2|squared)|fit[_ -]?(?:r2|error|quality|score)"
+    r"|fitting[_ -]?(?:error|quality|score)|error[_ -]?(?:bound|rate)"
+    r"|deviation|accuracy|plausibility|p[_ -]?value|significance"
+    r"|均方根|拟合(?:误差|优度|精度)|误差(?:界|率|上限)|偏差|准确率|精度"
+    r"|合理性|p值|显著性)",
+    re.IGNORECASE,
+)
+_NEUTRAL_COMPLETION_METRIC = re.compile(
+    r"(?:completed|completion|coverage|finite|reproducib|完成标志|完成率|覆盖(?:数|率)?"
+    r"|数值有限|可复算)",
+    re.IGNORECASE,
+)
+_ZERO_BOUND_FEASIBILITY_METRIC = re.compile(
+    r"(?:positive|positivity|non[_ -]?negative|greater[_ -]?than[_ -]?zero|"
+    r"正值|为正|非负)",
+    re.IGNORECASE,
+)
+_THRESHOLD_TERM = (
+    r"(?:阈值|目标值?|界限|上限|下限|容差|判据|"
+    r"threshold|target|bound|limit|tolerance|criterion)"
+)
+_THRESHOLD_SOURCE = (
+    r"(?:题面|题设|附件|数据(?:统计|分布|分位数|噪声)|样本统计|训练集|验证集|"
+    r"交叉验证|基线|对照|文献|论文|标准|规范|"
+    r"problem statement|attachment|data (?:statistic|distribution|quantile|noise)|"
+    r"training set|validation set|cross-validation|baseline|reference|literature|standard)"
+)
+_THRESHOLD_BASIS = re.compile(
+    rf"(?:{_THRESHOLD_TERM}.{{0,32}}(?:依据|来自|取自|按照|基于|由|from|based on)"
+    rf".{{0,32}}{_THRESHOLD_SOURCE}"
+    rf"|(?:依据|按照|基于|由|using|based on).{{0,24}}{_THRESHOLD_SOURCE}"
+    rf".{{0,32}}(?:确定|设定|给出|规定|导出|计算|估计|determin|derive|set|specif)"
+    rf".{{0,24}}{_THRESHOLD_TERM}?"
+    rf"|{_THRESHOLD_SOURCE}.{{0,32}}(?:给出|规定|确定|导出|作为|specif|determin|derive)"
+    rf".{{0,24}}{_THRESHOLD_TERM})",
+    re.IGNORECASE,
+)
 
 
 _LINEAR_PROGRAMMING_TERMS = ("线性规划", "最优生产", "最大利润", "最小成本", "资源约束", "机器时间", "人工时间")
@@ -470,6 +508,33 @@ def _conclusion_forcing_metrics(plan: object, question: str) -> list[str]:
     return issues
 
 
+def _unsupported_empirical_thresholds(plan: object) -> list[str]:
+    """Find empirical quality targets whose numeric cutoff has no stated basis."""
+    issues: list[str] = []
+    for metric in getattr(plan, "acceptance_metrics", []):
+        identity_text = " ".join(
+            str(getattr(metric, field, "")) for field in ("key", "label")
+        )
+        description = str(getattr(metric, "description", ""))
+        metric_text = f"{identity_text} {description}"
+        comparator = str(getattr(metric, "comparator", ""))
+        target = float(getattr(metric, "target", 0))
+        if not _EMPIRICAL_QUALITY_METRIC.search(metric_text):
+            continue
+        if _NEUTRAL_COMPLETION_METRIC.search(identity_text):
+            continue
+        if (
+            _ZERO_BOUND_FEASIBILITY_METRIC.search(identity_text)
+            and comparator in {"ge", "gt"}
+            and target == 0
+        ):
+            continue
+        if _THRESHOLD_BASIS.search(description):
+            continue
+        issues.append(f"{getattr(metric, 'key', 'unknown')} {comparator} {target:g}")
+    return issues
+
+
 def _matching_plan_keys(
     requirement: ContractRequirement,
     subtasks: dict[str, object],
@@ -566,6 +631,14 @@ def validate_modeler_plan(
                 f"{key} 的验收指标在执行前强制开放性判定结论："
                 + "、".join(forcing_metrics)
                 + "；请改用模型比较已完成、数据覆盖、数值有限或结果可复算等结论中立指标"
+            )
+        unsupported_thresholds = _unsupported_empirical_thresholds(subtask)
+        if unsupported_thresholds:
+            violations.append(
+                f"{key} 的经验质量阈值缺少目标值依据："
+                + "、".join(unsupported_thresholds)
+                + "；description 必须说明阈值来自题面/附件、数据统计或交叉验证、"
+                "基线、文献或标准；仅说明指标如何计算或声称符合常识不构成依据"
             )
     for parameter in contract.immutable_parameters:
         if parameter.key == "flow_coefficient":

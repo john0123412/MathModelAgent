@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 from app.core.checkpoint import CheckpointManager, TaskCheckpoint
 from app.core.workflow import MathModelWorkFlow
 from app.schemas.A2A import CoderToWriter, ModelerToCoder, WriterResponse
+from app.schemas.problem_contract import ContractRequirement, ProblemContract
 
 
 class _Flows:
@@ -453,6 +454,82 @@ class WorkflowExecutionGateTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertIsNotNone(loaded)
             self.assertEqual(loaded.targeted_repair_attempts, 0)
+
+
+class MainPathPlanReviewTest(unittest.IsolatedAsyncioTestCase):
+    """execute() 主路径的计划级契约复核（_validate_plan_with_one_remodel）。
+
+    只验证 helper 的编排（校验→冲突则重建模一次→仍冲突则中止），用一个通用
+    ``evidence_terms`` 契约驱动，与具体题面参数规则解耦——入射角等领域规则由
+    test_problem_contract 单独覆盖。
+    """
+
+    @staticmethod
+    def _contract() -> ProblemContract:
+        # 通用 requirement：计划文本须同时出现 10° 与 15°，否则判为契约冲突。
+        return ProblemContract(
+            required_requirements=[
+                ContractRequirement(
+                    key="dual_angle_evidence",
+                    label="计划须使用题面给定的 10° 与 15° 入射角",
+                    evidence_terms=["10°", "15°"],
+                    source="test",
+                )
+            ]
+        )
+
+    _CONFORMING_PLAN = "使用 10° 与 15° 入射角，对同一晶圆两次测量联合求解"
+    _CONFLICTING_PLAN = "假设垂直入射 0°，忽略题面给定角度"
+
+    def _workflow(self) -> MathModelWorkFlow:
+        workflow = MathModelWorkFlow()
+        workflow.task_id = "task"
+        workflow.work_dir = "/tmp/task"
+        workflow.questions = {"ques_count": 1, "ques1": "q1"}
+        return workflow
+
+    async def test_conforming_plan_passes_without_remodel(self):
+        workflow = self._workflow()
+        plan = ModelerToCoder(questions_solution={"ques1": self._CONFORMING_PLAN})
+        remodel = AsyncMock()
+
+        with patch("app.core.workflow.redis_manager.publish_message", AsyncMock()):
+            result = await workflow._validate_plan_with_one_remodel(
+                self._contract(), plan, remodel
+            )
+
+        self.assertIs(result, plan)
+        remodel.assert_not_awaited()
+
+    async def test_conflicting_plan_triggers_one_remodel_then_passes(self):
+        workflow = self._workflow()
+        bad_plan = ModelerToCoder(questions_solution={"ques1": self._CONFLICTING_PLAN})
+        good_plan = ModelerToCoder(questions_solution={"ques1": self._CONFORMING_PLAN})
+        remodel = AsyncMock(return_value=good_plan)
+
+        with patch("app.core.workflow.redis_manager.publish_message", AsyncMock()):
+            result = await workflow._validate_plan_with_one_remodel(
+                self._contract(), bad_plan, remodel
+            )
+
+        self.assertIs(result, good_plan)
+        remodel.assert_awaited_once()
+
+    async def test_two_conflicting_plans_stop_before_solving(self):
+        workflow = self._workflow()
+        bad_plan = ModelerToCoder(questions_solution={"ques1": self._CONFLICTING_PLAN})
+        still_bad = ModelerToCoder(
+            questions_solution={"ques1": "仍假设垂直入射 0°"}
+        )
+        remodel = AsyncMock(return_value=still_bad)
+
+        with patch("app.core.workflow.redis_manager.publish_message", AsyncMock()):
+            with self.assertRaisesRegex(RuntimeError, "连续两次与题面参数契约冲突"):
+                await workflow._validate_plan_with_one_remodel(
+                    self._contract(), bad_plan, remodel
+                )
+
+        remodel.assert_awaited_once()
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ import datetime
 import json
 import os
 import re
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 import nbformat
 from app.core.agents import WriterAgent, CoderAgent, CoordinatorAgent, ModelerAgent
@@ -37,7 +38,11 @@ from app.tools.execution_validation import (
 )
 from app.core.flows import Flows
 from app.core.llm.llm_factory import LLMFactory
-from app.schemas.problem_contract import build_problem_contract, validate_modeler_plan
+from app.schemas.problem_contract import (
+    ProblemContract,
+    build_problem_contract,
+    validate_modeler_plan,
+)
 
 
 class WorkFlow:
@@ -746,6 +751,64 @@ class MathModelWorkFlow(WorkFlow):
                 key, None, writer_response.model_dump()
             )
 
+    async def _validate_plan_with_one_remodel(
+        self,
+        problem_contract: ProblemContract,
+        modeler_response: ModelerToCoder,
+        remodel: Callable[[], Awaitable[ModelerToCoder]],
+    ) -> ModelerToCoder:
+        """用题面契约独立复核建模计划，冲突时定向重建模一次。
+
+        这是 execute() 主流程与 resume() 续传路径共享的“计划级”防线：建模手内部
+        自校验之外，再用契约在 Agent 之外独立卡一道，避免改写题面参数的方案一路
+        放行到执行与冻结。首次冲突重建模一次，仍冲突则抛错干净中止，不进入自动循环。
+
+        Args:
+            problem_contract: 题面参数契约。
+            modeler_response: 建模手首次返回的方案。
+            remodel: 无参异步回调，返回一份全新的建模方案（调用方负责用干净的
+                建模手实例重建，避免复用被污染的对话历史）。
+
+        Returns:
+            通过契约复核的建模方案。
+
+        Raises:
+            RuntimeError: 连续两次方案都与题面参数契约冲突。
+        """
+        expected_question_keys = {
+            key
+            for key in self.questions
+            if key.startswith("ques") and key != "ques_count"
+        }
+
+        def _check(plan: ModelerToCoder) -> list[str]:
+            result = validate_modeler_plan(
+                problem_contract,
+                plan,
+                expected_question_keys=expected_question_keys,
+                questions=self.questions,
+            )
+            return result.violations + result.missing_requirements
+
+        conflicts = _check(modeler_response)
+        if not conflicts:
+            return modeler_response
+
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(
+                content="建模方案与题面参数契约冲突，正在重新建模：" + "；".join(conflicts),
+                type="warning",
+            ),
+        )
+        modeler_response = await remodel()
+        conflicts = _check(modeler_response)
+        if conflicts:
+            raise RuntimeError(
+                "建模方案复核连续两次与题面参数契约冲突，已停止求解：" + "；".join(conflicts)
+            )
+        return modeler_response
+
     def _write_modeler_plan(self, modeler_response: ModelerToCoder) -> None:
         """将建模手方案保存为可见产物，便于用户检查和续传审计。"""
         plan_json_path = os.path.join(self.work_dir, "modeler_plan.json")
@@ -1270,6 +1333,29 @@ class MathModelWorkFlow(WorkFlow):
         modeler_response = await modeler_agent.run(
             coordinator_response, recovery_context=recovery_context
         )
+
+        # 计划级独立复核：建模手内部自校验之外，主流程再用题面契约独立卡一道。
+        # resume() 续传路径已有这道独立防线（见 validate_modeler_plan 调用），而
+        # execute() 从头跑此前只依赖建模手“自己校验自己”，一旦内部校验存在盲区，
+        # 改写题面参数（如把实测入射角替换为垂直入射）会一路放行到执行与冻结。
+        async def _remodel() -> ModelerToCoder:
+            # 从头跑此时尚未执行任何求解代码，无未验收上下文需要归档；
+            # 用全新建模手实例重建一次，避免复用被污染的对话历史。
+            fresh_modeler = ModelerAgent(
+                self.task_id,
+                modeler_llm,
+                context_window=settings.MODELER_CONTEXT_WINDOW,
+                cancel_event=self.cancel_event,
+                user_input_provider=user_input_provider,
+            )
+            return await fresh_modeler.run(
+                coordinator_response, recovery_context=recovery_context
+            )
+
+        modeler_response = await self._validate_plan_with_one_remodel(
+            problem_contract, modeler_response, _remodel
+        )
+
         self._write_modeler_plan(modeler_response)
         await redis_manager.publish_message(
             self.task_id,

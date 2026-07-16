@@ -180,13 +180,14 @@ EDA 或敏感性分析放进 `subtasks`。
 2. `method`：写清变量、方程/目标函数、算法和独立复算方式。优化问题必须出现决策变量、目标函数与约束；物理题必须说明状态方程或守恒关系及单位制。
 3. `constraints`：列出题面硬约束、物理边界或统计划分边界；不满足时必须输出不可行证据。
 4. `expected_artifacts`：至少一个 `result_table`、`time_series` 或 `dataset` 数值产物；PNG 不是证据。需要图时同时列出 `figure_data`。
-5. `acceptance_metrics`：至少一个可从结构化结果复算的指标，包含比较符、阈值/目标、单位和计算口径。不要以“结果合理”“图像平滑”充当指标。
+5. `acceptance_metrics`：至少一个可从结构化结果复算的指标，包含比较符、阈值/目标、单位和计算口径。`target` 必须是有限 JSON 数值，不得是字符串、数组、`null`、`NaN` 或无穷值。量纲正确、公式一致等定性检查必须转换为数值通过标志（例如 `eq 1`），并在 `unit` / `description` 说明 1 的含义。不要以“结果合理”“图像平滑”充当指标。
 
 ## 固定字段枚举（不得自造值）
 
 - `schema_version` 只能是 `mathmodel.model-plan.v1`。
 - `expected_artifacts[*].kind` 只能是：`result_table`、`constraint_table`、`figure_data`、`figure`、`time_series`、`parameter_audit`、`dataset`、`other`。
 - `acceptance_metrics[*].comparator` 只能是：`le`、`lt`、`ge`、`gt`、`eq`、`within`。
+- `acceptance_metrics[*].target` 必须是可由执行证据复算的有限数值；例如量纲检查使用 `{"comparator":"eq","target":1}`，不得使用 `"长度单位"` 等文字目标。
 - 说明性报告、模型说明等无法归入前述数值类型的产物统一使用 `other`，不得输出 `report` 或 `model_description`。
 - “核对/检查是否相等”使用 `eq`，不得输出 `check`。
 

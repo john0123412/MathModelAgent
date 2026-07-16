@@ -30,8 +30,9 @@ MODEL_PLAN_PROTOCOL_REMINDER = (
     + ", ".join(map(str, _ARTIFACT_KINDS))
     + "；acceptance_metrics[*].comparator 只能是 "
     + ", ".join(map(str, _METRIC_COMPARATORS))
-    + "。不要自造 report、model_description、check 等枚举值；说明性产物使用 other，"
-    "需要核对等值时使用 eq。"
+    + "；acceptance_metrics[*].target 必须是有限 JSON 数值，不得是字符串、数组、null、NaN 或无穷值。"
+    "不要自造 report、model_description、check 等枚举值；说明性产物使用 other，"
+    "需要核对等值时使用 eq；量纲/公式等定性检查使用 eq 1，并在 unit/description 解释 1 的含义。"
 )
 
 

@@ -41,7 +41,7 @@ class AcceptanceMetric(BaseModel):
     key: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     label: str = Field(min_length=2)
     comparator: Literal["le", "lt", "ge", "gt", "eq", "within"]
-    target: float | str
+    target: float = Field(allow_inf_nan=False)
     unit: str | None = None
     description: str = Field(min_length=3)
 

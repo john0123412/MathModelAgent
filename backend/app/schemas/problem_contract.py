@@ -106,6 +106,25 @@ _OVERRIDE_NEGATION = re.compile(
 )
 _ZERO_DEGREE = re.compile(r"(?<!\d)0(?:\.0+)?\s*[°度]")
 
+_OPEN_ENDED_DECISION_QUESTION = re.compile(
+    r"(?:(?:判断|判定|检验|验证|确定|研究|分析).{0,24}(?:是否|有无)"
+    r"|(?:是否|有无).{0,24}(?:存在|发生|显著|必要|影响|改善|提升)"
+    r"|\bwhether\b)",
+    re.IGNORECASE,
+)
+_DIRECTIONAL_OUTCOME_METRIC = re.compile(
+    r"(?:improvement|increase|gain|effect|提升|改善|改进|增益|效果)",
+    re.IGNORECASE,
+)
+_SIGNIFICANCE_OUTCOME_METRIC = re.compile(
+    r"(?:p[_ -]?value|significance|significant|p值|显著性|显著)",
+    re.IGNORECASE,
+)
+_BOOLEAN_OUTCOME_METRIC = re.compile(
+    r"(?:existence|occurrence|detected|存在性|是否存在|发生标志|效果标志)",
+    re.IGNORECASE,
+)
+
 
 _LINEAR_PROGRAMMING_TERMS = ("线性规划", "最优生产", "最大利润", "最小成本", "资源约束", "机器时间", "人工时间")
 _DATA_ANALYSIS_TERMS = ("数据集", "样本", "预测", "回归", "统计分析", "数据分析", "附件")
@@ -415,6 +434,42 @@ def _subtask_plans(plan: object) -> dict[str, object]:
     return {}
 
 
+def _conclusion_forcing_metrics(plan: object, question: str) -> list[str]:
+    """Find acceptance thresholds that predetermine an open scientific decision."""
+    if not _OPEN_ENDED_DECISION_QUESTION.search(question):
+        return []
+    issues: list[str] = []
+    for metric in getattr(plan, "acceptance_metrics", []):
+        comparator = str(getattr(metric, "comparator", ""))
+        target = float(getattr(metric, "target", 0))
+        metric_text = " ".join(
+            str(getattr(metric, field, ""))
+            for field in ("key", "label", "description")
+        )
+        forces_direction = (
+            _DIRECTIONAL_OUTCOME_METRIC.search(metric_text)
+            and (
+                (comparator in {"ge", "gt"} and target > 0)
+                or (comparator in {"le", "lt"} and target < 0)
+            )
+        )
+        forces_significance = (
+            _SIGNIFICANCE_OUTCOME_METRIC.search(metric_text)
+            and comparator in {"le", "lt"}
+            and 0 <= target < 1
+        )
+        forces_boolean_outcome = (
+            _BOOLEAN_OUTCOME_METRIC.search(metric_text)
+            and comparator == "eq"
+            and target in {0, 1}
+        )
+        if forces_direction or forces_significance or forces_boolean_outcome:
+            issues.append(
+                f"{getattr(metric, 'key', 'unknown')} {comparator} {target:g}"
+            )
+    return issues
+
+
 def _matching_plan_keys(
     requirement: ContractRequirement,
     subtasks: dict[str, object],
@@ -503,6 +558,15 @@ def validate_modeler_plan(
             missing.append("缺少正式问题计划: " + ", ".join(missing_keys))
         if extra_keys:
             violations.append("出现未拆解的正式问题计划: " + ", ".join(extra_keys))
+    for key, subtask in subtasks.items():
+        question = str((questions or {}).get(key, ""))
+        forcing_metrics = _conclusion_forcing_metrics(subtask, question)
+        if forcing_metrics:
+            violations.append(
+                f"{key} 的验收指标在执行前强制开放性判定结论："
+                + "、".join(forcing_metrics)
+                + "；请改用模型比较已完成、数据覆盖、数值有限或结果可复算等结论中立指标"
+            )
     for parameter in contract.immutable_parameters:
         if parameter.key == "flow_coefficient":
             for candidate in _FLOW_COEFFICIENT.findall(normalized):

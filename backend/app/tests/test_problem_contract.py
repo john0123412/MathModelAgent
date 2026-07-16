@@ -485,6 +485,64 @@ class TestStructuredModelPlan(unittest.TestCase):
         )
         self.assertTrue(result.valid, result.model_dump_json())
 
+    def test_open_decision_rejects_metric_that_forces_positive_conclusion(self):
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(
+                key="silicon_fit_improvement",
+                label="多光束模型拟合改善",
+                comparator="ge",
+                target=0.01,
+                description="比较多光束与双光束模型的拟合优度",
+            )
+        ]
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+            questions={"ques1": "判断硅晶圆是否出现多光束干涉，并分析其影响。"},
+        )
+        self.assertFalse(result.valid)
+        self.assertIn("silicon_fit_improvement", " ".join(result.violations))
+        self.assertIn("结论中立", " ".join(result.violations))
+
+    def test_open_decision_rejects_forced_significance_but_accepts_neutral_completion(self):
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(
+                key="comparison_p_value",
+                label="模型比较显著性 p 值",
+                comparator="le",
+                target=0.05,
+                description="通过模型比较计算显著性",
+            )
+        ]
+        question = {"ques1": "检验是否存在额外干涉效应。"}
+        forced = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+            questions=question,
+        )
+        self.assertFalse(forced.valid)
+
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(
+                key="model_comparison_completed",
+                label="模型比较完成标志",
+                comparator="eq",
+                target=1,
+                description="1 表示两类候选模型均已拟合并保存可复算结果",
+            )
+        ]
+        neutral = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+            questions=question,
+        )
+        self.assertTrue(neutral.valid, neutral.model_dump_json())
+
     def test_generic_profiles_are_selected_by_problem_language(self):
         data_contract = build_problem_contract("附件给出样本数据，请清洗数据并建立回归预测模型。")
         physics_contract = build_problem_contract("研究流量和压力随时间演化的物理仿真系统。")

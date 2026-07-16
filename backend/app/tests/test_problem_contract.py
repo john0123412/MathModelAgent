@@ -73,6 +73,38 @@ class TestProblemContract(unittest.TestCase):
         )
         self.assertTrue(result.valid, result.model_dump_json())
 
+    def test_accepts_same_wafer_at_different_incident_angles(self):
+        result = validate_modeler_plan(
+            build_problem_contract(OPTICAL_ANGLE_PAIR_PROBLEM),
+            {
+                "ques1": "推导任意入射角下的双光束干涉模型。",
+                "ques2": (
+                    "附件1和附件2是同一碳化硅晶圆片在不同入射角（10°和15°）"
+                    "下的配对测量，厚度和折射率参数相同，联合建模。"
+                ),
+                "ques3": (
+                    "附件3和附件4是同一硅晶圆片在不同入射角（10°和15°）"
+                    "下的配对测量，联合检验多光束干涉。"
+                ),
+            },
+        )
+        self.assertTrue(result.valid, result.model_dump_json())
+
+    def test_rejects_wafer_itself_being_different_or_independent(self):
+        result = validate_modeler_plan(
+            build_problem_contract(OPTICAL_ANGLE_PAIR_PROBLEM),
+            {
+                "ques1": "推导一般干涉模型。",
+                "ques2": "附件1和附件2对应的晶圆彼此不同，分别在10°和15°下计算。",
+                "ques3": "附件3和附件4使用两片独立硅晶圆，分别在10°和15°下计算。",
+            },
+        )
+        self.assertFalse(result.valid)
+        violation_text = " ".join(result.violations)
+        self.assertIn("附件1/2", violation_text)
+        self.assertIn("附件3/4", violation_text)
+        self.assertIn("独立样品", violation_text)
+
     def test_rejects_zero_degree_override_even_if_angles_are_mentioned_elsewhere(self):
         result = validate_modeler_plan(
             build_problem_contract(OPTICAL_ANGLE_PAIR_PROBLEM),

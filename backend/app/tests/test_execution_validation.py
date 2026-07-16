@@ -102,7 +102,7 @@ class TestExecutionValidation(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work_dir:
             result_path = os.path.join(work_dir, "ques1_results.json")
             with open(result_path, "w", encoding="utf-8") as handle:
-                json.dump({"value": 100.0}, handle)
+                json.dump({"value": 100.0, "balance_residual": 0.0}, handle)
             with open(os.path.join(work_dir, MANIFEST_NAME), "w", encoding="utf-8") as handle:
                 json.dump(
                     {
@@ -136,6 +136,7 @@ class TestExecutionValidation(unittest.TestCase):
                         "value": 100.0,
                         "unit": "元",
                         "explanation": "由本次线性规划的实际求解结果读取。",
+                        "source_path": "ques1_results.json",
                     },
                     {
                         "id": "balance_residual",
@@ -143,6 +144,7 @@ class TestExecutionValidation(unittest.TestCase):
                         "value": 0.0,
                         "unit": "小时",
                         "explanation": "由实际解代入资源约束计算。",
+                        "source_path": "ques1_results.json",
                     },
                 ],
                 figures=[],
@@ -182,6 +184,7 @@ class TestExecutionValidation(unittest.TestCase):
                         "value": 1.0,
                         "unit": "元",
                         "explanation": "由计算结果读取。",
+                        "source_path": "../outside.json",
                     }
                 ],
                 figures=[],
@@ -189,6 +192,213 @@ class TestExecutionValidation(unittest.TestCase):
 
             self.assertFalse(recorded["ok"])
             self.assertFalse(os.path.exists(os.path.join(work_dir, MANIFEST_NAME)))
+
+    def test_recorder_rejects_flipped_model_plan_comparison(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            result_path = os.path.join(work_dir, "ques2_fit_results.json")
+            with open(result_path, "w", encoding="utf-8") as handle:
+                json.dump({"fit_r_squared": 0.1543}, handle)
+            with open(
+                os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(
+                    {
+                        "model_plan": {
+                            "subtasks": {
+                                "ques2": {
+                                    "acceptance_metrics": [
+                                        {
+                                            "key": "fit_r_squared",
+                                            "comparator": "gt",
+                                            "target": 0.95,
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    handle,
+                )
+
+            recorded = record_execution_evidence(
+                work_dir,
+                subtask_id="ques2",
+                constraints=[
+                    {
+                        "id": "fit_r_squared",
+                        "actual": 0.1543,
+                        "comparison": "lte",
+                        "target": 0.95,
+                        "source_path": "ques2_fit_results.json",
+                    }
+                ],
+                metrics=[
+                    {
+                        "id": "fit_r_squared",
+                        "label": "拟合优度",
+                        "value": 0.1543,
+                        "unit": "无量纲",
+                        "explanation": "由拟合残差计算。",
+                        "source_path": "ques2_fit_results.json",
+                    }
+                ],
+                figures=[],
+            )
+
+            self.assertFalse(recorded["ok"])
+            self.assertIn("不得改为 lte", " ".join(recorded["errors"]))
+            self.assertFalse(os.path.exists(os.path.join(work_dir, MANIFEST_NAME)))
+
+            with open(result_path, "w", encoding="utf-8") as handle:
+                json.dump({"fit_r_squared": 0.96}, handle)
+            corrected = record_execution_evidence(
+                work_dir,
+                subtask_id="ques2",
+                constraints=[
+                    {
+                        "id": "fit_r_squared",
+                        "actual": 0.96,
+                        "comparison": "gt",
+                        "target": 0.95,
+                        "source_path": "ques2_fit_results.json",
+                    }
+                ],
+                metrics=[
+                    {
+                        "id": "fit_r_squared",
+                        "label": "拟合优度",
+                        "value": 0.96,
+                        "unit": "无量纲",
+                        "explanation": "由拟合残差计算。",
+                        "source_path": "ques2_fit_results.json",
+                    }
+                ],
+                figures=[],
+            )
+            self.assertTrue(corrected["ok"], corrected)
+            self.assertTrue(corrected["feasible"])
+            with open(os.path.join(work_dir, MANIFEST_NAME), encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            self.assertEqual(
+                manifest["schema_version"], "mathmodel.execution-validation.v2"
+            )
+            self.assertEqual(
+                manifest["subtasks"][0]["metrics"][0]["source"]["path"],
+                "ques2_fit_results.json",
+            )
+
+    def test_recorder_requires_metric_and_constraint_values_in_bound_source(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            result_path = os.path.join(work_dir, "ques2_fit_results.json")
+            with open(result_path, "w", encoding="utf-8") as handle:
+                json.dump({"thickness_nm": 2731.8, "fit_r_squared": 0.154328}, handle)
+
+            recorded = record_execution_evidence(
+                work_dir,
+                subtask_id="ques2",
+                constraints=[
+                    {
+                        "id": "fit_r_squared",
+                        "actual": 0.9,
+                        "comparison": "gte",
+                        "target": 0.8,
+                        "source_path": "ques2_fit_results.json",
+                    }
+                ],
+                metrics=[
+                    {
+                        "id": "thickness_nm",
+                        "label": "外延层厚度",
+                        "value": 10562.36,
+                        "unit": "nm",
+                        "explanation": "联合拟合结果。",
+                        "source_path": "ques2_fit_results.json",
+                    }
+                ],
+                figures=[],
+            )
+
+            self.assertFalse(recorded["ok"])
+            errors = " ".join(recorded["errors"])
+            self.assertIn("actual=0.9 无法在 source_path 中复查", errors)
+            self.assertIn("value=10562.36 无法在 source_path 中复查", errors)
+
+    def test_final_validator_rechecks_model_plan_comparison_for_v1_manifest(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_notebook(work_dir)
+            result_path = os.path.join(work_dir, "ques2_fit_results.json")
+            with open(result_path, "w", encoding="utf-8") as handle:
+                json.dump({"fit_r_squared": 0.1543}, handle)
+            with open(
+                os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(
+                    {
+                        "model_plan": {
+                            "subtasks": {
+                                "ques2": {
+                                    "acceptance_metrics": [
+                                        {
+                                            "key": "fit_r_squared",
+                                            "comparator": "gt",
+                                            "target": 0.95,
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    handle,
+                )
+            with open(
+                os.path.join(work_dir, MANIFEST_NAME), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(
+                    {
+                        "schema_version": "mathmodel.execution-validation.v1",
+                        "status": "PASS",
+                        "metrics": [
+                            {
+                                "id": "fit_r_squared",
+                                "label": "拟合优度",
+                                "value": 0.1543,
+                                "unit": "无量纲",
+                                "explanation": "由拟合残差计算。",
+                            }
+                        ],
+                        "subtasks": [
+                            {
+                                "id": "ques2",
+                                "executed": True,
+                                "feasible": True,
+                                "constraints": [
+                                    {
+                                        "id": "fit_r_squared",
+                                        "actual": 0.1543,
+                                        "comparison": "lte",
+                                        "target": 0.95,
+                                        "source": {
+                                            "path": "ques2_fit_results.json",
+                                            "sha256": _sha256(result_path),
+                                        },
+                                    }
+                                ],
+                                "metrics": [],
+                                "figures": [],
+                            }
+                        ],
+                    },
+                    handle,
+                )
+
+            report = validate_execution_artifacts(work_dir, required_subtasks=["ques2"])
+            contract_check = next(
+                item
+                for item in report["checks"]
+                if item["id"] == "ques2.plan_acceptance_contract"
+            )
+            self.assertFalse(contract_check["passed"])
+            self.assertEqual(report["status"], "FAIL")
 
     def test_clean_notebook_and_feasible_constraint_pass(self):
         with tempfile.TemporaryDirectory() as work_dir:
@@ -237,6 +447,7 @@ class TestExecutionValidation(unittest.TestCase):
                             "value": residual,
                             "unit": "小时",
                             "explanation": "由本子题资源约束代入计算。",
+                            "source_path": source_name,
                         }
                     ],
                     figures=[],

@@ -115,6 +115,7 @@ class FakeCapThenEvidenceModel:
                                         "unit": "元",
                                         "explanation": "来自本次线性规划求解。",
                                         "aliases": ["目标函数值"],
+                                        "source_path": "ques2_results.json",
                                     }
                                 ],
                                 "figures": [],
@@ -221,6 +222,7 @@ def _evidence_response(tool_id, subtask_id, source_path):
                                 "unit": "元",
                                 "explanation": "来自本轮求解。",
                                 "aliases": [],
+                                "source_path": source_path,
                             }
                         ],
                         "figures": [],
@@ -286,6 +288,7 @@ class FakeEvidenceRecordModel:
                                         "unit": "元",
                                         "explanation": "由实际线性规划求解得到。",
                                         "aliases": [],
+                                        "source_path": "ques1_results.json",
                                     }
                                 ],
                                 "figures": [],
@@ -524,7 +527,7 @@ class CoderAgentToolHandlingTest(unittest.IsolatedAsyncioTestCase):
             with open(os.path.join(work_dir, "ques1_results.json"), "w", encoding="utf-8") as handle:
                 json.dump({"old": True}, handle)
             interpreter = SecondRunResultWritingInterpreter(
-                work_dir, "ques1_results.json", {"profit": 2200.0}
+                work_dir, "ques1_results.json", {"profit": 2200.0, "evidence": 1.0}
             )
             agent = CoderAgent(
                 task_id="t1",
@@ -550,7 +553,9 @@ class CoderAgentToolHandlingTest(unittest.IsolatedAsyncioTestCase):
     async def test_formal_turn_cannot_record_another_question(self):
         with tempfile.TemporaryDirectory() as work_dir:
             interpreter = ResultWritingInterpreter(
-                work_dir, "ques2_results.json", {"profit": 2366.6666667}
+                work_dir,
+                "ques2_results.json",
+                {"profit": 2366.6666667, "evidence": 1.0},
             )
             agent = CoderAgent(
                 task_id="t1",

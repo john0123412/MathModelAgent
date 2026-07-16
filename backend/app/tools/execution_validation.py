@@ -23,6 +23,7 @@ import nbformat
 REPORT_NAME = "execution_validation_report.json"
 MANIFEST_NAME = "execution_validation.json"
 FREEZE_NAME = "frozen_results.json"
+MANIFEST_SCHEMA_V2 = "mathmodel.execution-validation.v2"
 _UNSUPPORTED_RESULT_TERMS = ("估计", "沿用问题", "直接取")
 _Q1_REQUIRED_CONTROL_METRICS = {
     "q1_steady_100_open_duration": "100 MPa 稳态开启时长",
@@ -32,6 +33,15 @@ _Q1_REQUIRED_CONTROL_METRICS = {
     "q1_transition_10s_open_duration": "10 秒过渡开启时长",
 }
 _EVIDENCE_COMPARISONS = {"abs_diff_lte", "lte", "gte", "gt", "lt", "between"}
+_PLAN_COMPARISONS = {
+    "le": "lte",
+    "lt": "lt",
+    "ge": "gte",
+    "gt": "gt",
+    "eq": "abs_diff_lte",
+    "within": "lte",
+}
+_SOURCE_NUMBER = re.compile(r"(?<![\w.])[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
 
 
 def _issue(
@@ -85,6 +95,88 @@ def _as_number(value: object) -> float | None:
     return None
 
 
+def _source_contains_number(path: Path, expected: float) -> bool:
+    """Return whether a text result file contains ``expected`` within display rounding.
+
+    The evidence writer accepts CSV/JSON/TXT-style outputs, not opaque claims.
+    A relative tolerance of 5e-4 permits normal four-significant-digit display
+    rounding (for example 0.1543 versus 0.154328) without accepting a different
+    result such as 10562.36 versus 2731.80.
+    """
+    try:
+        text = path.read_bytes().decode("utf-8-sig", errors="ignore")
+    except OSError:
+        return False
+    tolerance = max(1e-9, abs(expected) * 5e-4)
+    for match in _SOURCE_NUMBER.finditer(text):
+        try:
+            candidate = float(match.group(0))
+        except ValueError:
+            continue
+        if math.isfinite(candidate) and abs(candidate - expected) <= tolerance:
+            return True
+    return False
+
+
+def _planned_acceptance_metrics(root: Path, subtask_id: str) -> list[dict[str, Any]]:
+    plan = _read_json(root / "modeler_plan.json")
+    if not plan:
+        return []
+    model_plan = plan.get("model_plan", plan)
+    if not isinstance(model_plan, dict):
+        return []
+    subtasks = model_plan.get("subtasks", {})
+    subtask = subtasks.get(subtask_id, {}) if isinstance(subtasks, dict) else {}
+    metrics = subtask.get("acceptance_metrics", []) if isinstance(subtask, dict) else []
+    return [item for item in metrics if isinstance(item, dict)] if isinstance(metrics, list) else []
+
+
+def _plan_constraint_errors(
+    root: Path,
+    subtask_id: str,
+    constraints: list[dict[str, Any]],
+) -> list[str]:
+    """Bind Coder constraints to the immutable Modeler acceptance contract."""
+    planned = _planned_acceptance_metrics(root, subtask_id)
+    if not planned:
+        return []  # Backward-compatible tasks may not own a structured plan.
+    submitted = {
+        item.get("id"): item
+        for item in constraints
+        if isinstance(item.get("id"), str)
+    }
+    errors: list[str] = []
+    for expected in planned:
+        metric_id = expected.get("key")
+        if not isinstance(metric_id, str) or not metric_id:
+            continue
+        actual = submitted.get(metric_id)
+        if actual is None:
+            errors.append(f"缺少 ModelPlan 验收指标 {metric_id} 的约束证据。")
+            continue
+        plan_comparator = expected.get("comparator")
+        evidence_comparator = _PLAN_COMPARISONS.get(str(plan_comparator))
+        if actual.get("comparison") != evidence_comparator:
+            errors.append(
+                f"约束 {metric_id} 的 comparison 必须保持 ModelPlan 的 {plan_comparator} "
+                f"语义（应为 {evidence_comparator}），不得改为 {actual.get('comparison')}。"
+            )
+        expected_target = _as_number(expected.get("target"))
+        submitted_target = _as_number(actual.get("target"))
+        if expected_target is None:
+            errors.append(f"ModelPlan 验收指标 {metric_id} 的 target 不是可机检数值。")
+        elif submitted_target is None or not math.isclose(
+            submitted_target, expected_target, rel_tol=1e-12, abs_tol=1e-12
+        ):
+            errors.append(
+                f"约束 {metric_id} 的 target 必须保持 ModelPlan 值 {expected_target}，"
+                f"不得改为 {actual.get('target')}。"
+            )
+        if plan_comparator == "eq" and _as_number(actual.get("tolerance")) != 0.0:
+            errors.append(f"等值约束 {metric_id} 必须使用 tolerance=0。")
+    return errors
+
+
 def _task_relative_file(root: Path, value: object, *, field: str) -> tuple[Path | None, str | None]:
     """Resolve an evidence file without allowing a tool call to escape its task.
 
@@ -99,7 +191,9 @@ def _task_relative_file(root: Path, value: object, *, field: str) -> tuple[Path 
     return path, None
 
 
-def _normalise_metric_records(metrics: object) -> tuple[list[dict[str, Any]] | None, list[str]]:
+def _normalise_metric_records(
+    root: Path, metrics: object
+) -> tuple[list[dict[str, Any]] | None, list[str]]:
     if not isinstance(metrics, list) or not metrics:
         return None, ["metrics 必须是非空数组。"]
     normalised: list[dict[str, Any]] = []
@@ -115,6 +209,11 @@ def _normalise_metric_records(metrics: object) -> tuple[list[dict[str, Any]] | N
         value = _as_number(metric.get("value"))
         unit = metric.get("unit")
         explanation = metric.get("explanation")
+        source_path, source_error = _task_relative_file(
+            root, metric.get("source_path"), field=f"metrics[{index}].source_path"
+        )
+        if source_error:
+            errors.append(source_error)
         if not isinstance(metric_id, str) or not metric_id.strip():
             errors.append(f"metrics[{index}].id 必须是非空字符串。")
         elif metric_id in seen_ids:
@@ -125,6 +224,10 @@ def _normalise_metric_records(metrics: object) -> tuple[list[dict[str, Any]] | N
             errors.append(f"metrics[{index}].label 必须是非空字符串。")
         if value is None:
             errors.append(f"metrics[{index}].value 必须是有限数值。")
+        elif source_path is not None and not _source_contains_number(source_path, value):
+            errors.append(
+                f"metrics[{index}].value={value} 无法在 source_path 中复查。"
+            )
         if not isinstance(unit, str):
             errors.append(f"metrics[{index}].unit 必须是字符串。")
         if not isinstance(explanation, str) or not explanation.strip():
@@ -153,6 +256,10 @@ def _normalise_metric_records(metrics: object) -> tuple[list[dict[str, Any]] | N
                     "unit": unit,
                     "explanation": explanation,
                     "aliases": aliases,
+                    "source": {
+                        "path": str(source_path.relative_to(root)).replace("\\", "/"),
+                        "sha256": _sha256(source_path),
+                    },
                 }
             )
     return (normalised if not errors else None), errors
@@ -188,6 +295,12 @@ def _normalise_constraint_records(
         )
         if source_error:
             errors.append(source_error)
+        if actual is not None and source_path is not None and not _source_contains_number(
+            source_path, actual
+        ):
+            errors.append(
+                f"constraints[{index}].actual={actual} 无法在 source_path 中复查。"
+            )
 
         result: dict[str, Any] = {
             "id": constraint_id,
@@ -272,10 +385,15 @@ def record_execution_evidence(
     if not root.is_dir():
         return {"ok": False, "errors": ["任务工作目录不存在。"]}
 
-    normalised_metrics, metric_errors = _normalise_metric_records(metrics)
+    normalised_metrics, metric_errors = _normalise_metric_records(root, metrics)
     normalised_constraints, constraint_errors = _normalise_constraint_records(root, constraints)
     normalised_figures, figure_errors = _normalise_figure_records(root, figures)
-    errors = metric_errors + constraint_errors + figure_errors
+    plan_errors = (
+        _plan_constraint_errors(root, subtask_id, normalised_constraints)
+        if normalised_constraints is not None
+        else []
+    )
+    errors = metric_errors + constraint_errors + figure_errors + plan_errors
     if errors or normalised_metrics is None or normalised_constraints is None or normalised_figures is None:
         return {"ok": False, "errors": errors}
 
@@ -294,7 +412,7 @@ def record_execution_evidence(
     manifest_path = root / MANIFEST_NAME
     existing = _read_json(manifest_path) if manifest_path.exists() else None
     if existing is None:
-        manifest: dict[str, Any] = {"schema_version": "mathmodel.execution-validation.v1", "subtasks": []}
+        manifest: dict[str, Any] = {"schema_version": MANIFEST_SCHEMA_V2, "subtasks": []}
     else:
         existing_subtasks = existing.get("subtasks")
         if not isinstance(existing_subtasks, list):
@@ -342,7 +460,12 @@ def record_execution_evidence(
     }
 
 
-def _check_constraint(constraint: object, work_dir: Path) -> tuple[bool, str, dict[str, Any]]:
+def _check_constraint(
+    constraint: object,
+    work_dir: Path,
+    *,
+    require_source_value: bool = False,
+) -> tuple[bool, str, dict[str, Any]]:
     if not isinstance(constraint, dict):
         return False, "约束必须是对象。", {}
 
@@ -365,6 +488,8 @@ def _check_constraint(constraint: object, work_dir: Path) -> tuple[bool, str, di
     if not isinstance(expected_hash, str) or _sha256(source_path) != expected_hash:
         return False, f"约束 {constraint_id} 的 source.sha256 与当前文件不一致。", evidence
     evidence["source"] = {"path": str(source_path.relative_to(work_dir)), "sha256": expected_hash}
+    if require_source_value and not _source_contains_number(source_path, actual):
+        return False, f"约束 {constraint_id} 的 actual 无法在哈希源文件中复查。", evidence
 
     target = _as_number(constraint.get("target"))
     tolerance = _as_number(constraint.get("tolerance"))
@@ -404,6 +529,32 @@ def _check_constraint(constraint: object, work_dir: Path) -> tuple[bool, str, di
         return False, f"约束 {constraint_id} 的 comparison 不受支持。", evidence
     evidence.update({"actual": actual, "target": target, "tolerance": tolerance, "lower": lower, "upper": upper})
     return passed, message, evidence
+
+
+def _check_metric_source(
+    metric: object, work_dir: Path
+) -> tuple[bool, str, dict[str, Any]]:
+    if not isinstance(metric, dict):
+        return False, "指标必须是对象。", {}
+    metric_id = metric.get("id")
+    value = _as_number(metric.get("value"))
+    source = metric.get("source")
+    evidence = {"id": metric_id, "value": value}
+    if value is None or not isinstance(source, dict):
+        return False, f"指标 {metric_id} 缺少有限 value 或哈希 source。", evidence
+    source_path = _safe_source_path(work_dir, source.get("path"))
+    expected_hash = source.get("sha256")
+    if source_path is None or not source_path.is_file():
+        return False, f"指标 {metric_id} 的 source.path 不存在或越出任务目录。", evidence
+    if not isinstance(expected_hash, str) or _sha256(source_path) != expected_hash:
+        return False, f"指标 {metric_id} 的 source.sha256 与当前文件不一致。", evidence
+    evidence["source"] = {
+        "path": str(source_path.relative_to(work_dir)),
+        "sha256": expected_hash,
+    }
+    if not _source_contains_number(source_path, value):
+        return False, f"指标 {metric_id} 的 value 无法在哈希源文件中复查。", evidence
+    return True, f"指标 {metric_id} 的数值可在哈希源文件中复查。", evidence
 
 
 def _metrics_valid(metrics: object) -> bool:
@@ -672,6 +823,7 @@ def _manifest_issues(
     relief_validation_required = _contract_requires_relief_validation(work_dir)
     q1_valve_duration_outputs_required = _contract_requires_q1_valve_duration_outputs(work_dir)
     linear_programming_evidence_required = _contract_requires_linear_programming_evidence(work_dir)
+    strict_value_sources = manifest.get("schema_version") == MANIFEST_SCHEMA_V2
     for subtask in required_subtasks:
         item = by_id.get(subtask)
         if not isinstance(item, dict):
@@ -684,8 +836,24 @@ def _manifest_issues(
         if not isinstance(constraints, list) or not constraints:
             issues.append(_issue(f"{subtask}.constraints", False, f"{subtask} 缺少可计算的约束验证。"))
             continue
+        plan_errors = _plan_constraint_errors(work_dir, subtask, constraints)
+        issues.append(
+            _issue(
+                f"{subtask}.plan_acceptance_contract",
+                not plan_errors,
+                (
+                    f"{subtask} 的约束方向和目标与 ModelPlan 一致。"
+                    if not plan_errors
+                    else "；".join(plan_errors)
+                ),
+            )
+        )
         for constraint in constraints:
-            passed, message, evidence = _check_constraint(constraint, work_dir)
+            passed, message, evidence = _check_constraint(
+                constraint,
+                work_dir,
+                require_source_value=strict_value_sources,
+            )
             constraint_id = constraint.get("id", "unknown") if isinstance(constraint, dict) else "unknown"
             issues.append(_issue(f"{subtask}.constraint.{constraint_id}", passed, message, evidence))
 
@@ -696,6 +864,29 @@ def _manifest_issues(
             q1_valve_duration_outputs_required=q1_valve_duration_outputs_required,
             linear_programming_evidence_required=linear_programming_evidence_required,
         ))
+
+        if strict_value_sources:
+            subtask_metrics = item.get("metrics", [])
+            if not isinstance(subtask_metrics, list) or not subtask_metrics:
+                issues.append(
+                    _issue(
+                        f"{subtask}.metric_sources",
+                        False,
+                        f"{subtask} 缺少带哈希来源的指标。",
+                    )
+                )
+            else:
+                for index, metric in enumerate(subtask_metrics):
+                    passed, message, evidence = _check_metric_source(metric, work_dir)
+                    metric_id = metric.get("id", index) if isinstance(metric, dict) else index
+                    issues.append(
+                        _issue(
+                            f"{subtask}.metric_source.{metric_id}",
+                            passed,
+                            message,
+                            evidence,
+                        )
+                    )
 
         figures = item.get("figures", [])
         if not isinstance(figures, list):
@@ -776,6 +967,10 @@ def write_frozen_results_from_execution_validation(
             if isinstance(constraint, dict) and isinstance(constraint.get("source"), dict):
                 source = constraint["source"]
                 add_source(source.get("path"), source.get("sha256"), "constraint")
+        for metric in subtask.get("metrics", []):
+            if isinstance(metric, dict) and isinstance(metric.get("source"), dict):
+                source = metric["source"]
+                add_source(source.get("path"), source.get("sha256"), "metric")
         for figure in subtask.get("figures", []):
             if isinstance(figure, dict):
                 add_source(figure.get("data_path"), figure.get("data_sha256"), "figure_data")

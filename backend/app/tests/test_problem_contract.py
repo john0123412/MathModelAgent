@@ -249,7 +249,7 @@ class TestModelerContractGuard(unittest.IsolatedAsyncioTestCase):
                             "key": "result_check",
                             "label": "结果复核值",
                             "comparator": "eq",
-                            "target": "independent_recalculation",
+                            "target": 1,
                             "description": "与独立复算结果比较",
                         }
                     ],
@@ -352,6 +352,51 @@ class TestModelerContractGuard(unittest.IsolatedAsyncioTestCase):
         self.assertIn("schema_version", repair_messages[0])
         self.assertIn("expected_artifacts.0.kind", repair_messages[1])
         self.assertIn("acceptance_metrics.0.comparator", repair_messages[2])
+
+    async def test_modeler_repairs_non_numeric_acceptance_target(self):
+        invalid = self._minimal_model_plan()
+        invalid["subtasks"]["ques1"]["acceptance_metrics"][0]["target"] = "长度单位"
+        valid = self._minimal_model_plan()
+        agent = ModelerAgent(
+            task_id="numeric-target-repair-test",
+            model=SequencedModel(
+                [
+                    json.dumps(invalid, ensure_ascii=False),
+                    json.dumps(valid, ensure_ascii=False),
+                ]
+            ),
+        )
+
+        result = await agent.run(
+            CoordinatorToModeler(
+                questions={"ques_count": 1, "ques1": "推导公式并完成量纲复核"},
+                ques_count=1,
+                problem_contract=ProblemContract(),
+            )
+        )
+
+        metric = result.model_plan.subtasks["ques1"].acceptance_metrics[0]
+        self.assertEqual(metric.target, 1.0)
+        repair_message = next(
+            str(message.get("content", ""))
+            for message in agent.chat_history
+            if message.get("role") == "user"
+            and "acceptance_metrics.0.target" in str(message.get("content", ""))
+        )
+        self.assertIn("有限 JSON 数值", repair_message)
+        self.assertIn("eq 1", repair_message)
+
+    def test_acceptance_metric_rejects_non_finite_target(self):
+        for target in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(target=target):
+                with self.assertRaises(ValueError):
+                    AcceptanceMetric(
+                        key="dimension_check",
+                        label="量纲检查",
+                        comparator="eq",
+                        target=target,
+                        description="以1表示量纲检查通过",
+                    )
 
 
 class TestStructuredModelPlan(unittest.TestCase):

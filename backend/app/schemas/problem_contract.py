@@ -83,6 +83,26 @@ _INJECTION_FREQUENCY = re.compile(
     re.IGNORECASE,
 )
 
+_ATTACHMENT_ANGLE_SAMPLE_PAIR = re.compile(
+    r"附件(\d+)(?:\.xlsx)?(?:和|与|、|及)附件(\d+)(?:\.xlsx)?"
+    r"[^。；]{0,100}?入射角(?:分别)?(?:为|是)?"
+    r"(\d+(?:\.\d+)?)\s*[°度](?:和|与|、|及)"
+    r"(\d+(?:\.\d+)?)\s*[°度]"
+    r"[^。；]{0,60}?同一(?:块|片|个)?([^，。；]{1,24}?)(?:的)?测试结果",
+    re.IGNORECASE,
+)
+
+_SAME_SAMPLE = re.compile(r"同一(?:块|片|个)?[^。；]{0,10}?(?:晶圆|样品)")
+_INDEPENDENT_SAMPLE = re.compile(
+    r"(?:(?:不同|独立|分别的|两块|两片|两个)[^。；]{0,8}(?:晶圆|样品)"
+    r"|(?:晶圆|样品)[^。；]{0,8}(?:不同|独立))"
+)
+_OVERRIDE_NEGATION = re.compile(
+    r"(?:不|不得|禁止|避免|拒绝|不能|不可|不应|无需)[^。；]{0,16}"
+    r"(?:0(?:\.0+)?\s*[°度]|垂直入射|法向入射|正入射)"
+)
+_ZERO_DEGREE = re.compile(r"(?<!\d)0(?:\.0+)?\s*[°度]")
+
 
 _LINEAR_PROGRAMMING_TERMS = ("线性规划", "最优生产", "最大利润", "最小成本", "资源约束", "机器时间", "人工时间")
 _DATA_ANALYSIS_TERMS = ("数据集", "样本", "预测", "回归", "统计分析", "数据分析", "附件")
@@ -102,6 +122,63 @@ def build_problem_contract(problem_text: str) -> ProblemContract:
     """提取可可靠识别的题面事实；无法识别时返回空契约。"""
     normalized = re.sub(r"\s+", "", problem_text)
     contract = ProblemContract()
+    attachment_pairs = list(_ATTACHMENT_ANGLE_SAMPLE_PAIR.finditer(normalized))
+    incident_angles: list[float] = []
+    for pair in attachment_pairs:
+        first_attachment, second_attachment, first_angle, second_angle, material = (
+            pair.groups()
+        )
+        for raw_angle in (first_angle, second_angle):
+            angle = float(raw_angle)
+            if angle not in incident_angles:
+                incident_angles.append(angle)
+        material = material.removeprefix("针对").strip()
+        _append_requirement_once(
+            contract,
+            ContractRequirement(
+                key=(
+                    "paired_angle_same_sample_"
+                    f"{first_attachment}_{second_attachment}"
+                ),
+                label=(
+                    f"附件{first_attachment}/{second_attachment}须按同一{material}在"
+                    f"{float(first_angle):g}°与{float(second_angle):g}°下的配对测量联合建模"
+                ),
+                evidence_terms=[
+                    f"附件{first_attachment}",
+                    f"附件{second_attachment}",
+                    f"{float(first_angle):g}°",
+                    f"{float(second_angle):g}°",
+                    "同一",
+                ],
+                source="题面附件说明中的样品、附件与双角度对应关系",
+            ),
+        )
+    for index, angle in enumerate(incident_angles, start=1):
+        contract.immutable_parameters.append(
+            ContractParameter(
+                key=f"incident_angle_{index}",
+                label=f"附件测量入射角 {index}",
+                symbol=f"theta_{index}",
+                value=angle,
+                unit="°",
+                source="题面附件说明中的实测入射角",
+            )
+        )
+    if incident_angles:
+        _append_requirement_once(
+            contract,
+            ContractRequirement(
+                key="incident_angle_pair",
+                label=(
+                    "实测数据算法须使用题面给定的 "
+                    + " 与 ".join(f"{angle:g}°" for angle in incident_angles)
+                    + " 入射角，不得替换为 0° 或垂直入射"
+                ),
+                evidence_terms=[f"{angle:g}°" for angle in incident_angles],
+                source="题面附件说明中的实测入射角",
+            ),
+        )
     coefficient = _FLOW_COEFFICIENT.search(normalized)
     if coefficient:
         contract.immutable_parameters.append(
@@ -234,6 +311,9 @@ def build_problem_contract(problem_text: str) -> ProblemContract:
 
 def _plan_text(plan: object) -> str:
     """Return all plan fields as searchable text without importing A2A here."""
+    sections = _plan_sections(plan)
+    if sections:
+        return "\n".join(sections.values())
     if hasattr(plan, "model_plan"):
         plan = getattr(plan, "model_plan") or plan
     if hasattr(plan, "to_questions_solution"):
@@ -241,6 +321,86 @@ def _plan_text(plan: object) -> str:
     if isinstance(plan, dict):
         return "\n".join(str(value) for value in plan.values())
     return str(plan)
+
+
+def _plan_sections(plan: object) -> dict[str, str]:
+    """Return the compatibility question map for structured and legacy plans."""
+    model_plan = getattr(plan, "model_plan", None)
+    if model_plan is not None and hasattr(model_plan, "to_questions_solution"):
+        return {
+            str(key): str(value)
+            for key, value in model_plan.to_questions_solution().items()
+        }
+    questions_solution = getattr(plan, "questions_solution", None)
+    if isinstance(questions_solution, dict):
+        return {str(key): str(value) for key, value in questions_solution.items()}
+    if isinstance(plan, dict):
+        return {str(key): str(value) for key, value in plan.items()}
+    return {}
+
+
+def _mentions_attachment_pair(text: str, first: str, second: str) -> bool:
+    compact = re.sub(r"\s+", "", text)
+    if f"附件{first}" in compact and f"附件{second}" in compact:
+        return True
+    return bool(
+        re.search(
+            rf"附件{re.escape(first)}(?:和|与|、|及|/)(?:附件)?{re.escape(second)}",
+            compact,
+        )
+    )
+
+
+def _mentions_angle(text: str, angle: float) -> bool:
+    return bool(
+        re.search(
+            rf"(?<!\d){float(angle):g}(?:\.0+)?\s*[°度]",
+            text,
+        )
+    )
+
+
+def _contains_incident_angle_override(text: str) -> bool:
+    """Detect affirmative replacement by 0°/normal incidence, ignoring prohibitions."""
+    for clause in re.split(r"[。；;\n]", text):
+        compact = re.sub(r"\s+", "", clause)
+        if not compact or _OVERRIDE_NEGATION.search(compact):
+            continue
+        if any(term in compact for term in ("垂直入射", "法向入射", "正入射")):
+            return True
+        if (
+            _ZERO_DEGREE.search(compact)
+            and re.search(r"(?:入射角|theta|θ)", compact, re.IGNORECASE)
+            and re.search(r"(?:取|设|令|假设|近似|统一|采用|按|视为|=|为)", compact)
+        ):
+            return True
+    return False
+
+
+def _paired_requirement_plan_text(
+    requirement: ContractRequirement,
+    plan: object,
+    questions: dict[str, str | int] | None,
+) -> tuple[str, str, str]:
+    """Select the subtask that owns a concrete attachment pair requirement."""
+    match = re.fullmatch(r"paired_angle_same_sample_(\d+)_(\d+)", requirement.key)
+    if match is None:
+        raise ValueError(f"非法附件配对契约键: {requirement.key}")
+    first, second = match.groups()
+    sections = _plan_sections(plan)
+    matched_keys = [
+        key
+        for key, question in (questions or {}).items()
+        if key in sections and _mentions_attachment_pair(str(question), first, second)
+    ]
+    if not matched_keys:
+        conventional_key = {("1", "2"): "ques2", ("3", "4"): "ques3"}.get(
+            (first, second)
+        )
+        if conventional_key in sections:
+            matched_keys = [conventional_key]
+    selected = "\n".join(sections[key] for key in matched_keys)
+    return selected or _plan_text(plan), first, second
 
 
 def _subtask_plans(plan: object) -> dict[str, object]:
@@ -369,7 +529,37 @@ def validate_modeler_plan(
         # free-text checkpoints. They are upgraded on the next Modeler run.
         if requirement.plugin:
             continue
-        if requirement.key == "problem1_transition_times":
+        if requirement.key.startswith("paired_angle_same_sample_"):
+            requirement_text, first, second = _paired_requirement_plan_text(
+                requirement, plan, questions
+            )
+            expected_angles = [
+                float(parameter.value)
+                for parameter in contract.immutable_parameters
+                if parameter.key.startswith("incident_angle_")
+            ]
+            has_pair = _mentions_attachment_pair(requirement_text, first, second)
+            has_same_sample = bool(_SAME_SAMPLE.search(requirement_text))
+            has_angles = all(
+                _mentions_angle(requirement_text, angle) for angle in expected_angles
+            )
+            if _INDEPENDENT_SAMPLE.search(requirement_text):
+                violations.append(
+                    f"附件{first}/{second}被方案改写为不同或独立样品"
+                )
+            if _contains_incident_angle_override(requirement_text):
+                violations.append(
+                    f"附件{first}/{second}的实测入射角被方案替换为 0° 或垂直入射"
+                )
+            covered = has_pair and has_same_sample and has_angles
+        elif requirement.key == "incident_angle_pair":
+            expected_angles = [
+                float(parameter.value)
+                for parameter in contract.immutable_parameters
+                if parameter.key.startswith("incident_angle_")
+            ]
+            covered = all(_mentions_angle(normalized, angle) for angle in expected_angles)
+        elif requirement.key == "problem1_transition_times":
             covered = all(re.search(rf"{second}(?:秒|s)", normalized, re.IGNORECASE) for second in (2, 5, 10))
         elif requirement.key == "problem1_valve_duration_outputs":
             covered = (

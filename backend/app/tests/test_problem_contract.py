@@ -35,8 +35,94 @@ HIGH_PRESSURE_PIPE_Q1_CONTROL = HIGH_PRESSURE_PIPE_FIXED_CONDITIONS + """
 如果将压力从 100MPa 增加到 150MPa，并分别经过约 2 秒、5 秒、10 秒后稳定，开启时长应如何调整？
 """
 
+OPTICAL_ANGLE_PAIR_PROBLEM = """
+问题 1 如果考虑外延层和衬底界面只有一次反射、透射所产生的干涉条纹，建立数学模型。
+问题 2 对附件 1 和附件 2 提供的碳化硅晶圆片光谱实测数据给出计算结果。
+问题 3 分析附件 3 和附件 4 提供的硅晶圆片测试结果是否出现多光束干涉。
+附件说明：(1) 附件 1.xlsx 和附件 2.xlsx 是入射角分别为 10° 和 15° 时针对同一块碳化硅晶圆片的测试结果。
+(2) 附件 3.xlsx 和附件 4.xlsx 是入射角分别为 10° 和 15° 时针对同一块硅晶圆片的测试结果。
+"""
+
 
 class TestProblemContract(unittest.TestCase):
+    def test_extracts_optical_angle_pairs_and_same_sample_relationships(self):
+        contract = build_problem_contract(OPTICAL_ANGLE_PAIR_PROBLEM)
+        values = {
+            item.key: item.value
+            for item in contract.immutable_parameters
+            if item.key.startswith("incident_angle_")
+        }
+        self.assertEqual(values, {"incident_angle_1": 10.0, "incident_angle_2": 15.0})
+        requirement_keys = {item.key for item in contract.required_requirements}
+        self.assertTrue(
+            {
+                "incident_angle_pair",
+                "paired_angle_same_sample_1_2",
+                "paired_angle_same_sample_3_4",
+            }.issubset(requirement_keys)
+        )
+
+    def test_accepts_question_scoped_dual_angle_same_sample_plan(self):
+        result = validate_modeler_plan(
+            build_problem_contract(OPTICAL_ANGLE_PAIR_PROBLEM),
+            {
+                "ques1": "推导任意入射角下的双光束干涉模型。",
+                "ques2": "附件1和附件2是同一块碳化硅晶圆在10°与15°下的配对测量，联合估计厚度。",
+                "ques3": "附件3和附件4是同一块硅晶圆在10°与15°下的配对测量，检验多光束干涉。",
+            },
+        )
+        self.assertTrue(result.valid, result.model_dump_json())
+
+    def test_rejects_zero_degree_override_even_if_angles_are_mentioned_elsewhere(self):
+        result = validate_modeler_plan(
+            build_problem_contract(OPTICAL_ANGLE_PAIR_PROBLEM),
+            {
+                "ques1": "题面给出10°和15°，先推导一般公式。",
+                "ques2": "附件1和附件2作为两片独立晶圆，采用垂直入射近似，入射角0°。",
+                "ques3": "附件3和附件4为同一块硅晶圆，但统一令入射角为0°。",
+            },
+        )
+        self.assertFalse(result.valid)
+        violation_text = " ".join(result.violations)
+        self.assertIn("附件1/2", violation_text)
+        self.assertIn("附件3/4", violation_text)
+        self.assertIn("0°", violation_text)
+        self.assertIn("独立样品", violation_text)
+
+    def test_rejects_swapped_attachment_pair_assignment(self):
+        result = validate_modeler_plan(
+            build_problem_contract(OPTICAL_ANGLE_PAIR_PROBLEM),
+            {
+                "ques1": "建立一般干涉模型。",
+                "ques2": "附件1和附件3为同一块晶圆，在10°和15°下联合计算。",
+                "ques3": "附件2和附件4为同一块晶圆，在10°和15°下联合计算。",
+            },
+        )
+        self.assertFalse(result.valid)
+        missing_text = " ".join(result.missing_requirements)
+        self.assertIn("附件1/2", missing_text)
+        self.assertIn("附件3/4", missing_text)
+
+    def test_negative_zero_degree_constraint_is_not_treated_as_override(self):
+        result = validate_modeler_plan(
+            build_problem_contract(OPTICAL_ANGLE_PAIR_PROBLEM),
+            {
+                "ques1": "推导一般模型。",
+                "ques2": "附件1/2为同一块碳化硅晶圆在10°、15°下的测量，不得采用0°近似。",
+                "ques3": "附件3/4为同一块硅晶圆在10°、15°下的测量，禁止垂直入射替换。",
+            },
+        )
+        self.assertTrue(result.valid, result.model_dump_json())
+
+    def test_non_optical_angle_text_does_not_create_attachment_contract(self):
+        contract = build_problem_contract("斜坡角度为10°和15°，比较两个独立试件。")
+        self.assertFalse(
+            any(
+                item.key.startswith("incident_angle_")
+                for item in contract.immutable_parameters
+            )
+        )
+
     def test_extracts_hard_parameter_and_required_outputs(self):
         contract = build_problem_contract(HIGH_PRESSURE_PIPE_PROBLEM)
         self.assertEqual(contract.immutable_parameters[0].value, 0.85)

@@ -1489,17 +1489,12 @@ class MathModelWorkFlow(WorkFlow):
 
         user_input_provider = lambda: user_input_queue.pop_all(self.task_id)  # noqa: E731
 
-        plan_validation = validate_modeler_plan(
-            problem_contract, modeler_response.questions_solution
-        )
-        if not plan_validation.valid:
-            await redis_manager.publish_message(
-                self.task_id,
-                SystemMessage(
-                    content="检测到历史建模方案与当前题面参数契约冲突，正在重新建模并清理未验收计算上下文...",
-                    type="warning",
-                ),
-            )
+        original_modeler_response = modeler_response
+
+        async def _remodel() -> ModelerToCoder:
+            # 历史方案已经违反当前契约，其执行上下文不得再被重放。先归档，
+            # 再用干净建模手重建；新方案仍须由共享 helper 做第二次独立复核。
+            self._archive_unverified_execution_context()
             modeler_agent = ModelerAgent(
                 self.task_id,
                 modeler_llm,
@@ -1507,7 +1502,7 @@ class MathModelWorkFlow(WorkFlow):
                 cancel_event=self.cancel_event,
                 user_input_provider=user_input_provider,
             )
-            modeler_response = await modeler_agent.run(
+            return await modeler_agent.run(
                 CoordinatorToModeler(
                     questions=self.questions,
                     ques_count=self.ques_count,
@@ -1515,7 +1510,11 @@ class MathModelWorkFlow(WorkFlow):
                 ),
                 recovery_context=recovery_context,
             )
-            self._archive_unverified_execution_context()
+
+        modeler_response = await self._validate_plan_with_one_remodel(
+            problem_contract, modeler_response, _remodel
+        )
+        if modeler_response is not original_modeler_response:
             checkpoint_manager.replace_modeler_response(modeler_response.model_dump())
             checkpoint = checkpoint_manager.load() or checkpoint
         self._write_modeler_plan(modeler_response)

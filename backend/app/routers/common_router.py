@@ -13,6 +13,7 @@ from app.schemas.enums import CompTemplate
 from app.services.redis_manager import redis_manager
 from app.services.task_status import read_task_status
 from app.services.token_usage import read_token_usage
+from app.tools.interpreter_factory import get_code_execution_status
 from app.utils.log_util import logger
 
 router = APIRouter()
@@ -166,14 +167,15 @@ async def track(task_id: str):
 
 @router.get("/status")
 async def get_service_status():
-    """获取后端和 Redis 的运行状态。"""
+    """获取后端、Redis 和代码执行后端的运行状态。"""
     status = {
         "backend": {
             "status": "running",
             "message": "Backend service is running",
             "feature_warnings": _feature_guardrail_warnings(),
         },
-        "redis": {"status": "unknown", "message": "Redis connection status unknown"}
+        "redis": {"status": "unknown", "message": "Redis connection status unknown"},
+        "code_execution": get_code_execution_status(),
     }
 
     # 检查Redis连接状态

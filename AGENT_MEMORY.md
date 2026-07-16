@@ -201,9 +201,11 @@
   WebSocket Origin 和 Host 均为明确 allowlist（防 DNS rebinding）；工作区文件不再以任意静态目录直出，
   只有安全单层文件名可下载，非栅格图片附件强制下载。新 task_id 使用 128 位随机
   capability 后缀；上传按单文件/总量流式限额写入。
-- 模型生成代码默认必须通过 E2B 远程沙箱执行（`CODE_INTERPRETER_KIND=remote`）。新增
-  `auto` 模式：有 E2B 时优先远程沙箱；缺少 E2B 时仅在显式
-  `ALLOW_LOCAL_CODE_EXECUTION=true` 的本地执行 Compose 覆盖文件中降级到 Jupyter。
+- 模型生成代码默认必须通过 E2B 远程沙箱执行（`CODE_INTERPRETER_KIND=remote`）。可信单用户
+  Docker 环境可加载本地执行 Compose 覆盖；该覆盖明确设置 `CODE_INTERPRETER_KIND=local` 和
+  `ALLOW_LOCAL_CODE_EXECUTION=true`，不因 E2B 配置变化而切换后端。若要让普通 `docker compose`
+  命令持续加载该覆盖，只能在本机 gitignored 根目录 `.env` 中显式设置 `COMPOSE_FILE`；版本库
+  `.env.example` 仅保留注释示例，安全默认仍为 remote/拒绝本地执行。
   基础 Compose 不挂载完整源码，后端镜像排除 `.env.*`；本地模式只支持受控 Linux Docker，
   内核启动或重启前必须把当前任务目录交给专用非 root `mma-runner` 用户，并在 exec 前降权；
   后端仅在该覆盖文件中保留 `CHOWN`、`DAC_OVERRIDE`、`SETGID`、`SETUID`、`KILL` 五项能力来
@@ -588,3 +590,31 @@ uv run python scripts/smoke_pdf_export.py
 - [2026-07-16] execution manifest v2 真实任务暴露 ModelPlan/证据协议死锁：`AcceptanceMetric.target` 曾允许 `"长度单位"` 等字符串，但 recorder/final validator 只接受有限数值，导致 schema 合法计划永远无法提交完整证据。现已将 target 收紧为有限数值，初始提示和每轮修复提醒都明确禁止字符串、数组、null、NaN/无穷值；量纲/公式等定性检查统一使用 `eq 1` 数值标志并在 unit/description 解释。真实死锁形态回归验证首轮字符串 target 被定位到完整字段路径、第二轮数值 target 收敛，NaN/±Inf 均拒绝；干净分支全量379项后端单测通过（1项环境跳过），Ruff通过。该变更不改变启动、导出、模板资源或人工复核口径，其余说明文件无需更新。
 
 - [2026-07-16] 开放性科学判定的 ModelPlan 验收指标改为结论中立：当正式问题要求判断/检验“是否存在、发生、显著或产生影响”时，独立计划复核会拒绝正向改善阈值（如 `fit_improvement ge 0.01`）、强制显著阈值（如 `p_value le 0.05`）和预设存在标志，要求改为模型比较已完成、数据覆盖、数值有限或结果可复算等过程指标；非开放性优化目标、误差阈值与拟合质量指标不受影响。初始 Modeler 提示与每轮协议提醒已同步；真实暴露形式和中立替代均有回归，全量381项后端单测通过（1项环境跳过），Ruff通过。该变更只调整内部建模计划验证和失败诊断，不改变启动、执行后端、导出、模板资源或最终人工复核口径，因此 STARTUP、PDF/CUMCM 模板说明、最终复核清单及 export profile README 无需更新。
+
+- [2026-07-15] 2025 CUMCM B 题真实任务 `20260715-152645-104a0f4439c6ae3aaf57678f1a28e8e0` 使用用户授权的 Qianxing OpenAI Responses 网关启动；`gpt-5.6-sol` Coordinator 在约 20 秒内成功拆分 3 问（记录 6434 tokens），但 Modeler 的三次真实请求均在项目 `LLM_REQUEST_TIMEOUT_SECONDS=90` 上限触发 `TimeoutError`，任务最终为 `failed`。任务只有题面/四个附件、`problem_contract.json`、`task_request.json`、状态和 Coordinator token 统计；没有 `checkpoint.json`、执行验证/冻结、`res.*`、preflight、PDF 或 manifest。最小 Responses 探针和强制工具调用探针此前均成功，且同一网关/同一 `gpt-5.6-sol` 的 Coordinator 成功，容器资源空闲，因此当前故障定位为该模型路由在 Modeler 的约 5K 字符系统提示、约 8K 最大输出场景下首字节/完整响应耗时超过 90 秒，而非鉴权、协议、Docker、本地代码执行或导出故障。当前处置：按连续失败规程停止自动重试并恢复默认 remote 执行模式；若指定决策人授权一次恢复，优先人工切换已通过 Responses 探针的更快模型/受控缩小 Modeler 输出预算后从同一任务的 `task_request.json` 恢复，不重复提交新任务。
+
+- [2026-07-15] 用户随后明确授权一次 provider 变更恢复；原任务把 Modeler 切到 `gpt-5.6-luna` 并将单次请求上限调至 300 秒，但恢复尚未进入 Modeler，Coordinator 的 `gpt-5.6-sol` 即连续三次返回 Qianxing 分组 `model_not_found / 无可用 distributor`。随后对 `/models` 列出的全部 10 个模型逐一做最小 Responses 探针，并对 3 个候选做 Chat Completions 探针，均返回同类 `model_not_found`；用户确认该 key 已失效。当前处置：保留原任务失败证据，不再续传；已移除本地 Qianxing 覆盖块并恢复 `backend/.env.dev` 原有 `mimo-v2.5` 四 Agent 配置，最小 Responses 文本探针实际成功。下一次真实验收使用同一 2025 B 题及四个附件创建新任务，不复用已耗尽恢复授权的原任务。
+
+- [2026-07-15] 原 `mimo-v2.5` 备份配置的新 2025 B 题真实任务 `20260715-154337-32760841cc38f13201a82a31b7d3bd64` 已通过 Coordinator、Modeler schema 纠错、基础 checkpoint、EDA、多轮本地代码执行和变量快照；问题 1 生成 `ques1_results.csv` 等数值文件后，首次受控证据提交被服务器校验拒绝，后续达到强制证据边界时连续出现 `BadRequestError` 并熔断，任务为 `failed`，仅保存 `eda` Coder checkpoint。根因已由代码与本地 OpenAI SDK 类型定义确认：Responses API 的 `tool_choice` 接受字面量 `required`，但 `OpenAIResponsesProvider._convert_tool_choice()` 错误返回缺少函数名的 `{"type":"function"}`，兼容网关因此拒绝请求；同时早期代码失败把非正式诊断报告的 `PASS` 写进错误消息，产生“未提供证据；诊断 PASS”的误导。当前处置：先修正 Responses required 映射和诊断文案并增加回归测试，重建 Docker 后只从同一 checkpoint 恢复，不重复 EDA/规划；若证据或数学门禁仍失败，按既有有限回修规则处理。
+
+- [2026-07-15] 同一 Mimo 真实任务在修正 Responses `required` 映射后从 checkpoint 成功恢复，变量快照实际恢复，`ques1/ques2/ques3` 均提交了受控执行证据；最终全量验证除三项 `balance_residual` 外全部通过。验证器错误地要求光学干涉测厚三问提供“质量/流量（或等价守恒）残差”，导致 `execution_validation_report.json = FAIL`，并触发一次无法消除规则误报的自动回修。当前处置：停止继续消耗 provider；将守恒残差门禁改为只有任务证据明确声明守恒型模型时才要求，并增加光学/非守恒题回归，同时保留对真正质量/流量守恒题的硬门禁。修复验证后仅从现有 checkpoint 续传一次，不重复 Coordinator、Modeler 和已通过的计算证据。
+
+- [2026-07-16] 上述守恒门禁修复已使同一真实任务的 25 项完整执行验证全部通过，checkpoint 复用日志确认跳过三问 Coder，270 个变量恢复并生成 `frozen_results.json`；Writer 首节检索期间 Docker Desktop 引擎退出，最后一次外部调用记录为 `APIConnectionError`，随后进程中断且未生成 `res.md`。后端重启已按设计把遗留 `resuming` 标记为 `interrupted`，三个服务恢复 healthy，冻结结果、checkpoint 和执行证据未丢失。当前处置：从 `interrupted` checkpoint 继续 Writer/导出，不重跑已通过计算；若 Writer/provider 再次连续失败，按恢复规程停止重复调用并保留冻结产物。
+
+- [2026-07-16] Docker 恢复后的同一 Mimo 任务已完成全部 Writer 章节并生成 `res.md/res.json`，但 `paper_preflight_report.json = FAIL`，且正确停止 PDF/DOCX 导出。唯一正文错误是问题 1 将冻结证据中的 `n=2.6, 2×2.6×10=52 μm` 混写为 `n=2.65, ...=53 μm`；该句同时触发 `result_consistency` 与 `figure_result_consistency`。现有定向 Writer 回修仅允许前者，因后者不在可修复集合而没有执行任何回修（`paper_repair_attempts=0`）。当前处置：让 `figure_result_consistency` 使用与结果一致性相同的章节定位与一次性定向回修路径，保留两个硬门禁本身；增加“同一句图文/结果冲突只重写对应问题”回归，之后从现有 Writer checkpoint 续传。
+
+- [2026-07-16] 同一任务的定向 Writer 续传已把问题 1 折射率与光程差改回冻结证据 `n=2.6`、`52.0 μm`，`figure_result_consistency` 也已通过；第二次预检仍为 `FAIL`，唯一失败项 `result_consistency` 的两个冲突均为检查器误报：冻结指标 `wavelength_range=22.5 μm` 表示 `2.5–25 μm` 的跨度，检查器只抽取区间端点 `2.5`；同时问题 1 指标被错误套用于 `4.2 描述性统计` 中附件的实测波长覆盖区间。按连续两次失败规程停止所有 provider 调用，不再续传 Writer。当前处置：为范围/跨度指标增加端点差候选，并按正式小节归属隔离 `eda` 与 `quesN` 指标；在现有正确 `res.md` 上仅执行确定性预检、导出和最终验收，错误跨度仍必须被硬门禁拦截。
+
+- [2026-07-16] 上述预检误报修复后，真实稿件正式 `cumcm2026` 预检已 `PASS`，结果与图表一致性均为 0 冲突；首轮确定性导出成功生成 PDF、DOCX 和 LaTeX sidecar，LaTeX 编译成功且无缺失资源，但 `pdf_visual_check.json = FAIL`。102 页均为 A4、非空、文字可提取且无边距溢出，正文（摘要后、附录前）15 页；唯一失败是首页有摘要但关键词未留在首页，导致严格提交审计与最终验收保持 `FAIL/TECHNICAL_FAIL`。当前处置：检查首页分页和摘要长度，只做不改变冻结数值/建模结论的最小排版修正，随后重新预检并重导整批哈希绑定产物。
+
+- [2026-07-16] 2025 CUMCM B 题真实任务最终人工语义复核推翻了此前“仅摘要分页待修”的判断：题面明确附件1/2、附件3/4分别是同一块晶圆在10°/15°下的测量，但 Modeler 参数审计把入射角改写为0°垂直入射，Coder使用常数折射率并忽略双角度关系；Writer 又把三问整体错位（5.1以Airy多光束和SiC数据回答本应只推导双光束模型的问题1，5.2用附件3/4硅数据回答本应处理附件1/2的问题2，5.3未完整完成硅数据多光束计算），并把双角度测量误称“两片样品”。现稿13.12μm（SiC）/7.73μm（Si）约为正确主频的二倍谐波，不能交付；对原始附件独立采用Sellmeier色散、Snell角度修正和相邻波谷复算得到SiC约7.72/7.61μm、Si约3.47/3.46μm，与公开同行评审研究的量级和官方粗参考区间一致，但该复算仅用于诊断，未冒充正式候选论文。
+
+- [2026-07-16] 针对上述“机器门禁全绿但数学语义错误”新增三层硬门禁：`problem_contract.py` 从题面提取双入射角及同一晶圆配对关系，Modeler 计划缺10°/15°或把附件解释成独立样品即拒绝；`execution_validation.py` 在冻结前交叉核验 `task_request.json` 与 `input_parameter_audit.csv`，题面角度被遗漏/改写即FAIL；`paper_postprocessor.py` 对显式双光束→附件1/2→多光束附件3/4题型校验5.1/5.2/5.3模型和数据归属，并拦截“两片样品”假陈述。真实任务已刷新为 `execution_validation_report=FAIL`（expected=[10,15], audited=[0]）、`paper_preflight_report=FAIL`（5项归属错误）、严格审计FAIL、`final_acceptance_report=TECHNICAL_FAIL`，`/tasks` 状态为failed；旧PDF/DOCX仅保留为失败现场，不得交付。验证：本机全量368项单测通过（1项环境跳过）且Ruff通过；重建Docker后三服务healthy，容器内114项相关回归及Ruff通过。已恢复默认remote执行配置，容器实际值为`CODE_INTERPRETER_KIND=remote`、`ALLOW_LOCAL_CODE_EXECUTION=false`，未再调用任何provider。
+
+- [2026-07-16] 因当前无法配置 E2B，已按用户明确授权把本机切到持久可信本地执行：gitignored 根目录 `.env` 通过 `COMPOSE_FILE` 自动加载 `docker-compose.local-execution.yml`，覆盖文件由 `auto` 改为明确的 `CODE_INTERPRETER_KIND=local`，同时保留 `ALLOW_LOCAL_CODE_EXECUTION=true`、120 秒单元超时、`cap_drop=ALL`、最小五项 capability、`no-new-privileges` 和 `pids_limit=256`。解释器工厂新增统一的实际后端解析/就绪状态，`/status.code_execution` 可报告配置模式、最终选择、授权和 E2B 是否存在但不回显凭据；启动脚本断言、`.env.example` 与 STARTUP 已同步。普通 `docker compose build backend` 与 `up -d --wait` 后三服务 healthy，后端及 `5173/api/status` 均报告 `ready/local/local`；真实 Jupyter 探针计算 42、文件往返成功，子内核 UID=10001 且清理后无残留 ipykernel。本机全量 370 项单测通过（1 项环境跳过）、容器内 33 项安全/状态回归通过，本机与容器 Ruff 均通过；本轮未调用模型 provider，现有 2025 B 题失败候选状态未改写。
+
+- [2026-07-16] PR #24 合并后的新 2025 B 真实任务 `20260716-113318-033370fd397e657a60f6a6d7a3b4a25b`：Modeler 前两轮结构纠错后第三轮被10°/15°同一晶圆配对契约拒绝，重建计划随后通过并进入可信本地执行；EDA 已生成 checkpoint、67变量快照、清洗数据和诊断图。问题求解期间一次用 `fsolve` 反演硅折射率时迭代到非法定义域，触发 `ValueError: math domain error`，Coder 下一轮自行恢复。随后 execution manifest v2 连续拒绝了旧文件、来源不含指标值和漏交计划指标等不可信证据，证明新门禁生效；同时暴露协议死锁：ModelPlan schema 允许 `formula_dimension_check == "长度单位"` 这类字符串 target，而 recorder/final validator 只允许有限数值 actual/target，因此该合法计划不可能提交完整证据。任务已人工止损为 `cancelled`，保留 checkpoint/notebook，无 execution manifest、冻结、论文或导出，不可交付。当前处置：将 ModelPlan 验收 target 收紧为可机检有限数值并给出量纲检查 `eq 1` 示例，完成回归、合并和重建后只创建一个新任务验证。
+
+- [2026-07-16] PR #25 合并后的新 2025 B 真实任务 `20260716-115652-c186563e66ea8e4607e28d0d6d1cd988` 验证有限数值 target 门禁已在真实链路生效：Modeler 首轮的非数值问题3指标被 schema 拒绝，后续修复为数值计划；10°/15°同一晶圆契约又阻断三轮错误方案，第四轮才进入可信本地执行。EDA 完成 8 次本地代码执行并保存 37 变量快照，问题1随后完成 6 段本地计算；但 provider 在 12:06 后连续三次 `APIConnectionError`，Coder 抛出异常而任务仍处于外层运行。按连续真实 provider 失败恢复规程已主动取消，终态为 `cancelled`，checkpoint 保留，但无 execution manifest、冻结、`res.*`、preflight、PDF 或 candidate manifest，不能交付。当前处置：不再对当前 Mimo 路由发起真实重试；另行修复本次计划中 `silicon_fit_improvement >= 0.01` 预设“必有改善”结论的非中立验收指标，provider 恢复或由指定决策人切换到已验证备份后方可新建一次端到端验收。
+
+- [2026-07-16] PR #26 已经 GitHub Backend CI 通过后 squash 合并为 `04b1da0`，远端/本地 PR 分支及临时 worktree 均已删除；根目录未提交的可信本地执行及其它既有改动完整保留。合并后的组合回归为390项后端单测通过（1项环境跳过）且Ruff通过；重建 Docker 后三服务 healthy，容器内61项计划/解释器/工作流回归和Ruff通过，`/status.code_execution` 为 `ready/local/local`。将取消任务 `20260716-115652-c186563e66ea8e4607e28d0d6d1cd988` 的真实 `modeler_plan.json` 原样重放，新门禁准确拒绝 `ques3 silicon_fit_improvement ge 0.01`；可信本地 Jupyter 真实执行平方和得到91、文件写入读回91且内核清理成功。当前代码与本地执行链路验证通过，但该任务仍无主交付物；因 Mimo 同一路由此前连续三次 `APIConnectionError` 且没有已验证备用 provider，本轮未再调用模型，完整2025 B端到端交付仍被外部 provider 可用性阻断。

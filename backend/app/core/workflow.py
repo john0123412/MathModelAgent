@@ -531,8 +531,14 @@ class MathModelWorkFlow(WorkFlow):
                         type="error",
                     ),
                 )
+                diagnostic_status = report.get("status")
+                diagnostic_summary = (
+                    "尚未执行正式逐题验证"
+                    if diagnostic_status == "PASS"
+                    else f"诊断报告状态: {diagnostic_status}"
+                )
                 raise RuntimeError(
-                    f"代码阶段 {key} 未提供成功执行证据；诊断报告状态: {report.get('status')}"
+                    f"代码阶段 {key} 未提供成功执行证据；{diagnostic_summary}"
                 )
 
             await redis_manager.publish_message(
@@ -916,7 +922,13 @@ class MathModelWorkFlow(WorkFlow):
         checks = report.get("checks", {}) if isinstance(report, dict) else {}
         if not isinstance(checks, dict):
             return []
-        repairable = {"result_consistency", "algorithm_evidence", "infeasible_optimality", "claim_trace"}
+        repairable = {
+            "result_consistency",
+            "figure_result_consistency",
+            "algorithm_evidence",
+            "infeasible_optimality",
+            "claim_trace",
+        }
         failed = {
             check_id: check
             for check_id, check in checks.items()
@@ -934,6 +946,9 @@ class MathModelWorkFlow(WorkFlow):
             conflicts = list(consistency.get("conflicts", [])) + list(
                 consistency.get("abstract_conflicts", [])
             )
+        figure_consistency = failed.get("figure_result_consistency", {})
+        if isinstance(figure_consistency, dict):
+            conflicts.extend(figure_consistency.get("conflicts", []))
         for conflict in conflicts:
             if not isinstance(conflict, dict):
                 continue

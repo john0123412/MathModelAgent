@@ -8,9 +8,9 @@
 | 目标 | 使用的命令 | 代码执行方式 | 适用边界 |
 |---|---|---|---|
 | 日常使用、验收、真实 E2B 沙箱 | `docker compose up -d --wait` | `remote`，需要 `E2B_API_KEY` | 默认且推荐 |
-| E2B 暂不可用时恢复一个已有任务 | 加载 `docker-compose.local-execution.yml` | `auto`，显式允许本地 Jupyter | 仅可信单用户本机 Docker |
+| E2B 暂不可用时恢复一个已有任务 | 加载 `docker-compose.local-execution.yml` | `local`，显式允许本地 Jupyter | 仅可信单用户本机 Docker |
 
-本地自动执行模式也提供了 Windows 一键入口。它只对当前 Compose 启动加载本地覆盖，
+可信本地执行模式也提供了 Windows 一键入口。它只对当前 Compose 启动加载本地覆盖，
 不会修改 `backend/.env.dev`：
 
 ```powershell
@@ -18,7 +18,7 @@ cd D:\workspace\MathModelAgent
 .\scripts\docker-local-execution.ps1 -Action Start
 ```
 
-该模式会在 E2B 可用时优先使用 E2B，缺少 E2B 时自动降级到本地解释器；后端会输出实际
+该模式明确选择本地解释器，不会因 E2B 配置变化而切换后端；后端会输出实际
 生效的 `mode`、`allow_local` 和 E2B 是否配置，但不会输出密钥。完成后恢复默认安全模式：
 
 ```powershell
@@ -26,8 +26,9 @@ cd D:\workspace\MathModelAgent
 ```
 | 修改前端/后端源码的人工开发 | `win_start.bat` 或本地手动启动 | 由开发者自行配置 | 不与本机 agent 前端命令混用 |
 
-不要同时加载 `docker-compose.dev.yml` 与 `docker-compose.local-execution.yml`。完成受控本地恢复后，
-务必再执行一次默认 `docker compose up -d --wait`，把后端恢复到远程沙箱安全默认值。
+不要同时加载 `docker-compose.dev.yml` 与 `docker-compose.local-execution.yml`。如果根目录
+`.env` 已按下文设置 `COMPOSE_FILE` 持久启用本地覆盖，则普通 `docker compose up` 也会继续
+使用本地模式；恢复远程默认值前必须先删除或注释该行。
 
 ## 环境要求
 - Docker Desktop
@@ -171,10 +172,28 @@ curl.exe -X POST http://127.0.0.1:5173/api/modeling/<task_id>/resume
 
 该命令只接受已有 `checkpoint.json` 的任务，不会重复提交题目；任务已经完成时会直接跳过。
 
+若本机暂时无法配置 E2B，且确认这是不接收不可信输入的单用户 Docker 环境，可在仓库根目录
+`.env` 中持久加载同一受限覆盖。Windows Docker Desktop 配置如下：
+
+```dotenv
+COMPOSE_FILE=docker-compose.yml;docker-compose.override.yml;docker-compose.local-execution.yml
+```
+
+随后普通命令即会加载覆盖，无需每次重复 `-f`：
+
+```powershell
+docker compose up --build -d --wait
+curl.exe http://127.0.0.1:8000/status
+```
+
+`/status` 的 `code_execution` 必须显示 `status=ready`、`configured_kind=local`、
+`selected_kind=local`、`local_execution_allowed=true`。接口只报告 E2B 是否配置，不返回 Key。
+
 恢复任务完成并检查交付物后，立即切回默认模式：
 
 ```powershell
-docker compose up -d --wait
+# 先从根目录 .env 删除或注释 COMPOSE_FILE 行
+docker compose -f docker-compose.yml -f docker-compose.override.yml up -d --wait
 docker compose ps
 ```
 
@@ -193,8 +212,8 @@ docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-co
 docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.local-execution.yml up -d --wait
 ```
 
-该覆盖文件设置 `CODE_INTERPRETER_KIND=auto` 和 `ALLOW_LOCAL_CODE_EXECUTION=true`：有 E2B
-时仍优先远程沙箱；没有 E2B 时才使用本地 Jupyter。受控覆盖对单次代码执行设置 120 秒硬上限，
+该覆盖文件设置 `CODE_INTERPRETER_KIND=local` 和 `ALLOW_LOCAL_CODE_EXECUTION=true`，明确选择
+本地 Jupyter，不会因 E2B 配置变化而切换后端。受控覆盖对单次代码执行设置 120 秒硬上限，
 并由独立 OS 级看门狗中断无 IOPub 返回的数值计算；超时任务会作为代码执行失败进入反思/失败流程，
 不会继续写入冻结结果或论文。该模式只支持受控 Linux Docker：内核只
 继承最小运行环境，并在 exec 前降权到镜像内专用的非 root `mma-runner` 用户；后端只临时保留

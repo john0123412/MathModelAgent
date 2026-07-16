@@ -2202,6 +2202,39 @@ def _is_new_variant_metric(metric: dict) -> bool:
     return label.startswith(("新", "调整后"))
 
 
+def _is_range_span_metric(metric: dict) -> bool:
+    """Return whether a frozen scalar represents the width/span of a range."""
+    identifiers = " ".join(
+        str(metric.get(key) or "").lower() for key in ("id", "base_id")
+    )
+    label = str(metric.get("label") or "")
+    return any(token in identifiers for token in ("range", "span", "interval_width")) or any(
+        token in label for token in ("范围", "跨度", "区间宽度")
+    )
+
+
+_RANGE_ENDPOINT_RE = re.compile(
+    r"(?P<start>[-+]?\d+(?:\.\d+)?)\s*"
+    r"(?:[A-Za-zµμ%°/·^0-9]+\s*)?"
+    r"(?:至|到|~|～|—|–|-)\s*"
+    r"(?P<end>[-+]?\d+(?:\.\d+)?)"
+)
+
+
+def _range_span_candidates(text: str) -> list[float]:
+    """Extract endpoint differences from explicit numeric ranges in prose."""
+    spans: list[float] = []
+    for match in _RANGE_ENDPOINT_RE.finditer(text):
+        start = _parse_float(match.group("start"))
+        end = _parse_float(match.group("end"))
+        if start is None or end is None:
+            continue
+        span = abs(end - start)
+        if span not in spans:
+            spans.append(span)
+    return spans
+
+
 def _metric_claim_occurrences(
     sentence: str, metric: dict
 ) -> list[tuple[list[float], bool]]:
@@ -2289,6 +2322,10 @@ def _metric_claim_occurrences(
                     number = _parse_float(direct.group(1))
                     if number is not None:
                         candidates.append(number)
+            if _is_range_span_metric(metric):
+                for span in _range_span_candidates(local_clause):
+                    if span not in candidates:
+                        candidates.append(span)
             if candidates:
                 occurrences.append((candidates, attribution == kind))
     return occurrences
@@ -2370,6 +2407,19 @@ def _sentence_matches_metric_scope(sentence: str, section: str, metric: dict) ->
     if not match:
         return True
     number = match.group(1)
+    normalized_section = re.sub(r"\s+", " ", section).strip()
+    # CUMCM papers commonly place dataset-wide descriptive statistics in 4.2.
+    # Those attachment coverage ranges are EDA facts, not claims about any
+    # quesN result, even when they share a label such as “波长范围”.
+    if re.search(r"(?:^|\s)4\.2(?:\.|\s|$)", normalized_section) or any(
+        token in normalized_section for token in ("描述性统计", "探索性数据分析")
+    ):
+        return False
+    formal_question = re.search(
+        r"(?:^|\s)5\.([1-9]\d*)(?:\.|\s|$)", normalized_section
+    )
+    if formal_question is not None and formal_question.group(1) != number:
+        return False
     context = f"{section}\n{sentence}"
     explicit_numbers = set(re.findall(r"(?:问题|第)\s*([1-9])(?:问)?", context))
     explicit_numbers.update(re.findall(r"\b5\.([1-9])", context))
@@ -2589,6 +2639,75 @@ def _check_reference_relevance(markdown: str) -> dict:
     return {"passed": not unrelated, "unrelated": unrelated}
 
 
+def _numbered_model_section(markdown: str, number: int) -> str:
+    """Return the content of a conventional 5.N model-and-solution section."""
+    start = re.search(
+        rf"(?m)^##\s+5\.{number}(?:\s|\.|$).*?$",
+        markdown,
+    )
+    if start is None:
+        return ""
+    end = re.search(
+        rf"(?m)^##\s+5\.{number + 1}(?:\s|\.|$).*?$|^#\s+六[、.]",
+        markdown[start.end() :],
+    )
+    stop = start.end() + end.start() if end is not None else len(markdown)
+    return markdown[start.start() : stop]
+
+
+def _check_problem_alignment(work_dir: str, markdown: str) -> dict:
+    """Reject paper sections that invert an explicit two-/multi-beam task order."""
+    try:
+        with open(os.path.join(work_dir, "task_request.json"), encoding="utf-8") as handle:
+            request = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {"passed": True, "triggered": False, "issues": []}
+    problem = str(request.get("ques_all") or "") if isinstance(request, dict) else ""
+    compact_problem = re.sub(r"\s+", "", problem)
+    triggered = (
+        "问题1" in compact_problem
+        and "只有一次反射" in compact_problem
+        and "问题3" in compact_problem
+        and "多光束干涉" in compact_problem
+        and "附件1" in compact_problem
+        and "附件4" in compact_problem
+    )
+    if not triggered:
+        return {"passed": True, "triggered": False, "issues": []}
+
+    q1 = _numbered_model_section(markdown, 1)
+    q2 = _numbered_model_section(markdown, 2)
+    q3 = _numbered_model_section(markdown, 3)
+    issues: list[str] = []
+    if not re.search(r"双光束|两束(?:反射)?光", q1):
+        issues.append("5.1 未以题面要求的双光束/一次反射模型回答问题1。")
+    if re.search(
+        r"(?:采用|使用|建立).{0,30}(?:Airy|多光束).{0,30}(?:模型|反演)",
+        q1,
+        re.DOTALL,
+    ):
+        issues.append("5.1 把问题3的 Airy/多光束模型提前作为问题1的主模型。")
+    if not all(token in q2 for token in ("附件1", "附件2", "碳化硅")):
+        issues.append("5.2 未使用附件1/2的碳化硅数据回答问题2。")
+    if not all(re.search(rf"(?<!\d){angle}\s*[°度]", q2) for angle in (10, 15)):
+        issues.append("5.2 未明确使用附件1/2对应的10°与15°入射角。")
+    if not all(token in q3 for token in ("附件3", "附件4", "多光束")):
+        issues.append("5.3 未使用附件3/4完成多光束判定和硅外延层计算。")
+
+    body = re.split(r"(?m)^#\s*附录", markdown, maxsplit=1)[0]
+    false_sample_claims = re.findall(
+        r"(?:碳化硅|硅)?(?:两片|两个)(?:独立)?(?:样品|晶圆片|硅片)", body
+    )
+    if false_sample_claims:
+        issues.append("正文把同一晶圆的双角度测量错误表述为两个独立样品。")
+    return {
+        "passed": not issues,
+        "triggered": True,
+        "issues": issues,
+        "false_sample_claims": sorted(set(false_sample_claims)),
+    }
+
+
 def build_preflight_report(
     work_dir: str,
     markdown: str,
@@ -2698,6 +2817,7 @@ def build_preflight_report(
     claim_trace_check = _check_claim_trace(
         claim_trace if claim_trace is not None else build_claim_trace(markdown, code_sources)
     )
+    problem_alignment_check = _check_problem_alignment(work_dir, markdown_without_code)
 
     checks = {
         "export_profile": _with_severity(export_profile_check, "fail"),
@@ -2734,6 +2854,7 @@ def build_preflight_report(
         "figure_result_consistency": _with_severity(
             figure_result_consistency_check, "fail"
         ),
+        "problem_alignment": _with_severity(problem_alignment_check, "fail"),
         "reference_relevance": _with_severity(reference_relevance_check, "fail"),
         "claim_trace": _with_severity(
             claim_trace_check, _claim_trace_check_severity(claim_trace_check)

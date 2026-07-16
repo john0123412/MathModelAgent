@@ -98,6 +98,48 @@ def _write_manifest(
 
 
 class TestExecutionValidation(unittest.TestCase):
+    def test_explicit_incident_angles_must_survive_parameter_audit(self):
+        problem = (
+            "附件1和附件2是入射角分别为10°和15°时针对同一块晶圆片的测试结果。"
+        )
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_notebook(work_dir)
+            _write_manifest(work_dir)
+            with open(
+                os.path.join(work_dir, "task_request.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump({"ques_all": problem}, handle, ensure_ascii=False)
+            audit_path = os.path.join(work_dir, "input_parameter_audit.csv")
+            with open(audit_path, "w", encoding="utf-8-sig") as handle:
+                handle.write("参数,值,单位,来源\n入射角 θ,0,度,题面假设垂直入射\n")
+
+            wrong = validate_execution_artifacts(
+                work_dir, required_subtasks=["ques3"]
+            )
+            angle_check = next(
+                item
+                for item in wrong["checks"]
+                if item["id"] == "problem_parameter.incident_angles"
+            )
+            self.assertFalse(angle_check["passed"])
+            self.assertEqual(angle_check["evidence"]["missing_angles_deg"], [10.0, 15.0])
+
+            with open(audit_path, "w", encoding="utf-8-sig") as handle:
+                handle.write(
+                    "参数,值,单位,来源\n"
+                    "附件1入射角,10,度,题面附件说明\n"
+                    "附件2入射角,15,度,题面附件说明\n"
+                )
+            correct = validate_execution_artifacts(
+                work_dir, required_subtasks=["ques3"]
+            )
+            angle_check = next(
+                item
+                for item in correct["checks"]
+                if item["id"] == "problem_parameter.incident_angles"
+            )
+            self.assertTrue(angle_check["passed"], angle_check)
+
     def test_trusted_evidence_recorder_hashes_files_and_derives_feasibility(self):
         with tempfile.TemporaryDirectory() as work_dir:
             result_path = os.path.join(work_dir, "ques1_results.json")
@@ -526,6 +568,70 @@ class TestExecutionValidation(unittest.TestCase):
         self.assertEqual(report["status"], "PASS")
         self.assertFalse(any(item["id"] == "ques3.balance_residual" for item in report["checks"]))
 
+    def test_optical_fitting_contract_does_not_require_mass_or_flow_balance(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_notebook(work_dir)
+            _write_manifest(work_dir)
+            manifest_path = os.path.join(work_dir, "execution_validation.json")
+            with open(manifest_path, encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            result_path = os.path.join(work_dir, "results.json")
+            with open(result_path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {"mean_pressure_mpa": 100.0, "fitting_residual_rmse": 0.001},
+                    handle,
+                )
+            manifest["subtasks"][0]["constraints"] = [
+                {
+                    "id": "fitting_residual_rmse",
+                    "actual": 0.001,
+                    "comparison": "lte",
+                    "target": 0.01,
+                    "source": {
+                        "path": "results.json",
+                        "sha256": _sha256(result_path),
+                    },
+                }
+            ]
+            manifest["subtasks"][0]["metrics"] = [
+                {
+                    "id": "fitting_residual_rmse",
+                    "label": "拟合残差均方根误差",
+                    "value": 0.001,
+                    "unit": "无量纲",
+                    "explanation": "由光谱拟合数组和实测数组计算。",
+                }
+            ]
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                json.dump(manifest, handle, ensure_ascii=False)
+            with open(os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "model_plan": {
+                            "subtasks": {
+                                "ques3": {
+                                    "acceptance_metrics": [
+                                        {
+                                            "key": "fitting_residual_rmse",
+                                            "label": "拟合残差均方根误差",
+                                            "comparator": "le",
+                                            "target": 0.01,
+                                            "description": "检查多光束光学模型的拟合误差。",
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    handle,
+                    ensure_ascii=False,
+                )
+
+            report = validate_execution_artifacts(work_dir, required_subtasks=["ques3"])
+
+        self.assertEqual(report["status"], "PASS")
+        self.assertFalse(any(item["id"] == "ques3.balance_residual" for item in report["checks"]))
+
     def test_notebook_error_without_manifest_blocks_completion(self):
         with tempfile.TemporaryDirectory() as work_dir:
             _write_notebook(work_dir, error=True)
@@ -609,6 +715,26 @@ class TestExecutionValidation(unittest.TestCase):
             ]
             with open(manifest_path, "w", encoding="utf-8") as handle:
                 json.dump(manifest, handle, ensure_ascii=False)
+            with open(os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "model_plan": {
+                            "subtasks": {
+                                "ques3": {
+                                    "acceptance_metrics": [
+                                        {
+                                            "key": "mass_balance_residual",
+                                            "label": "质量守恒残差",
+                                            "description": "由供回油流量平衡计算。",
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    handle,
+                    ensure_ascii=False,
+                )
 
             report = validate_execution_artifacts(work_dir, required_subtasks=["ques3"])
 

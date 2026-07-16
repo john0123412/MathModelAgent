@@ -68,6 +68,8 @@ class TestFeatureGuardrails(unittest.TestCase):
             mock.patch.object(settings, "HIL_ENABLED", False),
             mock.patch.object(settings, "FALLBACK_ENABLED", False),
             mock.patch.object(settings, "EVALUATOR_ENABLED", False),
+            mock.patch.object(settings, "CODE_INTERPRETER_KIND", "local"),
+            mock.patch.object(settings, "ALLOW_LOCAL_CODE_EXECUTION", True),
             mock.patch("app.routers.common_router.redis_manager.get_client") as get_client,
         ):
             redis_client = mock.AsyncMock()
@@ -76,9 +78,13 @@ class TestFeatureGuardrails(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertEqual(set(data.keys()), {"backend", "redis"})
+        self.assertEqual(set(data.keys()), {"backend", "redis", "code_execution"})
         self.assertIn("feature_warnings", data["backend"])
         self.assertEqual(data["backend"]["feature_warnings"][0]["feature"], "RAG_ENABLED")
+        self.assertEqual(data["code_execution"]["status"], "ready")
+        self.assertEqual(data["code_execution"]["configured_kind"], "local")
+        self.assertEqual(data["code_execution"]["selected_kind"], "local")
+        self.assertNotIn("api_key", data["code_execution"])
 
 
 if __name__ == "__main__":

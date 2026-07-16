@@ -5,7 +5,7 @@ import tempfile
 from unittest.mock import AsyncMock, patch
 
 from app.config.setting import ApiType
-from app.core.agents.coder_agent import CoderAgent
+from app.core.agents.coder_agent import CoderAgent, _EVIDENCE_FAILURE_LIMIT
 from app.core.llm.types import StandardResponse, ToolCall
 
 
@@ -132,6 +132,70 @@ class FakeCapThenEvidenceModel:
                     id=f"chart{self.calls}",
                     name="execute_code",
                     arguments=f'{{"code":"print(\\"chart result {self.calls}\\")"}}',
+                )
+            ],
+        )
+
+
+class FakeCloseoutAwareModel:
+    api_type = ApiType.ANTHROPIC
+
+    def __init__(self):
+        self.calls = 0
+
+    async def chat(self, history, **kwargs):
+        self.calls += 1
+        closeout_requested = any(
+            msg.get("role") == "user" and "只剩 2 次成功代码执行额度" in msg.get("content", "")
+            for msg in history
+        )
+        closeout_executed = any(
+            msg.get("tool_call_id") == "closeout-code" for msg in history
+        )
+        if closeout_requested and closeout_executed:
+            return _evidence_response("closeout-evidence", "ques1", "ques1_results.json")
+        if closeout_requested:
+            return StandardResponse(
+                content="Land the declared numeric result source.",
+                tool_calls=[
+                    ToolCall(
+                        id="closeout-code",
+                        name="execute_code",
+                        arguments='{"code":"print(\\"closeout\\")"}',
+                    )
+                ],
+            )
+        return StandardResponse(
+            content="Continue exploration.",
+            tool_calls=[
+                ToolCall(
+                    id=f"explore{self.calls}",
+                    name="execute_code",
+                    arguments=f'{{"code":"print(\\"explore {self.calls}\\")"}}',
+                )
+            ],
+        )
+
+
+class FakeAlwaysInvalidEvidenceModel:
+    api_type = ApiType.ANTHROPIC
+
+    def __init__(self):
+        self.calls = 0
+
+    async def chat(self, history, **kwargs):
+        self.calls += 1
+        if self.calls % 2 == 0:
+            return _evidence_response(
+                f"invalid-evidence-{self.calls}", "ques1", "missing_results.json"
+            )
+        return StandardResponse(
+            content="Attempt evidence source repair.",
+            tool_calls=[
+                ToolCall(
+                    id=f"repair-code-{self.calls}",
+                    name="execute_code",
+                    arguments='{"code":"print(1)"}',
                 )
             ],
         )
@@ -350,6 +414,23 @@ class ResultWritingInterpreter(NonFinalOutputInterpreter):
         return f"图表分析输出 {len(self.executed_code)}", False, ""
 
 
+class CloseoutResultWritingInterpreter(NonFinalOutputInterpreter):
+    def __init__(self, work_dir):
+        super().__init__()
+        self.work_dir = work_dir
+
+    async def execute_code(self, code):
+        self.executed_code.append(code)
+        if len(self.executed_code) == 2:
+            with open(
+                os.path.join(self.work_dir, "ques1_results.json"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                json.dump({"objective_value": 1.0}, handle)
+        return f"图表分析输出 {len(self.executed_code)}", False, ""
+
+
 class SecondRunResultWritingInterpreter(ResultWritingInterpreter):
     async def execute_code(self, code):
         self.executed_code.append(code)
@@ -498,6 +579,62 @@ class CoderAgentToolHandlingTest(unittest.IsolatedAsyncioTestCase):
                 manifest = json.load(handle)
             self.assertEqual(manifest["subtasks"][0]["id"], "ques2")
             self.assertTrue(manifest["subtasks"][0]["feasible"])
+
+    async def test_formal_subtask_warns_at_two_calls_and_lands_results(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            interpreter = CloseoutResultWritingInterpreter(work_dir)
+            agent = CoderAgent(
+                task_id="t1",
+                model=FakeCloseoutAwareModel(),
+                work_dir=work_dir,
+                max_chat_turns=6,
+                max_successful_tool_calls=3,
+                code_interpreter=interpreter,
+            )
+
+            with patch(
+                "app.core.agents.coder_agent.redis_manager.publish_message",
+                new=AsyncMock(),
+            ):
+                result = await agent.run("solve", "ques1")
+
+            self.assertTrue(result.execution_succeeded)
+            self.assertEqual(len(interpreter.executed_code), 2)
+            self.assertTrue(
+                any(
+                    msg.get("role") == "user"
+                    and "只剩 2 次成功代码执行额度" in msg.get("content", "")
+                    for msg in agent.chat_history
+                )
+            )
+            self.assertTrue(
+                os.path.exists(os.path.join(work_dir, "execution_validation.json"))
+            )
+
+    async def test_repeated_invalid_evidence_stops_at_bounded_failure_limit(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            interpreter = RecordingInterpreter()
+            agent = CoderAgent(
+                task_id="t1",
+                model=FakeAlwaysInvalidEvidenceModel(),
+                work_dir=work_dir,
+                max_chat_turns=20,
+                max_successful_tool_calls=1,
+                code_interpreter=interpreter,
+            )
+
+            with patch(
+                "app.core.agents.coder_agent.redis_manager.publish_message",
+                new=AsyncMock(),
+            ):
+                result = await agent.run("solve", "ques1")
+
+            self.assertFalse(result.execution_succeeded)
+            self.assertTrue(result.execution_error_occurred)
+            self.assertIn(
+                f"连续 {_EVIDENCE_FAILURE_LIMIT} 次不完整", result.code_response
+            )
+            self.assertEqual(len(interpreter.executed_code), _EVIDENCE_FAILURE_LIMIT)
 
     async def test_formal_completion_markers_still_require_evidence(self):
         with tempfile.TemporaryDirectory() as work_dir:

@@ -54,6 +54,80 @@ def _format_validation_errors(exc: ValidationError) -> list[str]:
     return issues
 
 
+def _escape_bare_quotes_inside_json_strings(json_str: str) -> str:
+    """Escape LLM-produced inner quotes while preserving JSON delimiters.
+
+    A quote closes a JSON string only when the following significant token is
+    valid for the current object/array context.  Quotes embedded in prose such
+    as ``得到"纯"双光束光谱`` are escaped instead.
+    """
+    result: list[str] = []
+    containers: list[str] = []
+    in_string = False
+    escaped = False
+    length = len(json_str)
+
+    for index, char in enumerate(json_str):
+        if not in_string:
+            result.append(char)
+            if char == '"':
+                in_string = True
+                escaped = False
+            elif char in "{[":
+                containers.append(char)
+            elif char == "}" and containers and containers[-1] == "{":
+                containers.pop()
+            elif char == "]" and containers and containers[-1] == "[":
+                containers.pop()
+            continue
+
+        if escaped:
+            result.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            result.append(char)
+            escaped = True
+            continue
+        if char != '"':
+            result.append(char)
+            continue
+
+        next_index = index + 1
+        while next_index < length and json_str[next_index].isspace():
+            next_index += 1
+        next_char = json_str[next_index] if next_index < length else ""
+        closes_string = next_char in {"", ":", "}", "]"}
+        if next_char == ",":
+            following = next_index + 1
+            while following < length and json_str[following].isspace():
+                following += 1
+            following_char = json_str[following] if following < length else ""
+            if containers and containers[-1] == "{":
+                closes_string = following_char in {'"', "}"}
+            elif containers and containers[-1] == "[":
+                closes_string = following_char in {
+                    '"',
+                    "{",
+                    "[",
+                    "-",
+                    "t",
+                    "f",
+                    "n",
+                    "]",
+                } or following_char.isdigit()
+            else:
+                closes_string = True
+
+        if closes_string:
+            result.append(char)
+            in_string = False
+        else:
+            result.append('\\"')
+
+    return "".join(result)
+
+
 def repair_json(json_str: str) -> dict | None:
     """尝试修复 LLM 输出的格式错误的 JSON。
 
@@ -68,6 +142,14 @@ def repair_json(json_str: str) -> dict | None:
     # Try direct parse first
     try:
         return json.loads(json_str)
+    except json.JSONDecodeError:
+        pass
+
+    # Models occasionally quote a term inside an otherwise valid JSON string
+    # without escaping it.  Repair only quotes that cannot be structural
+    # delimiters in the current container context.
+    try:
+        return json.loads(_escape_bare_quotes_inside_json_strings(json_str))
     except json.JSONDecodeError:
         pass
 

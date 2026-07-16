@@ -39,6 +39,8 @@ _WORK_DIR_PATH_PATTERN = re.compile(
     r"(^|[\\/])(?:backend[\\/])?project[\\/]work_dir([\\/]|$)"
 )
 _FORMAL_SUBTASK_PATTERN = re.compile(r"^(ques[1-9][0-9]*)(?:_repair)?$")
+_EVIDENCE_FAILURE_LIMIT = 3
+_CLOSEOUT_WARNING_REMAINING_CALLS = 2
 
 
 def _looks_like_final_tool_output(output: str) -> bool:
@@ -200,6 +202,8 @@ class CoderAgent(Agent):
         formal_subtask_id = _formal_subtask_id(subtask_title)
         evidence_commit_required = False
         evidence_changed_paths: set[str] = set()
+        evidence_failure_count = 0
+        last_closeout_warning_remaining: int | None = None
 
         while True:
             if self.max_retries is not None and retry_count >= self.max_retries:
@@ -438,10 +442,53 @@ class CoderAgent(Agent):
                                 execution_succeeded=not execution_error_occurred,
                                 execution_error_occurred=execution_error_occurred,
                             )
-                        if evidence_commit_required and not result.get("ok"):
-                            # Let the model repair the source file or arguments,
-                            # then require another recorder call at the next cap.
+                        evidence_failure_count += 1
+                        errors = result.get("errors") or ["未知证据错误"]
+                        evidence_error = "；".join(str(error) for error in errors)
+                        if evidence_failure_count >= _EVIDENCE_FAILURE_LIMIT:
+                            logger.error(
+                                "受控执行证据连续失败，停止正式子题: "
+                                f"subtask={formal_subtask_id}, "
+                                f"failures={evidence_failure_count}"
+                            )
+                            await redis_manager.publish_message(
+                                self.task_id,
+                                SystemMessage(
+                                    content=(
+                                        "受控执行证据连续失败，已停止当前正式子题，"
+                                        "避免无界重试"
+                                    ),
+                                    type="error",
+                                ),
+                            )
+                            return CoderToWriter(
+                                code_response=(
+                                    "任务失败，受控执行证据连续 "
+                                    f"{evidence_failure_count} 次不完整：{evidence_error}"
+                                ),
+                                created_images=await self.code_interpreter.get_created_images(
+                                    subtask_title
+                                ),
+                                execution_attempted=successful_tool_calls > 0,
+                                execution_succeeded=False,
+                                execution_error_occurred=True,
+                            )
+                        if evidence_commit_required:
+                            # Re-open code execution for one focused repair. The
+                            # next successful call reaches the cap again and
+                            # therefore returns immediately to the recorder.
                             evidence_commit_required = False
+                        await self.append_chat_history(
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"受控执行证据第 {evidence_failure_count} 次失败："
+                                    f"{evidence_error}。下一次 execute_code 只能修复或生成"
+                                    "错误所指的数值来源文件；不得新增分析、诊断或图表。"
+                                    "修复后立即调用 record_execution_evidence。"
+                                ),
+                            }
+                        )
                         continue
 
                     if is_execute_code_tool:
@@ -617,6 +664,45 @@ class CoderAgent(Agent):
                                     }
                                 )
                                 continue
+                            if (
+                                formal_subtask_id is not None
+                                and self.max_successful_tool_calls is not None
+                            ):
+                                remaining_calls = (
+                                    self.max_successful_tool_calls
+                                    - successful_tool_calls
+                                )
+                                if (
+                                    0 < remaining_calls
+                                    <= _CLOSEOUT_WARNING_REMAINING_CALLS
+                                    and remaining_calls
+                                    != last_closeout_warning_remaining
+                                ):
+                                    last_closeout_warning_remaining = remaining_calls
+                                    await self.append_chat_history(
+                                        {
+                                            "role": "user",
+                                            "content": (
+                                                f"当前正式问题 {formal_subtask_id} 只剩 "
+                                                f"{remaining_calls} 次成功代码执行额度。"
+                                                "立即进入结果落盘收口：停止新增探索、诊断和绘图；"
+                                                "下一次 execute_code 必须优先一次性写出 ModelPlan "
+                                                "声明的结果文件，以及全部约束、指标和图表对应的"
+                                                "数值来源文件。落盘完成后立即调用 "
+                                                "record_execution_evidence。"
+                                            ),
+                                        }
+                                    )
+                                    await redis_manager.publish_message(
+                                        self.task_id,
+                                        SystemMessage(
+                                            content=(
+                                                "正式子题执行额度即将耗尽，"
+                                                f"剩余 {remaining_calls} 次，强制进入结果落盘收口"
+                                            ),
+                                            type="warning",
+                                        ),
+                                    )
                             if (
                                 self.max_successful_tool_calls is not None
                                 and successful_tool_calls >= self.max_successful_tool_calls

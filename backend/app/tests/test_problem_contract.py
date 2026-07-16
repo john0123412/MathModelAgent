@@ -195,6 +195,38 @@ class SequencedModel:
 
 
 class TestModelerContractGuard(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _minimal_model_plan() -> dict:
+        return {
+            "schema_version": "mathmodel.model-plan.v1",
+            "eda": "核验题面参数、附件列和单位。",
+            "subtasks": {
+                "ques1": {
+                    "inputs": ["题面与附件数据"],
+                    "method": "读取题面与附件数据，建立模型并用独立计算复核主要结果。",
+                    "constraints": ["保留题面给定参数和单位"],
+                    "expected_artifacts": [
+                        {
+                            "path": "ques1_results.csv",
+                            "kind": "result_table",
+                            "description": "主要数值结果与计算口径",
+                        }
+                    ],
+                    "acceptance_metrics": [
+                        {
+                            "key": "result_check",
+                            "label": "结果复核值",
+                            "comparator": "eq",
+                            "target": "independent_recalculation",
+                            "description": "与独立复算结果比较",
+                        }
+                    ],
+                    "visualization": "绘制结果与复算对比图。",
+                }
+            },
+            "sensitivity_analysis": "扰动关键输入并比较主要结果。",
+        }
+
     async def test_modeler_retries_when_plan_overrides_hard_parameter(self):
         contract = build_problem_contract(HIGH_PRESSURE_PIPE_PROBLEM)
         agent = ModelerAgent(
@@ -242,6 +274,52 @@ class TestModelerContractGuard(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             any("不是可执行的完整 ModelPlan" in msg.get("content", "") for msg in agent.chat_history)
         )
+
+    async def test_modeler_converges_after_distinct_enum_errors(self):
+        wrong_version = self._minimal_model_plan()
+        wrong_version["schema_version"] = "mathmodel.model-plan.v2"
+        wrong_kind = self._minimal_model_plan()
+        wrong_kind["subtasks"]["ques1"]["expected_artifacts"][0]["kind"] = (
+            "report"
+        )
+        wrong_comparator = self._minimal_model_plan()
+        wrong_comparator["subtasks"]["ques1"]["acceptance_metrics"][0][
+            "comparator"
+        ] = "check"
+        valid = self._minimal_model_plan()
+        agent = ModelerAgent(
+            task_id="enum-repair-test",
+            model=SequencedModel(
+                [
+                    json.dumps(wrong_version, ensure_ascii=False),
+                    json.dumps(wrong_kind, ensure_ascii=False),
+                    json.dumps(wrong_comparator, ensure_ascii=False),
+                    json.dumps(valid, ensure_ascii=False),
+                ]
+            ),
+        )
+
+        result = await agent.run(
+            CoordinatorToModeler(
+                questions={"ques_count": 1, "ques1": "完成建模和数值复核"},
+                ques_count=1,
+                problem_contract=ProblemContract(),
+            )
+        )
+
+        self.assertEqual(result.model_plan.schema_version, "mathmodel.model-plan.v1")
+        repair_messages = [
+            str(message.get("content", ""))
+            for message in agent.chat_history
+            if message.get("role") == "user"
+            and "固定协议" in str(message.get("content", ""))
+        ]
+        self.assertEqual(len(repair_messages), 3)
+        self.assertTrue(all("result_table" in message for message in repair_messages))
+        self.assertTrue(all("within" in message for message in repair_messages))
+        self.assertIn("schema_version", repair_messages[0])
+        self.assertIn("expected_artifacts.0.kind", repair_messages[1])
+        self.assertIn("acceptance_metrics.0.comparator", repair_messages[2])
 
 
 class TestStructuredModelPlan(unittest.TestCase):

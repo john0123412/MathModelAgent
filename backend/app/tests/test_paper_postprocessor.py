@@ -1135,6 +1135,67 @@ class TestPreparePaperMarkdown(unittest.TestCase):
             "原始利润",
         )
 
+    def test_frozen_range_span_uses_endpoints_and_respects_eda_scope(self):
+        """范围指标比较端点差，且题目指标不扫描 4.2 的 EDA 覆盖范围。"""
+        metric = {
+            "id": "wavelength_range",
+            "base_id": "wavelength_range",
+            "subtask_id": "ques1",
+            "label": "波长范围",
+            "value": 22.5,
+            "unit": "μm",
+            "explanation": "从2.5μm到25μm的跨度",
+        }
+        correct_markdown = (
+            "## 4.2 描述性统计\n\n"
+            "附件1的实际波长范围为3.22-19.16 μm。\n\n"
+            "## 5.1.2 模型的求解\n\n"
+            "理论波长范围为2.5 μm至25 μm。\n"
+        )
+        wrong_markdown = (
+            "## 4.2 描述性统计\n\n"
+            "附件1的实际波长范围为3.22-19.16 μm。\n\n"
+            "## 5.1.2 模型的求解\n\n"
+            "理论波长范围为2.5 μm至24 μm。\n"
+        )
+        with tempfile.TemporaryDirectory() as work_dir:
+            source_path = os.path.join(work_dir, "result.csv")
+            with open(source_path, "w", encoding="utf-8") as handle:
+                handle.write("verified result evidence\n")
+            with open(source_path, "rb") as handle:
+                source_sha256 = hashlib.sha256(handle.read()).hexdigest()
+            with open(
+                os.path.join(work_dir, "frozen_results.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(
+                    {
+                        "schema": "mathmodel.result-freeze",
+                        "version": 1,
+                        "metrics": [metric],
+                        "sources": [
+                            {
+                                "relative_path": "result.csv",
+                                "sha256": source_sha256,
+                                "role": "evidence",
+                            }
+                        ],
+                    },
+                    handle,
+                    ensure_ascii=False,
+                )
+
+            correct = build_preflight_report(work_dir, correct_markdown, code_sources=[])
+            wrong = build_preflight_report(work_dir, wrong_markdown, code_sources=[])
+
+        correct_check = correct["checks"]["result_consistency"]
+        self.assertTrue(correct_check["passed"], correct_check["conflicts"])
+        self.assertEqual(correct_check["conflicts"], [])
+        wrong_check = wrong["checks"]["result_consistency"]
+        self.assertFalse(wrong_check["passed"])
+        self.assertEqual(len(wrong_check["conflicts"]), 1)
+        self.assertEqual(wrong_check["conflicts"][0]["paper_section"], "5.1.2 模型的求解")
+        self.assertIn(21.5, wrong_check["conflicts"][0]["paper_numbers"])
+
     def test_frozen_result_consistency_reads_result_position_and_variant_scope(self):
         """演算链取等号后的结果位；共享别名的新旧变体按语境归属，不交叉误报。"""
         metrics = [
@@ -1894,6 +1955,38 @@ class TestEnhancedPreflightChecks(unittest.TestCase):
 
         self.assertEqual(report["checks"]["images"]["unused_generated"], [])
         self.assertEqual(report["checks"]["images"]["severity"], "pass")
+
+
+class TestProblemAlignmentGate(unittest.TestCase):
+    def test_optical_sections_must_follow_problem_order_and_sample_relationship(self):
+        problem = (
+            "问题1 如果考虑只有一次反射、透射，建立模型。"
+            "问题2 使用附件1和附件2。"
+            "问题3 研究多光束干涉并使用附件3和附件4。"
+        )
+        wrong_markdown = (
+            "## 5.1 问题一\n\n本文采用Airy多光束模型进行厚度反演，比较双光束误差。\n\n"
+            "## 5.2 问题二\n\n使用附件3和附件4的硅数据。\n\n"
+            "## 5.3 问题三\n\n建立多光束判据。\n\n"
+            "碳化硅两片样品的结果一致。\n"
+        )
+        correct_markdown = (
+            "## 5.1 问题一\n\n建立两束反射光的双光束模型。\n\n"
+            "## 5.2 问题二\n\n附件1和附件2是同一碳化硅晶圆在10°和15°下的测量。\n\n"
+            "## 5.3 问题三\n\n对附件3和附件4建立多光束模型。\n"
+        )
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(
+                os.path.join(work_dir, "task_request.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump({"ques_all": problem}, handle, ensure_ascii=False)
+            wrong = build_preflight_report(work_dir, wrong_markdown, code_sources=[])
+            correct = build_preflight_report(work_dir, correct_markdown, code_sources=[])
+
+        wrong_check = wrong["checks"]["problem_alignment"]
+        self.assertFalse(wrong_check["passed"])
+        self.assertGreaterEqual(len(wrong_check["issues"]), 4)
+        self.assertTrue(correct["checks"]["problem_alignment"]["passed"])
 
 
 if __name__ == "__main__":

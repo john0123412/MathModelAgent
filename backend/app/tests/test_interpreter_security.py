@@ -8,7 +8,7 @@ from unittest import mock
 from app.config.setting import settings
 from app.schemas.response import ResultModel
 from app.tools.e2b_interpreter import E2BCodeInterpreter
-from app.tools.interpreter_factory import create_interpreter
+from app.tools.interpreter_factory import create_interpreter, get_code_execution_status
 from app.tools.local_interpreter import (
     LocalCodeInterpreter,
     _UnprivilegedKernelManager,
@@ -18,6 +18,30 @@ from app.tools.notebook_serializer import NotebookSerializer
 
 
 class TestInterpreterSecurity(unittest.IsolatedAsyncioTestCase):
+    async def test_status_reports_explicit_local_selection_without_key_contents(self):
+        with mock.patch.object(
+            settings, "CODE_INTERPRETER_KIND", "local"
+        ), mock.patch.object(settings, "ALLOW_LOCAL_CODE_EXECUTION", True), mock.patch.object(
+            settings, "E2B_API_KEY", None
+        ):
+            runtime_status = get_code_execution_status()
+
+        self.assertEqual(runtime_status["status"], "ready")
+        self.assertEqual(runtime_status["configured_kind"], "local")
+        self.assertEqual(runtime_status["selected_kind"], "local")
+        self.assertFalse(runtime_status["e2b_configured"])
+        self.assertNotIn("api_key", runtime_status)
+
+    async def test_status_reports_blocked_remote_mode_without_e2b(self):
+        with mock.patch.object(
+            settings, "CODE_INTERPRETER_KIND", "remote"
+        ), mock.patch.object(settings, "E2B_API_KEY", None):
+            runtime_status = get_code_execution_status()
+
+        self.assertEqual(runtime_status["status"], "blocked")
+        self.assertIsNone(runtime_status["selected_kind"])
+        self.assertIn("不会自动降级", runtime_status["message"])
+
     async def test_remote_mode_does_not_fall_back_to_local_without_e2b(self):
         with tempfile.TemporaryDirectory() as work_dir, mock.patch.object(
             settings, "CODE_INTERPRETER_KIND", "remote"

@@ -117,5 +117,9 @@ class OpenAIResponsesProvider(BaseProvider):
         if tool_choice == "none":
             return "none"
         if tool_choice == "required":
-            return {"type": "function"}
+            # Responses accepts the literal "required" for forcing one of the
+            # supplied tools.  A function object is only valid when it also
+            # names the specific function; {"type": "function"} is rejected
+            # by compatible gateways as an incomplete tool selection.
+            return "required"
         return tool_choice

@@ -8,6 +8,7 @@ whose constraints can be checked without trusting the Writer's prose.
 
 from __future__ import annotations
 
+import csv
 import datetime
 import hashlib
 import json
@@ -42,6 +43,22 @@ _PLAN_COMPARISONS = {
     "within": "lte",
 }
 _SOURCE_NUMBER = re.compile(r"(?<![\w.])[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
+_BALANCE_REQUIREMENT_KEYS = (
+    "mass_balance",
+    "material_balance",
+    "flow_balance",
+    "energy_balance",
+    "conservation_residual",
+)
+_BALANCE_REQUIREMENT_PATTERN = re.compile(
+    r"(?:质量|物料|流量|能量).{0,8}(?:守恒|平衡)|(?:守恒|平衡).{0,8}(?:质量|物料|流量|能量)"
+)
+_ANGLE_VALUE_RE = re.compile(r"(?<!\d)(\d+(?:\.\d+)?)\s*(?:°|度)")
+_INCIDENT_ANGLE_PAIR_RE = re.compile(
+    r"入射角(?:分别)?(?:为|是)?\s*(\d+(?:\.\d+)?)\s*(?:°|度)"
+    r"\s*(?:和|与|、|及)\s*(\d+(?:\.\d+)?)\s*(?:°|度)",
+    re.IGNORECASE,
+)
 
 
 def _issue(
@@ -66,6 +83,78 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     except (OSError, json.JSONDecodeError):
         return None
     return value if isinstance(value, dict) else None
+
+
+def _problem_parameter_issues(work_dir: Path) -> list[dict[str, Any]]:
+    """Cross-check explicit problem angles against the executed parameter audit."""
+    request = _read_json(work_dir / "task_request.json")
+    problem_text = str(request.get("ques_all") or "") if request else ""
+    angle_pairs = _INCIDENT_ANGLE_PAIR_RE.findall(problem_text)
+    expected_angles = sorted(
+        {float(value) for pair in angle_pairs for value in pair}
+    )
+    if len(expected_angles) < 2:
+        return []
+
+    audit_path = work_dir / "input_parameter_audit.csv"
+    if not audit_path.is_file():
+        return [
+            _issue(
+                "problem_parameter.incident_angles",
+                False,
+                "题面给出多个实测入射角，但缺少 input_parameter_audit.csv 证明算法使用了这些角度。",
+                {"expected_angles_deg": expected_angles},
+            )
+        ]
+    try:
+        with audit_path.open(encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except (OSError, csv.Error) as exc:
+        return [
+            _issue(
+                "problem_parameter.incident_angles",
+                False,
+                "input_parameter_audit.csv 无法解析。",
+                {"error_type": type(exc).__name__},
+            )
+        ]
+
+    angle_rows = [
+        row for row in rows if "入射角" in " ".join(str(value) for value in row.values())
+    ]
+    audited_angles: set[float] = set()
+    for row in angle_rows:
+        text = " ".join(str(value) for value in row.values())
+        audited_angles.update(float(value) for value in _ANGLE_VALUE_RE.findall(text))
+        # A numeric value column often omits the degree symbol. Preserve only
+        # standalone numbers from rows explicitly labelled as incident angle.
+        for value in row.values():
+            if re.fullmatch(r"\s*[-+]?\d+(?:\.\d+)?\s*", str(value)):
+                audited_angles.add(float(value))
+    missing = [angle for angle in expected_angles if angle not in audited_angles]
+    false_vertical_claims = [
+        row
+        for row in angle_rows
+        if re.search(r"题面.{0,8}(?:垂直入射|0\s*[°度])", " ".join(str(v) for v in row.values()))
+    ]
+    passed = not missing and not false_vertical_claims
+    return [
+        _issue(
+            "problem_parameter.incident_angles",
+            passed,
+            (
+                "参数审计完整保留题面给定的实测入射角。"
+                if passed
+                else "参数审计遗漏或改写了题面实测入射角；相关厚度结果不得冻结。"
+            ),
+            {
+                "expected_angles_deg": expected_angles,
+                "audited_angles_deg": sorted(audited_angles),
+                "missing_angles_deg": missing,
+                "false_vertical_claim_count": len(false_vertical_claims),
+            },
+        )
+    ]
 
 
 def _safe_source_path(work_dir: Path, relative_path: object) -> Path | None:
@@ -598,6 +687,44 @@ def _contract_requires_linear_programming_evidence(work_dir: Path) -> bool:
     )
 
 
+def _declares_balance_requirement(value: object) -> bool:
+    """Return whether a structured acceptance item explicitly requires conservation.
+
+    A generic physical-simulation profile is intentionally insufficient: optics,
+    mechanics and curve fitting can all be physical models without a mass/flow
+    balance equation.  The hard gate is enabled only by a specific machine key
+    or by an unambiguous Chinese acceptance label/description.
+    """
+    if not isinstance(value, dict):
+        return False
+    key = str(value.get("key", value.get("id", ""))).lower()
+    if any(token in key for token in _BALANCE_REQUIREMENT_KEYS):
+        return True
+    text = "\n".join(
+        str(value.get(field, ""))
+        for field in ("label", "description")
+    )
+    return _BALANCE_REQUIREMENT_PATTERN.search(text) is not None
+
+
+def _subtask_requires_balance_residual(work_dir: Path, subtask_id: str) -> bool:
+    """Read the task-owned plan/contract to decide whether this subtask needs balance evidence."""
+    plan = _read_json(work_dir / "modeler_plan.json")
+    if plan:
+        model_plan = plan.get("model_plan", {})
+        subtasks = model_plan.get("subtasks", {}) if isinstance(model_plan, dict) else {}
+        subtask = subtasks.get(subtask_id, {}) if isinstance(subtasks, dict) else {}
+        metrics = subtask.get("acceptance_metrics", []) if isinstance(subtask, dict) else []
+        if isinstance(metrics, list) and any(_declares_balance_requirement(item) for item in metrics):
+            return True
+
+    contract = _read_json(work_dir / "problem_contract.json")
+    requirements = contract.get("required_requirements", []) if contract else []
+    return isinstance(requirements, list) and any(
+        _declares_balance_requirement(item) for item in requirements
+    )
+
+
 def _pressure_stability_issues(work_dir: Path, manifest: dict[str, Any]) -> list[dict[str, Any]]:
     """Reject visibly unstable controls for contracts that explicitly target 100 MPa."""
     contract = _read_json(work_dir / "problem_contract.json")
@@ -641,14 +768,16 @@ def _subtask_evidence_issues(
     relief_validation_required: bool,
     q1_valve_duration_outputs_required: bool,
     linear_programming_evidence_required: bool,
+    balance_residual_required: bool,
 ) -> list[dict[str, Any]]:
     """Reject result labels that openly admit no formal numerical solve occurred.
 
     A matching hash only proves that a CSV was written.  It does not turn an
-    inherited estimate into a simulation/optimization result. Physical-system
-    tasks must record a balance residual; linear-programming tasks instead
-    prove feasibility through their resource constraints plus objective and
-    decision-variable evidence.
+    inherited estimate into a simulation/optimization result. Tasks whose
+    acceptance contract explicitly declares a conservation equation must record
+    a balance residual; linear-programming tasks instead prove feasibility
+    through their resource constraints plus objective and decision-variable
+    evidence.
     """
     metrics = item.get("metrics")
     if not _metrics_valid(metrics):
@@ -673,7 +802,7 @@ def _subtask_evidence_issues(
         ),
         {"unsupported_terms": unsupported},
     )]
-    if not linear_programming_evidence_required:
+    if balance_residual_required:
         has_balance_residual = any(
             "残差" in metric["label"] or "守恒" in metric["label"]
             for metric in metrics
@@ -863,6 +992,7 @@ def _manifest_issues(
             relief_validation_required=relief_validation_required,
             q1_valve_duration_outputs_required=q1_valve_duration_outputs_required,
             linear_programming_evidence_required=linear_programming_evidence_required,
+            balance_residual_required=_subtask_requires_balance_residual(work_dir, subtask),
         ))
 
         if strict_value_sources:
@@ -1113,6 +1243,7 @@ def validate_execution_artifacts(
     issues = _notebook_issues(root, has_execution_manifest=has_execution_manifest)
     if require_manifest:
         issues.extend(_manifest_issues(root, required))
+        issues.extend(_problem_parameter_issues(root))
     passed = all(issue["passed"] for issue in issues)
     return {
         "schema_version": "mathmodel.execution-validation-report.v1",

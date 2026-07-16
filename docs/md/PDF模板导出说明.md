@@ -148,6 +148,13 @@ PDF/sidecar 自动编译会显式禁用 XeLaTeX shell escape；模型或 Markdow
   `表n` 标题、以及两问任务中是否把扩展灵敏度分析误标为可见的 `问题3` 或
   `问题三` 段落。工作流会把原题拆出的正式题目数传入后处理，避免 Writer 自行编出
   的额外问题影响判断。
+  对题面明确给出多组实测入射角、同一样品配对关系，以及“问题1双光束、问题3多光束”
+  这类可机器识别的物理结构，冻结前还会交叉核验 `task_request.json` 与
+  `input_parameter_audit.csv`；题面10°/15°被改写成0°等情况会使
+  `execution_validation_report.json` 直接 `FAIL`。正文预检的
+  `checks.problem_alignment` 同时核对5.1/5.2/5.3的模型和附件归属，并拦截把同一晶圆
+  的双角度测量写成“两片样品”。这类失败说明底层建模或章节语义错误，不属于一次性
+  Writer 文本回修范围，不得继续导出或用已有PDF冒充候选稿。
 - 后处理会在参考文献条目之间保留空行，避免 Pandoc 导出 PDF/DOCX 时把多条文献
   合并为同一段；若模型生成空参考文献段且正文没有有效引用，后处理会删除空参考文献段，
   预检不再因为“无引用且无文献”单独失败，但人工复核仍需确认需要引用的背景或方法是否有真实来源。
@@ -303,6 +310,10 @@ D:\texlive\2026\bin\windows\pdfinfo.exe backend\project\work_dir\<task_id>\res.p
   后应为 `PASS`。若为 `FAIL`，先按报告里的 remediation 挂载正式字体或本机重导。
 - `paper_preflight_report.json -> checks.appendix_console_noise.passed` 应为 `true`。
   若失败，先重跑 `prepare_paper_markdown` 重建附录，再重导 DOCX/PDF。
+- `execution_validation_report.json -> checks[id=problem_parameter.incident_angles]` 如存在，
+  必须完整列出题面实测角度且 `passed=true`；缺角度或出现伪造的“题面垂直入射”时应返回建模阶段重算。
+- `paper_preflight_report.json -> checks.problem_alignment.passed` 如被题型触发，必须为 `true`；
+  其 `issues` 会列出问题章节、模型类型、附件归属或同一样品关系的具体冲突。
 - `paper_preflight_report.json -> checks.images.unused_generated` 应为空。若生成图片只作为
   支撑材料而不插入正文，必须出现在附录A支撑材料表中并标记为 `图片文件`；否则应删除、
   插入正文引用，或人工接受 `CONDITIONAL_PASS`。

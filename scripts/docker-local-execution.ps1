@@ -41,10 +41,10 @@ function Assert-LocalExecutionMode {
     } catch {
         throw "后端执行配置输出不是 JSON：$result"
     }
-    if ($config.mode -ne 'auto' -or -not $config.allow_local) {
-        throw "本地自动模式未生效：mode=$($config.mode), allow_local=$($config.allow_local)"
+    if ($config.mode -ne 'local' -or -not $config.allow_local) {
+        throw "可信本地模式未生效：mode=$($config.mode), allow_local=$($config.allow_local)"
     }
-    Write-Host ("本地自动模式已生效：mode={0}, allow_local={1}, e2b_configured={2}" -f $config.mode, $config.allow_local, $config.e2b_configured)
+    Write-Host ("可信本地模式已生效：mode={0}, allow_local={1}, e2b_configured={2}" -f $config.mode, $config.allow_local, $config.e2b_configured)
 }
 
 function Start-LocalMode {

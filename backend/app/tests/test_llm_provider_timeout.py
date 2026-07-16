@@ -9,6 +9,11 @@ from app.core.llm.providers.openai_responses import OpenAIResponsesProvider
 
 
 class ProviderTimeoutTest(unittest.IsolatedAsyncioTestCase):
+    def test_openai_responses_required_tool_choice_uses_literal(self):
+        provider = OpenAIResponsesProvider()
+
+        self.assertEqual(provider._convert_tool_choice("required"), "required")
+
     async def test_openai_chat_provider_uses_configured_timeout(self):
         provider = OpenAIChatProvider()
 

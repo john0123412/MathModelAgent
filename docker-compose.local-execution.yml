@@ -3,7 +3,7 @@
 services:
   backend:
     environment:
-      CODE_INTERPRETER_KIND: auto
+      CODE_INTERPRETER_KIND: local
       ALLOW_LOCAL_CODE_EXECUTION: "true"
       # A numerical experiment must yield promptly. The interpreter watchdog also
       # protects the workflow if a Jupyter IOPub receive stalls.

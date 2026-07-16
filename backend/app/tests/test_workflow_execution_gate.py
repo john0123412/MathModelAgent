@@ -42,6 +42,16 @@ class _Coder:
         )
 
 
+class _FailedCoder:
+    async def run(self, prompt, subtask_title):
+        return CoderToWriter(
+            code_response=f"failed {subtask_title}",
+            created_images=[],
+            execution_attempted=True,
+            execution_succeeded=False,
+        )
+
+
 class _Writer:
     def __init__(self, events):
         self.events = events
@@ -87,6 +97,49 @@ class _RepairOutput:
 
 
 class WorkflowExecutionGateTest(unittest.IsolatedAsyncioTestCase):
+    async def test_early_coder_failure_does_not_label_diagnostic_pass_as_validation(self):
+        with tempfile.TemporaryDirectory() as raw_work_dir:
+            work_dir = Path(raw_work_dir)
+            checkpoint_manager = CheckpointManager(str(work_dir))
+            checkpoint_manager.save(
+                TaskCheckpoint(
+                    task_id="task",
+                    ques_all="test",
+                    comp_template="cumcm",
+                    format_output="markdown",
+                    questions={"ques_count": 2, "ques1": "q1", "ques2": "q2"},
+                    ques_count=2,
+                    modeler_response={"questions_solution": {}},
+                    updated_at="now",
+                )
+            )
+            workflow = MathModelWorkFlow()
+            workflow.task_id = "task"
+            workflow.work_dir = str(work_dir)
+
+            with (
+                patch("app.core.workflow.redis_manager.publish_message", AsyncMock()),
+                patch(
+                    "app.core.workflow.write_execution_validation_report",
+                    return_value={"status": "PASS"},
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "尚未执行正式逐题验证"
+                ) as raised:
+                    await workflow._run_solution_flows(
+                        _Flows(),
+                        ModelerToCoder(questions_solution={}),
+                        _FailedCoder(),
+                        _Writer([]),
+                        _Interpreter(str(work_dir)),
+                        _Output(),
+                        checkpoint_manager,
+                        {},
+                    )
+
+            self.assertNotIn("诊断报告状态: PASS", str(raised.exception))
+
     async def test_all_code_and_freeze_finish_before_any_solution_writer_runs(self):
         with tempfile.TemporaryDirectory() as raw_work_dir:
             work_dir = Path(raw_work_dir)
@@ -353,6 +406,59 @@ class WorkflowExecutionGateTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(output.results["ques2"]["response_content"], "paper ques2_preflight_repair")
             self.assertEqual(output.save_count, 1)
             self.assertEqual(checkpoint_manager._checkpoint.paper_repair_attempts, 1)
+
+    async def test_preflight_repair_accepts_matching_figure_and_result_conflicts(self):
+        with tempfile.TemporaryDirectory() as raw_work_dir:
+            checkpoint_manager = CheckpointManager(raw_work_dir)
+            checkpoint_manager.save(
+                TaskCheckpoint(
+                    task_id="task",
+                    ques_all="test",
+                    comp_template="cumcm",
+                    format_output="markdown",
+                    questions={"ques_count": 2, "ques1": "q1", "ques2": "q2"},
+                    ques_count=2,
+                    modeler_response={"questions_solution": {}},
+                    updated_at="now",
+                )
+            )
+            workflow = MathModelWorkFlow()
+            workflow.task_id = "task"
+            workflow.work_dir = raw_work_dir
+            events = []
+            output = _RepairOutput()
+            report = {
+                "status": "FAIL",
+                "checks": {
+                    "result_consistency": {
+                        "passed": False,
+                        "severity": "fail",
+                        "conflicts": [
+                            {"paper_section": "5.1 问题一模型的建立与求解", "location": "body"}
+                        ],
+                    },
+                    "figure_result_consistency": {
+                        "passed": False,
+                        "severity": "fail",
+                        "conflicts": [
+                            {"paper_section": "5.1 问题一模型的建立与求解", "location": "body"}
+                        ],
+                    },
+                }
+            }
+
+            with (
+                patch("app.core.workflow.redis_manager.publish_message", AsyncMock()),
+                patch("app.core.workflow.build_result_fact_summary", return_value="frozen facts"),
+            ):
+                repaired = await workflow._repair_writer_preflight_once(
+                    output, _Writer(events), checkpoint_manager, report
+                )
+
+            self.assertIs(repaired, report)
+            self.assertEqual([event[1] for event in events], ["ques1_preflight_repair"])
+            self.assertEqual(output.results["ques1"]["response_content"], "paper ques1_preflight_repair")
+            self.assertEqual(output.results["ques2"]["response_content"], "incorrect paper q2")
 
     async def test_preflight_non_section_failure_is_not_blindly_rewritten(self):
         with tempfile.TemporaryDirectory() as raw_work_dir:

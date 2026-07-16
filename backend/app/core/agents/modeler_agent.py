@@ -1,18 +1,51 @@
 """建模手 Agent 模块，负责分析问题并制定建模方案。"""
 
 import asyncio
-from typing import Callable
+from typing import Callable, get_args
 from pydantic import ValidationError
 from app.core.agents.agent import Agent
 from app.core.llm.llm import LLM
 from app.core.prompts import MODELER_PROMPT
-from app.schemas.A2A import CoordinatorToModeler, ModelPlan, ModelerToCoder
+from app.schemas.A2A import (
+    AcceptanceMetric,
+    CoordinatorToModeler,
+    ExpectedArtifact,
+    ModelPlan,
+    ModelerToCoder,
+)
 from app.schemas.problem_contract import validate_modeler_plan
 from app.utils.log_util import logger
 import json
 import re
 
-MAX_JSON_REPAIR_ATTEMPTS = 3
+MAX_JSON_REPAIR_ATTEMPTS = 4
+
+_ARTIFACT_KINDS = get_args(ExpectedArtifact.model_fields["kind"].annotation)
+_METRIC_COMPARATORS = get_args(
+    AcceptanceMetric.model_fields["comparator"].annotation
+)
+MODEL_PLAN_PROTOCOL_REMINDER = (
+    '固定协议：schema_version 只能是 "mathmodel.model-plan.v1"；'
+    "expected_artifacts[*].kind 只能是 "
+    + ", ".join(map(str, _ARTIFACT_KINDS))
+    + "；acceptance_metrics[*].comparator 只能是 "
+    + ", ".join(map(str, _METRIC_COMPARATORS))
+    + "。不要自造 report、model_description、check 等枚举值；说明性产物使用 other，"
+    "需要核对等值时使用 eq。"
+)
+
+
+def _format_validation_errors(exc: ValidationError) -> list[str]:
+    """Return every schema error with a stable JSON field path."""
+    issues: list[str] = []
+    for error in exc.errors(
+        include_url=False,
+        include_context=False,
+        include_input=False,
+    ):
+        location = ".".join(str(part) for part in error["loc"])
+        issues.append(f"ModelPlan schema 校验失败 [{location}]: {error['msg']}")
+    return issues
 
 
 def repair_json(json_str: str) -> dict | None:
@@ -152,7 +185,7 @@ class ModelerAgent(Agent):
                     if not issues:
                         return modeler_response
                 except ValidationError as exc:
-                    issues.append("ModelPlan schema 校验失败: " + exc.errors()[0]["msg"])
+                    issues.extend(_format_validation_errors(exc))
             else:
                 issues.append("JSON 无法解析")
 
@@ -172,7 +205,10 @@ class ModelerAgent(Agent):
                     "content": (
                         "你的输出不是可执行的完整 ModelPlan。请只修正后重新输出完整 JSON，"
                         "保留全部 quesN，并补齐 inputs、method、constraints、expected_artifacts、"
-                        "acceptance_metrics：" + "; ".join(issues)
+                        "acceptance_metrics。\n"
+                        + MODEL_PLAN_PROTOCOL_REMINDER
+                        + "\n本轮全部校验错误：\n- "
+                        + "\n- ".join(issues)
                     ),
                 }
             )

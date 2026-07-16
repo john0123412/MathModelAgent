@@ -182,5 +182,13 @@ EDA 或敏感性分析放进 `subtasks`。
 4. `expected_artifacts`：至少一个 `result_table`、`time_series` 或 `dataset` 数值产物；PNG 不是证据。需要图时同时列出 `figure_data`。
 5. `acceptance_metrics`：至少一个可从结构化结果复算的指标，包含比较符、阈值/目标、单位和计算口径。不要以“结果合理”“图像平滑”充当指标。
 
+## 固定字段枚举（不得自造值）
+
+- `schema_version` 只能是 `mathmodel.model-plan.v1`。
+- `expected_artifacts[*].kind` 只能是：`result_table`、`constraint_table`、`figure_data`、`figure`、`time_series`、`parameter_audit`、`dataset`、`other`。
+- `acceptance_metrics[*].comparator` 只能是：`le`、`lt`、`ge`、`gt`、`eq`、`within`。
+- 说明性报告、模型说明等无法归入前述数值类型的产物统一使用 `other`，不得输出 `report` 或 `model_description`。
+- “核对/检查是否相等”使用 `eq`，不得输出 `check`。
+
 题面参数契约中的领域 profile 会额外要求：线性规划保留目标和约束表；数据分析保留数据来源、清洗/划分及误差/统计指标；物理仿真保留时序/扫描数据、守恒或残差指标。所有值均是**执行前计划**，不是虚构的计算结果。
 """

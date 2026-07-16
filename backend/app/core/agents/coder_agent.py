@@ -105,6 +105,9 @@ def _evidence_source_paths(arguments: object) -> set[str]:
     if not isinstance(arguments, dict):
         return set()
     paths: set[str] = set()
+    for metric in arguments.get("metrics", []):
+        if isinstance(metric, dict) and isinstance(metric.get("source_path"), str):
+            paths.add(str(Path(metric["source_path"])).replace("\\", "/"))
     for constraint in arguments.get("constraints", []):
         if isinstance(constraint, dict) and isinstance(constraint.get("source_path"), str):
             paths.add(str(Path(constraint["source_path"])).replace("\\", "/"))

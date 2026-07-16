@@ -73,8 +73,12 @@ coder_tools = [
                                 "unit": {"type": "string"},
                                 "explanation": {"type": "string"},
                                 "aliases": {"type": "array", "items": {"type": "string"}},
+                                "source_path": {
+                                    "type": "string",
+                                    "description": "Task-relative numeric result file containing this value.",
+                                },
                             },
-                            "required": ["id", "label", "value", "unit", "explanation"],
+                            "required": ["id", "label", "value", "unit", "explanation", "source_path"],
                         },
                     },
                     "figures": {

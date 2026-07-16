@@ -259,7 +259,10 @@ print("=" * 60)
   CSV/JSON/TXT result file (and any figure data file), call
   `record_execution_evidence`. Submit only: `subtask_id` (`quesN`), each
   constraint's finite numeric `actual`, comparison and target/bounds, its
-  `source_path`, the Chinese metrics, and optional figure `path`/`data_path`.
+  `source_path`, the Chinese metrics (each with its own numeric-result
+  `source_path`), and optional figure `path`/`data_path`. Constraint ids,
+  comparison directions and targets must exactly preserve the Modeler plan;
+  never reverse `gt` into `lte` or otherwise make a failed metric pass.
   The backend validates paths, computes SHA-256, calculates `feasible`, and
   atomically updates the shared manifest without deleting other questions.
 - `record_execution_evidence` is an Agent tool shown in the tool list; it is
@@ -270,9 +273,10 @@ print("=" * 60)
   after its result files are written, make a separate evidence-tool call. The
   cited result and figure-data files must have been created or updated by this
   current Coder turn, not reused from an earlier checkpoint.
-- A constraint source must be a task-relative numerical result file, never a
-  PNG. Every metric requires an id, Chinese label, finite value, unit, and a
-  concrete explanation. Figures require a task-relative image path and the
+- A constraint or metric source must be a task-relative numerical result file,
+  never a PNG. Its submitted number must actually appear in that file (normal
+  display rounding is allowed). Every metric requires an id, Chinese label,
+  finite value, unit, concrete explanation, and `source_path`. Figures require a task-relative image path and the
   task-relative data source that produced it.
 - For optimization questions, metrics must include the objective value and
   every decision variable used in the reported optimum (including each

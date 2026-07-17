@@ -12,6 +12,7 @@ from app.tools.paper_postprocessor import (
     build_preflight_report,
     ensure_figure_references,
     ensure_table_captions,
+    escape_pipes_in_table_math_cells,
     normalize_bold_standalone_labels,
     normalize_cjk_inline_spacing,
     normalize_chinese_references,
@@ -1987,6 +1988,80 @@ class TestProblemAlignmentGate(unittest.TestCase):
         self.assertFalse(wrong_check["passed"])
         self.assertGreaterEqual(len(wrong_check["issues"]), 4)
         self.assertTrue(correct["checks"]["problem_alignment"]["passed"])
+
+    def test_latex_incident_angles_are_recognized(self):
+        """论文用 LaTeX ``$10^\\circ$``/``$15^{\\circ}$`` 声明入射角时不应被误判为缺失。"""
+        problem = (
+            "问题1 如果考虑只有一次反射、透射，建立模型。"
+            "问题2 使用附件1和附件2。"
+            "问题3 研究多光束干涉并使用附件3和附件4。"
+        )
+        latex_markdown = (
+            "## 5.1 问题一\n\n建立两束反射光的双光束模型。\n\n"
+            "## 5.2 问题二\n\n附件1和附件2是同一碳化硅晶圆在 $10^\\circ$ 与 $15^{\\circ}$ 下的测量。\n\n"
+            "## 5.3 问题三\n\n对附件3和附件4建立多光束模型。\n"
+        )
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(
+                os.path.join(work_dir, "task_request.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump({"ques_all": problem}, handle, ensure_ascii=False)
+            report = build_preflight_report(work_dir, latex_markdown, code_sources=[])
+
+        check = report["checks"]["problem_alignment"]
+        self.assertTrue(check["passed"])
+        self.assertNotIn(
+            "5.2 未明确使用附件1/2对应的10°与15°入射角。", check["issues"]
+        )
+
+
+class TestEscapePipesInTableMathCells(unittest.TestCase):
+    """验证表格单元格内 LaTeX 绝对值竖线被转义，避免破坏表格列数。"""
+
+    def test_absolute_value_pipe_in_table_cell_is_escaped(self):
+        markdown = (
+            "| 符号 | 含义 | 单位 |\n"
+            "|---|---|---|\n"
+            "| $\\rho$ | 往返反射振幅乘积，$\\rho=|r_1r_2|$ | — |\n"
+            "| $R_i$ | 实测反射率 | $\\%$ |\n"
+        )
+        fixed, count = escape_pipes_in_table_math_cells(markdown)
+        # 两个裸竖线应被转义为 \vert。
+        self.assertEqual(count, 2)
+        self.assertNotIn("|r_1r_2|", fixed)
+        self.assertIn(r"\vert", fixed)
+        # 每个表格行去掉转义后的结构列数应一致（均为 3 列 = 4 个结构分隔符）。
+        for line in fixed.splitlines():
+            if line.startswith("|"):
+                self.assertEqual(line.count("|"), 4, msg=line)
+
+    def test_structural_pipes_and_non_table_text_untouched(self):
+        markdown = (
+            "正文里的 $|x|$ 不是表格，不应被改写。\n\n"
+            "| A | B |\n"
+            "|---|---|\n"
+            "| 1 | 2 |\n"
+        )
+        fixed, count = escape_pipes_in_table_math_cells(markdown)
+        self.assertEqual(count, 0)
+        self.assertIn("正文里的 $|x|$ 不是表格", fixed)
+
+    def test_preflight_table_passes_after_escape(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            markdown = (
+                "# 标题\n\n"
+                "## 四、符号说明\n\n"
+                "| 符号 | 含义 | 单位 |\n"
+                "|---|---|---|\n"
+                "| $\\rho$ | 乘积 $\\rho=|r_1r_2|$ | — |\n"
+                "| $d$ | 厚度 | $\\mu m$ |\n\n"
+            )
+            report = build_preflight_report(
+                work_dir,
+                escape_pipes_in_table_math_cells(markdown)[0],
+                code_sources=[],
+            )
+        self.assertTrue(report["checks"]["markdown_structure"]["passed"])
 
 
 if __name__ == "__main__":

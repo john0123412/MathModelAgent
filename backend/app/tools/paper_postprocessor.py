@@ -1444,6 +1444,80 @@ def _is_markdown_table_line(line: str) -> bool:
     return stripped.startswith("|") and stripped.endswith("|")
 
 
+def _escape_pipes_in_math_span(cell: str) -> tuple[str, int]:
+    """把单元格内 ``$...$`` 数学span 里的裸 ``|`` 转义为 ``\\vert``。
+
+    LaTeX 用 ``|`` 表示绝对值/范数（如 ``$|r_1r_2|$``），但在 Markdown 表格里
+    ``|`` 是列分隔符，会把一个单元格拆成多列、使表格列数不一致而失效。
+    ``\\vert`` 与竖线渲染等价，可安全替换而不改变数学语义。
+
+    Args:
+        cell: 单个表格单元格文本（不含两侧的结构分隔符）。
+
+    Returns:
+        (处理后的单元格文本, 替换的竖线个数)。
+    """
+    count = 0
+
+    def _replace(match: re.Match[str]) -> str:
+        nonlocal count
+        body = match.group(1)
+        if "|" not in body:
+            return match.group(0)
+        count += body.count("|")
+        return "$" + body.replace("|", r"\vert ") + "$"
+
+    # 只处理成对的 $...$ 行内数学，避免误伤普通文本里的竖线。
+    escaped = re.sub(r"\$([^$]*)\$", _replace, cell)
+    return escaped, count
+
+
+def escape_pipes_in_table_math_cells(markdown: str) -> tuple[str, int]:
+    """转义 Markdown 表格单元格内行内数学里的裸 ``|``，保持表格列数一致。
+
+    仅作用于表格行（``| ... |``），逐单元格处理，且只改写 ``$...$`` 数学span
+    内部的竖线；表格结构分隔符本身不受影响。代码围栏内的内容跳过。
+
+    Args:
+        markdown: 论文 Markdown 全文。
+
+    Returns:
+        (处理后的 Markdown, 被转义的竖线总数)。
+    """
+    total = 0
+    in_fence = False
+    fence_marker = ""
+    out_lines: list[str] = []
+    for line in markdown.splitlines():
+        fence_match = FENCE_START_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker[0]
+            elif marker.startswith(fence_marker):
+                in_fence = False
+                fence_marker = ""
+            out_lines.append(line)
+            continue
+        if in_fence or not _is_markdown_table_line(line):
+            out_lines.append(line)
+            continue
+        stripped = line.strip()
+        # 先转义整行 $...$ 数学span 内的竖线，使其不再是列分隔符；
+        # 之后残留的 | 才都是结构分隔符。必须先转义再看待列切分，
+        # 否则按 | 切分会先破坏数学span。
+        escaped_line, count = _escape_pipes_in_math_span(stripped)
+        total += count
+        # 保留原始缩进前缀。
+        prefix = line[: len(line) - len(line.lstrip())]
+        out_lines.append(prefix + escaped_line)
+    result = "\n".join(out_lines)
+    if markdown.endswith("\n") and not result.endswith("\n"):
+        result += "\n"
+    return result, total
+
+
 def _previous_nonblank_line(lines: list[str]) -> str:
     for line in reversed(lines):
         if line.strip():
@@ -2639,6 +2713,25 @@ def _check_reference_relevance(markdown: str) -> dict:
     return {"passed": not unrelated, "unrelated": unrelated}
 
 
+def _mentions_incident_angle(text: str, angle: int) -> bool:
+    """判断正文是否声明了某个入射角。
+
+    论文可能用纯文本度符号（``10°``/``10度``）或 LaTeX 写法
+    （``10^\\circ``、``10^{\\circ}``，中间可含空格或 ``\\,``）。门禁若只认度符号，
+    会把规范的 LaTeX 角度误判为“未使用”，因此这里同时接受两类写法。
+
+    Args:
+        text: 待检查的章节正文。
+        angle: 期望出现的入射角整数值（如 10、15）。
+
+    Returns:
+        文本中出现该入射角时返回 True。
+    """
+    plain = rf"(?<!\d){angle}\s*[°度]"
+    latex = rf"(?<!\d){angle}\s*(?:\^\s*\{{?\s*\\circ|\\,?\s*\^\s*\{{?\s*\\circ)"
+    return bool(re.search(plain, text) or re.search(latex, text))
+
+
 def _numbered_model_section(markdown: str, number: int) -> str:
     """Return the content of a conventional 5.N model-and-solution section."""
     start = re.search(
@@ -2689,7 +2782,7 @@ def _check_problem_alignment(work_dir: str, markdown: str) -> dict:
         issues.append("5.1 把问题3的 Airy/多光束模型提前作为问题1的主模型。")
     if not all(token in q2 for token in ("附件1", "附件2", "碳化硅")):
         issues.append("5.2 未使用附件1/2的碳化硅数据回答问题2。")
-    if not all(re.search(rf"(?<!\d){angle}\s*[°度]", q2) for angle in (10, 15)):
+    if not all(_mentions_incident_angle(q2, angle) for angle in (10, 15)):
         issues.append("5.2 未明确使用附件1/2对应的10°与15°入射角。")
     if not all(token in q3 for token in ("附件3", "附件4", "多光束")):
         issues.append("5.3 未使用附件3/4完成多光束判定和硅外延层计算。")
@@ -3062,6 +3155,7 @@ def prepare_paper_markdown(
     markdown, code_sources = append_code_appendix(markdown, work_dir)
     markdown = normalize_image_captions(markdown)
     markdown, inserted_figure_references = ensure_figure_references(markdown)
+    markdown, escaped_table_math_pipes = escape_pipes_in_table_math_cells(markdown)
     markdown = ensure_table_captions(markdown)
     outline = build_paper_outline(markdown)
     figure_usage = build_figure_usage(work_dir, markdown)
@@ -3113,6 +3207,8 @@ def prepare_paper_markdown(
         fixups["normalised_submission_wording"] = normalised_submission_wording
     if inserted_figure_references:
         fixups["inserted_figure_references"] = inserted_figure_references
+    if escaped_table_math_pipes:
+        fixups["escaped_table_math_pipes"] = escaped_table_math_pipes
     if fixups:
         report["fixups"] = fixups
 

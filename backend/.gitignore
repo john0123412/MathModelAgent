@@ -14,3 +14,6 @@ config/latex-template/
 logs/
 
 .env.dev
+# 本地 provider 切换备份，含明文密钥，禁止入库
+.env*.bak
+.env.dev.*

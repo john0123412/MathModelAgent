@@ -745,5 +745,53 @@ class MainPathPlanReviewTest(unittest.IsolatedAsyncioTestCase):
             build_agents.assert_not_awaited()
 
 
+class PreflightRepairableSectionsTest(unittest.TestCase):
+    """验证 problem_alignment 章节错位可被映射为待回修的写作节。"""
+
+    def _report(self, issues: list[str]) -> dict:
+        return {
+            "checks": {
+                "problem_alignment": {
+                    "passed": False,
+                    "severity": "fail",
+                    "issues": issues,
+                }
+            }
+        }
+
+    def test_problem_alignment_issues_map_to_ques_sections(self):
+        report = self._report(
+            [
+                "5.1 未以题面要求的双光束/一次反射模型回答问题1。",
+                "5.2 未使用附件1/2的碳化硅数据回答问题2。",
+                "5.3 未使用附件3/4完成多光束判定和硅外延层计算。",
+            ]
+        )
+        sections = MathModelWorkFlow._preflight_repairable_sections(
+            report, {"ques1", "ques2", "ques3", "eda", "firstPage"}
+        )
+        self.assertEqual(sections, ["ques1", "ques2", "ques3"])
+
+    def test_unnumbered_alignment_issue_covers_declared_questions(self):
+        report = self._report(
+            ["正文把同一晶圆的双角度测量错误表述为两个独立样品。"]
+        )
+        sections = MathModelWorkFlow._preflight_repairable_sections(
+            report, {"ques1", "ques2", "eda"}
+        )
+        self.assertEqual(sections, ["ques1", "ques2"])
+
+    def test_non_repairable_check_still_blocks(self):
+        report = {
+            "checks": {
+                "code_appendix": {"passed": False, "severity": "fail"},
+            }
+        }
+        sections = MathModelWorkFlow._preflight_repairable_sections(
+            report, {"ques1", "ques2"}
+        )
+        self.assertEqual(sections, [])
+
+
 if __name__ == "__main__":
     unittest.main()

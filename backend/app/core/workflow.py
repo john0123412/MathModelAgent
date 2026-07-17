@@ -928,6 +928,7 @@ class MathModelWorkFlow(WorkFlow):
             "algorithm_evidence",
             "infeasible_optimality",
             "claim_trace",
+            "problem_alignment",
         }
         failed = {
             check_id: check
@@ -974,6 +975,26 @@ class MathModelWorkFlow(WorkFlow):
                 candidate = f"ques{chinese_index}"
                 if candidate in available_sections:
                     sections.add(candidate)
+        # problem_alignment 报告的是 "5.N ..." 形式的章节错位（正文与题面问题
+        # 编号对不上）。逐条解析节号 N → ques{N}，让写作手按题号重写对应章节；
+        # 无节号前缀的整体性问题（如把双角度误述为两片样品）无法安全定位到单节，
+        # 保守起见把已声明的三题一并纳入回修。
+        alignment = failed.get("problem_alignment", {})
+        if isinstance(alignment, dict):
+            alignment_issues = [
+                str(item) for item in alignment.get("issues", [])
+            ]
+            for issue in alignment_issues:
+                numbered = re.match(r"\s*5\.([0-9])", issue)
+                if numbered:
+                    candidate = f"ques{numbered.group(1)}"
+                    if candidate in available_sections:
+                        sections.add(candidate)
+                    continue
+                # 无节号前缀：整体性错位，纳入全部已声明题目章节。
+                for key in sorted(available_sections):
+                    if re.fullmatch(r"ques[0-9]+", key):
+                        sections.add(key)
         # A claim-trace or method-evidence failure is not safely assignable by
         # heading.  Keep it human-visible instead of paying for a blind rewrite.
         if not sections:

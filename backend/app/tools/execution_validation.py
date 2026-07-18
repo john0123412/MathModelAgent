@@ -96,28 +96,37 @@ def _problem_parameter_issues(work_dir: Path) -> list[dict[str, Any]]:
     if len(expected_angles) < 2:
         return []
 
-    audit_path = work_dir / "input_parameter_audit.csv"
-    if not audit_path.is_file():
+    # 每道正式题写各自的 `{quesN}_input_parameter_audit.csv`，避免共享单一文件被
+    # 后写题覆盖而使先写题的证据 sha256 失效。这里聚合所有 per-question 审计文件
+    # （并兼容历史上的单一 input_parameter_audit.csv），只要任一文件覆盖了题面
+    # 实测角度即视为通过。
+    audit_paths = sorted(work_dir.glob("*_input_parameter_audit.csv"))
+    legacy_audit = work_dir / "input_parameter_audit.csv"
+    if legacy_audit.is_file():
+        audit_paths.append(legacy_audit)
+    if not audit_paths:
         return [
             _issue(
                 "problem_parameter.incident_angles",
                 False,
-                "题面给出多个实测入射角，但缺少 input_parameter_audit.csv 证明算法使用了这些角度。",
+                "题面给出多个实测入射角，但缺少 *_input_parameter_audit.csv 证明算法使用了这些角度。",
                 {"expected_angles_deg": expected_angles},
             )
         ]
-    try:
-        with audit_path.open(encoding="utf-8-sig", newline="") as handle:
-            rows = list(csv.DictReader(handle))
-    except (OSError, csv.Error) as exc:
-        return [
-            _issue(
-                "problem_parameter.incident_angles",
-                False,
-                "input_parameter_audit.csv 无法解析。",
-                {"error_type": type(exc).__name__},
-            )
-        ]
+    rows: list[dict[str, Any]] = []
+    for audit_path in audit_paths:
+        try:
+            with audit_path.open(encoding="utf-8-sig", newline="") as handle:
+                rows.extend(csv.DictReader(handle))
+        except (OSError, csv.Error) as exc:
+            return [
+                _issue(
+                    "problem_parameter.incident_angles",
+                    False,
+                    f"{audit_path.name} 无法解析。",
+                    {"error_type": type(exc).__name__},
+                )
+            ]
 
     angle_rows = [
         row for row in rows if "入射角" in " ".join(str(value) for value in row.values())

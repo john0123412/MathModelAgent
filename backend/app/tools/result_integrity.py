@@ -156,8 +156,13 @@ def validate_result_freeze(work_dir: str, document: dict[str, Any] | None = None
     }
 
 
-def build_frozen_result_summary(work_dir: str) -> str:
-    """Create the writer-only fact block from a validated result freeze."""
+def build_frozen_result_summary(work_dir: str, subtask_id: str | None = None) -> str:
+    """Create the writer-only fact block from a validated result freeze.
+
+    当传入 ``subtask_id`` 时，只输出该子任务自己的冻结指标（物理过滤），用于
+    Writer 分节写作的子任务隔离：写 quesN 时看不到其它子任务的 frozen 指标。
+    未指定 subtask_id（如 eda/敏感性/全局校验）时返回全部指标，保持原行为。
+    """
     validation = validate_result_freeze(work_dir)
     if not validation["active"]:
         return ""
@@ -170,19 +175,40 @@ def build_frozen_result_summary(work_dir: str) -> str:
         )
 
     document = validation["document"]
+    target = str(subtask_id).lower() if subtask_id else None
+
+    def _in_scope(metric: dict[str, Any]) -> bool:
+        # 只排除“明确归属到其它子任务”的指标；无 subtask_id 的指标无法归属，
+        # 放行（与非冻结 CSV 路径一致，避免误删无法归属的合法事实）。
+        if target is None:
+            return True
+        own = str(metric.get("subtask_id", "")).lower()
+        if not own:
+            return True
+        return own == target
+
+    scoped_header = (
+        f"【冻结结果事实（唯一数值来源，仅限本题 {subtask_id}）】"
+        if target is not None
+        else "【冻结结果事实（唯一数值来源）】"
+    )
     lines = [
-        "【冻结结果事实（唯一数值来源）】",
+        scoped_header,
         f"冻结文件：{validation['path']}。正文、摘要、图题、结论中的计算结果只能使用下列指标；"
         "不得以代码手自然语言总结、图像目测或模型记忆补写其他数值。题面给定常量须明确标为题设，"
         "不能伪装成计算结果。",
     ]
     for metric in validation["metrics"]:
+        if not _in_scope(metric):
+            continue
         lines.append(
             f"- {metric['id']}：{_metric_label(metric)} = {metric['value']} {metric['unit']}"
             f"（{metric['explanation']}）"
         )
     for subtask in document.get("subtasks", []):
         if not isinstance(subtask, dict):
+            continue
+        if target is not None and str(subtask.get("id", "")).lower() != target:
             continue
         feasible = subtask.get("feasible")
         if feasible is False:

@@ -1,5 +1,6 @@
 """工作流提示边界测试。"""
 
+import json
 import os
 import tempfile
 import unittest
@@ -158,6 +159,135 @@ class TestFlows(unittest.TestCase):
         self.assertIn("机器时间影子价格 = 16.6667 元/小时", prompt)
         self.assertIn("人工时间影子价格 = 6.6667 元/小时", prompt)
         self.assertIn("正文关键数值必须优先使用以上结构化事实", prompt)
+
+    def test_quesx_writer_prompt_locks_scope_to_current_subtask(self):
+        """方案3：写某个正式题时必须显式锁定到本题，禁止借用其它子任务叙事。"""
+        with tempfile.TemporaryDirectory() as work_dir:
+            flows = Flows(
+                {
+                    "ques_count": 3,
+                    "background": "薄膜干涉测厚。",
+                    "ques1": "建立一次反射双光束干涉模型。",
+                    "ques2": "对附件1/2碳化硅数据计算厚度。",
+                    "ques3": "分析附件3/4硅晶圆片是否出现多光束干涉并计算硅外延层厚度。",
+                }
+            )
+            prompt = flows.get_writer_prompt(
+                "ques3",
+                "ques3 coder response",
+                FakeCodeInterpreter(work_dir),
+                {
+                    "eda": "EDA模板",
+                    "ques1": "模板1",
+                    "ques2": "模板2",
+                    "ques3": "模板3",
+                    "sensitivity_analysis": "敏感性模板",
+                },
+            )
+
+        # 明确锁定当前子任务 key，并写出本题题目
+        self.assertIn("本节写作范围锁定：仅限 ques3", prompt)
+        self.assertIn("分析附件3/4硅晶圆片是否出现多光束干涉", prompt)
+        # 显式列出被禁止借用的其它子任务 key，含 sensitivity_analysis
+        self.assertIn("sensitivity_analysis", prompt)
+        self.assertIn("ques1", prompt)
+        self.assertIn("ques2", prompt)
+        self.assertIn("不得引用 sensitivity_analysis", prompt)
+        # 本题 coder 响应在，其它子任务的方法响应不得出现在本题 prompt
+        self.assertIn("ques3 coder response", prompt)
+        self.assertNotIn("ques1 code output", prompt)
+        self.assertNotIn("ques2 code output", prompt)
+
+    def _write_marked_freeze(self, work_dir: str) -> None:
+        """写入带唯一标记的三子任务冻结指标，用于内容级隔离验证。"""
+        import hashlib
+
+        source = os.path.join(work_dir, "ques_results.csv")
+        with open(source, "w", encoding="utf-8") as handle:
+            handle.write("verified evidence\n")
+        with open(source, "rb") as handle:
+            sha = hashlib.sha256(handle.read()).hexdigest()
+        with open(os.path.join(work_dir, "frozen_results.json"), "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "schema": "mathmodel.result-freeze",
+                    "version": 1,
+                    "metrics": [
+                        {
+                            "id": "q1_marker_metric",
+                            "subtask_id": "ques1",
+                            "label": "Q1唯一标记双光束厚度",
+                            "value": 111.111,
+                            "unit": "um",
+                            "explanation": "ques1 唯一标记指标。",
+                        },
+                        {
+                            "id": "q3_marker_metric",
+                            "subtask_id": "ques3",
+                            "label": "Q3唯一标记硅Airy多光束厚度",
+                            "value": 333.333,
+                            "unit": "um",
+                            "explanation": "ques3 唯一标记指标，含附件3/4硅晶圆多光束。",
+                        },
+                    ],
+                    "sources": [
+                        {"relative_path": "ques_results.csv", "sha256": sha, "role": "evidence"}
+                    ],
+                },
+                handle,
+                ensure_ascii=False,
+            )
+
+    def test_quesx_prompt_physically_filters_other_subtask_frozen_facts(self):
+        """内容级隔离：写 ques3 时 prompt 只含 ques3 的 frozen 指标标记，
+        物理过滤掉 ques1 指标；写 ques1 时反之。不是仅靠提示词屏蔽。"""
+        templates = {
+            "eda": "EDA模板",
+            "ques1": "模板1",
+            "ques2": "模板2",
+            "ques3": "模板3",
+            "sensitivity_analysis": "敏感性模板",
+        }
+        with tempfile.TemporaryDirectory() as work_dir:
+            self._write_marked_freeze(work_dir)
+            flows = Flows(
+                {
+                    "ques_count": 3,
+                    "background": "薄膜干涉测厚。",
+                    "ques1": "建立一次反射双光束干涉模型。",
+                    "ques2": "对附件1/2碳化硅数据计算厚度。",
+                    "ques3": "分析附件3/4硅晶圆片是否出现多光束干涉并计算硅外延层厚度。",
+                }
+            )
+            q3_prompt = flows.get_writer_prompt(
+                "ques3",
+                "Q3_CODER_NARRATION 附件3/4硅晶圆Airy多光束联合拟合",
+                FakeCodeInterpreter(work_dir),
+                templates,
+            )
+            q1_prompt = flows.get_writer_prompt(
+                "ques1",
+                "Q1_CODER_NARRATION 双光束一次反射建模",
+                FakeCodeInterpreter(work_dir),
+                templates,
+            )
+
+        # ques3 prompt：含本题 frozen 标记与本题 coder 叙述
+        self.assertIn("Q3唯一标记硅Airy多光束厚度", q3_prompt)
+        self.assertIn("333.333", q3_prompt)
+        self.assertIn("Q3_CODER_NARRATION", q3_prompt)
+        # 物理过滤掉 ques1 的 frozen 标记与 ques1 的 coder 叙述
+        self.assertNotIn("Q1唯一标记双光束厚度", q3_prompt)
+        self.assertNotIn("111.111", q3_prompt)
+        self.assertNotIn("Q1_CODER_NARRATION", q3_prompt)
+        self.assertNotIn("ques1 code output", q3_prompt)
+
+        # ques1 prompt：含本题标记，物理过滤掉 ques3 的 Airy/多光束/附件3/4 事实
+        self.assertIn("Q1唯一标记双光束厚度", q1_prompt)
+        self.assertIn("111.111", q1_prompt)
+        self.assertNotIn("Q3唯一标记硅Airy多光束厚度", q1_prompt)
+        self.assertNotIn("333.333", q1_prompt)
+        self.assertNotIn("Q3_CODER_NARRATION", q1_prompt)
 
 
 if __name__ == "__main__":

@@ -1136,6 +1136,76 @@ class TestPreparePaperMarkdown(unittest.TestCase):
             "原始利润",
         )
 
+    def test_frozen_result_consistency_ignores_substring_alias_of_longer_metric(self):
+        """中文指标名无词边界：短名（硅外延层厚度）落在长名（碳化硅外延层厚度）
+        内部时，正文对长名指标的正确陈述不得被误判为短名指标的数值冲突，
+        否则假冲突会写进定向回修证据、使论文回修永不收敛。"""
+        metrics = [
+            {
+                "id": "q1_sic_thickness",
+                "base_id": "q1_sic_thickness",
+                "subtask_id": "ques1",
+                "label": "碳化硅外延层厚度",
+                "value": 113.235423,
+                "unit": "um",
+                "explanation": "碳化硅晶圆片双角度联合拟合厚度",
+            },
+            {
+                "id": "q1_si_thickness",
+                "base_id": "q1_si_thickness",
+                "subtask_id": "ques1",
+                "label": "硅外延层厚度",
+                "value": 15.261941,
+                "unit": "um",
+                "explanation": "硅晶圆片双角度联合拟合厚度",
+            },
+        ]
+        # 两句都陈述各自指标的正确冻结值；短名指标不得把碳化硅句的 113.23 当冲突。
+        correct_markdown = (
+            "碳化硅外延层厚度拟合结果为 113.235423 微米。\n\n"
+            "硅外延层厚度拟合结果为 15.261941 微米。"
+        )
+        # 硅句写错值时仍须被本指标拦下。
+        wrong_markdown = (
+            "碳化硅外延层厚度拟合结果为 113.235423 微米。\n\n"
+            "硅外延层厚度拟合结果为 99.9 微米。"
+        )
+        with tempfile.TemporaryDirectory() as work_dir:
+            source_path = os.path.join(work_dir, "result.csv")
+            with open(source_path, "w", encoding="utf-8") as handle:
+                handle.write("verified result evidence\n")
+            with open(source_path, "rb") as handle:
+                source_sha256 = hashlib.sha256(handle.read()).hexdigest()
+            with open(os.path.join(work_dir, "frozen_results.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "schema": "mathmodel.result-freeze",
+                        "version": 1,
+                        "metrics": metrics,
+                        "sources": [
+                            {
+                                "relative_path": "result.csv",
+                                "sha256": source_sha256,
+                                "role": "evidence",
+                            }
+                        ],
+                    },
+                    handle,
+                    ensure_ascii=False,
+                )
+            correct = build_preflight_report(work_dir, correct_markdown, code_sources=[])
+            wrong = build_preflight_report(work_dir, wrong_markdown, code_sources=[])
+
+        self.assertTrue(
+            correct["checks"]["result_consistency"]["passed"],
+            correct["checks"]["result_consistency"]["conflicts"],
+        )
+        self.assertFalse(wrong["checks"]["result_consistency"]["passed"])
+        self.assertEqual(
+            {item["fact"] for item in wrong["checks"]["result_consistency"]["conflicts"]},
+            {"硅外延层厚度"},
+        )
+
     def test_frozen_range_span_uses_endpoints_and_respects_eda_scope(self):
         """范围指标比较端点差，且题目指标不扫描 4.2 的 EDA 覆盖范围。"""
         metric = {
@@ -2012,6 +2082,52 @@ class TestProblemAlignmentGate(unittest.TestCase):
         self.assertTrue(check["passed"])
         self.assertNotIn(
             "5.2 未明确使用附件1/2对应的10°与15°入射角。", check["issues"]
+        )
+
+    def test_ques3_written_as_carbide_sensitivity_analysis_is_rejected(self):
+        """第11轮真实故障复现：Writer 把 5.3 写成碳化硅 Bootstrap 敏感性分析，
+        没有用附件3/4 对硅晶圆做多光束判定 → 必须被 problem_alignment 拦下。
+        修复后正确的 5.3（用附件3/4 硅晶圆多光束）必须通过。"""
+        problem = (
+            "问题1 如果考虑只有一次反射、透射，建立模型。"
+            "问题2 使用附件1和附件2。"
+            "问题3 研究多光束干涉并使用附件3和附件4。"
+        )
+        # 跑题版：5.3 整节只做碳化硅（附件1/2）Bootstrap 敏感性，未触及附件3/4 硅晶圆
+        carbide_sensitivity_markdown = (
+            "## 5.1 问题一\n\n建立两束反射光的双光束模型。\n\n"
+            "## 5.2 问题二\n\n附件1和附件2是同一碳化硅晶圆在10°和15°下的测量。\n\n"
+            "## 5.3 问题三\n\n"
+            "问题三可视为厚度反演结果的稳定性分析问题，重点考察碳化硅双角度联合"
+            "拟合结果对观测数据扰动的敏感程度。采用Bootstrap重采样方法对联合反演"
+            "结果进行不确定性评估，设附件1和附件2中的有效观测数据分别重采样。\n"
+        )
+        # 正确版：5.3 用附件3/4 硅晶圆做多光束判定
+        correct_markdown = (
+            "## 5.1 问题一\n\n建立两束反射光的双光束模型。\n\n"
+            "## 5.2 问题二\n\n附件1和附件2是同一碳化硅晶圆在10°和15°下的测量。\n\n"
+            "## 5.3 问题三\n\n"
+            "对附件3和附件4的同一块硅晶圆片建立多光束干涉模型，推导多光束必要条件，"
+            "判定是否出现多光束干涉并给出硅外延层厚度。\n"
+        )
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(
+                os.path.join(work_dir, "task_request.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump({"ques_all": problem}, handle, ensure_ascii=False)
+            wrong = build_preflight_report(
+                work_dir, carbide_sensitivity_markdown, code_sources=[]
+            )
+            correct = build_preflight_report(work_dir, correct_markdown, code_sources=[])
+
+        wrong_check = wrong["checks"]["problem_alignment"]
+        self.assertFalse(wrong_check["passed"])
+        self.assertIn(
+            "5.3 未使用附件3/4完成多光束判定和硅外延层计算。", wrong_check["issues"]
+        )
+        self.assertTrue(
+            correct["checks"]["problem_alignment"]["passed"],
+            correct["checks"]["problem_alignment"]["issues"],
         )
 
 

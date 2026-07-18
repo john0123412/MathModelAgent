@@ -392,6 +392,19 @@ uv run python -m app.tools.export_cli pdf --input project\work_dir\<task_id>\res
 `submission_audit_report.json` 和已有的 `candidate_manifest.json`，避免正式字体
 重导后审核仍引用旧的 Docker fallback 记录。
 
+### 图片资源校验失败
+
+主 PDF 导出在调用 Pandoc/XeLaTeX 前会检查 `res.md` 的本地 Markdown 图片：文件必须
+位于任务工作目录、存在、非 0 字节且能被 Pillow 解码。失败会直接在
+`export_status.json -> pdf.reason`（或 CLI 输出）列出具体图片和原因，例如
+`图片资源校验失败：问题1_厚度扫描反射率.png: 文件为 0 字节`；这表示应先修复或重新
+生成该图片，不能把它当成字体或中文路径问题。
+
+通过校验的本地图片仅在本次 PDF 导出期间复制到临时 ASCII 文件名（如
+`asset_001.png`）并由临时 Markdown 引用。这样可避免 Pandoc/LaTeX 对中文、空格、括号
+或同名不同目录资源的兼容性问题；临时文件会在导出结束后删除，原 `res.md` 与原图不会被
+改写。远程 URL 和 data URI 不参与本地图片校验或 staging。
+
 ### 已经有 DOCX，为什么还用 Markdown 生成 PDF
 
 项目当前模板参数是通过 Pandoc/XeLaTeX 控制的，输入是 `res.md`。这条路径比

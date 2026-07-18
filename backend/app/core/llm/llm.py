@@ -22,6 +22,8 @@ from app.core.llm.providers.anthropic import AnthropicProvider
 from app.services.token_usage import record_token_usage
 from app.utils.security import validate_llm_base_url
 
+# 兜底默认值；实际值优先取 settings.LLM_MAX_RETRIES，便于按 provider 稳定性调整
+# （远程网关偶发连接抖动时，3 次约 6 秒的重试窗口经常不够跨过一次抖动）。
 DEFAULT_LLM_MAX_RETRIES = 3
 
 
@@ -96,7 +98,12 @@ class LLM:
         sub_title: str | None = None,
     ) -> StandardResponse:
         self._validate_config(agent_name)
-        max_attempts = max_retries if max_retries is not None else DEFAULT_LLM_MAX_RETRIES
+        if max_retries is not None:
+            max_attempts = max_retries
+        else:
+            max_attempts = getattr(
+                settings, "LLM_MAX_RETRIES", DEFAULT_LLM_MAX_RETRIES
+            ) or DEFAULT_LLM_MAX_RETRIES
 
         # 验证和修复工具调用完整性（仅对 OpenAI 格式的历史有效）
         if history:

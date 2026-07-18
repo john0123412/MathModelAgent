@@ -100,11 +100,32 @@ _INDEPENDENT_SAMPLE = re.compile(
     r"|(?:晶圆片?|样品)(?:彼此|相互|各自|分别)?"
     r"(?:为|是|均为|视为|作为)?(?:不同|独立))"
 )
+# 方案常把契约禁令原样写进约束（如“不得改写为不同样品”），这属于遵守而非违规；
+# 与 _OVERRIDE_NEGATION 同思路，仅当独立样品表述前没有近距离否定词时才算改写。
+_INDEPENDENT_SAMPLE_NEGATION = re.compile(
+    r"(?:不得|不能|不可|不应|不要|禁止|避免|拒绝|切勿|而不是|而非|不将|不视为|不当作|不改写)"
+)
+
+
+def _contains_independent_sample_claim(text: str) -> bool:
+    """Detect affirmative independent-sample rewrites, ignoring prohibitions."""
+    for clause in re.split(r"[。；;\n]", text):
+        compact = re.sub(r"\s+", "", clause)
+        if not compact:
+            continue
+        for match in _INDEPENDENT_SAMPLE.finditer(compact):
+            prefix = compact[max(0, match.start() - 16) : match.start()]
+            if _INDEPENDENT_SAMPLE_NEGATION.search(prefix):
+                continue
+            return True
+    return False
+
 _OVERRIDE_NEGATION = re.compile(
     r"(?:不|不得|禁止|避免|拒绝|不能|不可|不应|无需)[^。；]{0,16}"
-    r"(?:0(?:\.0+)?\s*[°度]|垂直入射|法向入射|正入射)"
+    r"(?:(?<![\d.])0(?:\.0+)?\s*[°度]|垂直入射|法向入射|正入射)"
 )
-_ZERO_DEGREE = re.compile(r"(?<!\d)0(?:\.0+)?\s*[°度]")
+# 负向断言须同时排除数字与小数点：否则 10.0°/15.0度 里的 “.0°” 会被误认成 0°。
+_ZERO_DEGREE = re.compile(r"(?<![\d.])0(?:\.0+)?\s*[°度]")
 
 _OPEN_ENDED_DECISION_QUESTION = re.compile(
     r"(?:(?:判断|判定|检验|验证|确定|研究|分析).{0,24}(?:是否|有无)"
@@ -683,7 +704,7 @@ def validate_modeler_plan(
             has_angles = all(
                 _mentions_angle(requirement_text, angle) for angle in expected_angles
             )
-            if _INDEPENDENT_SAMPLE.search(requirement_text):
+            if _contains_independent_sample_claim(requirement_text):
                 violations.append(
                     f"附件{first}/{second}被方案改写为不同或独立样品"
                 )

@@ -19,6 +19,7 @@ from app.utils.common_utils import get_current_files
 from app.core.prompts import get_reflection_prompt
 from app.core.functions import coder_tools, coder_tools_anthropic
 from app.tools.execution_validation import record_execution_evidence
+from app.tools.result_integrity import validate_result_freeze
 
 # TODO: 时间等待过久，stop 进程
 # TODO: 支持 cuda
@@ -121,6 +122,92 @@ def _evidence_source_paths(arguments: object) -> set[str]:
             if isinstance(figure.get(field), str):
                 paths.add(str(Path(figure[field])).replace("\\", "/"))
     return paths
+
+
+_CLOSEOUT_PLACEHOLDER = "已在受控收束阶段记录执行证据。"
+
+
+def _has_method_narration(content: str) -> bool:
+    """判断收束响应是否已含可用的方法叙述。
+
+    按需求仅在“为空或只有占位内容”时判为缺失，避免误伤模型产出的合法简短
+    叙述（历史测试依赖此行为）。
+    """
+    text = (content or "").strip()
+    return bool(text) and text != _CLOSEOUT_PLACEHOLDER.strip()
+
+
+def _subtask_frozen_metrics(work_dir: str, subtask_id: str) -> list[dict]:
+    """本题冻结指标（严格按 subtask_id 过滤，绝不混入其它子任务）。"""
+    try:
+        validation = validate_result_freeze(work_dir)
+    except Exception:  # noqa: BLE001 - 兜底不得因读取异常而中断收束
+        return []
+    if not validation.get("active") or not validation.get("passed"):
+        return []
+    target = str(subtask_id).lower()
+    return [
+        metric
+        for metric in validation.get("metrics", [])
+        if str(metric.get("subtask_id", "")).lower() == target
+    ]
+
+
+def _subtask_artifact_paths(work_dir: str, subtask_id: str | None) -> set[str]:
+    """本题产物文件名（按 ``quesN_`` 前缀过滤，仅本题，不跨题）。"""
+    if not subtask_id:
+        return set()
+    prefix = f"{subtask_id}_"
+    try:
+        entries = list(Path(work_dir).iterdir())
+    except OSError:
+        return set()
+    return {
+        entry.name
+        for entry in entries
+        if entry.is_file() and entry.name.startswith(prefix)
+    }
+
+
+def _deterministic_subtask_narration(
+    work_dir: str,
+    subtask_id: str,
+    question_text: str,
+    plan_summary: str,
+    artifact_paths: list[str],
+) -> str:
+    """方案2：本题确定性兜底叙述。
+
+    只使用本题（``subtask_id``）自己的：题目、Modeler 计划、冻结指标、产物清单。
+    绝不拼接全局 ``build_result_fact_summary`` 或其它子任务内容，避免再次跨题
+    污染。即使追加叙述调用失败，也用它替代无信息占位符
+    “已在受控收束阶段记录执行证据”。
+    """
+    metrics = _subtask_frozen_metrics(work_dir, subtask_id)
+    lines: list[str] = [f"【{subtask_id} 方法—产物—结果（系统按冻结事实整理）】"]
+    if question_text.strip():
+        lines.append(f"- 本题目标：{question_text.strip()}")
+    if plan_summary.strip():
+        lines.append(f"- 采用的模型/方法（依据 Modeler 计划）：{plan_summary.strip()}")
+    if artifact_paths:
+        lines.append("- 生成的主要产物：" + "、".join(artifact_paths))
+    if metrics:
+        lines.append("- 已冻结的关键结果：")
+        for metric in metrics:
+            label = metric.get("label") or metric.get("id")
+            value = metric.get("value")
+            unit = metric.get("unit", "")
+            unit_str = f" {unit}" if unit else ""
+            lines.append(f"    · {label} = {value}{unit_str}")
+    else:
+        lines.append(
+            "- 已冻结的关键结果：请仅依据本题结果文件如实叙述，不得推测或新增数值。"
+        )
+    lines.append(
+        "以上为系统按本题冻结事实整理的结构化说明，仅供方法与结果叙述；"
+        "不得据此推测、修改或新增任何数值。"
+    )
+    return "\n".join(lines)
 
 
 class CoderAgent(Agent):
@@ -433,11 +520,20 @@ class CoderAgent(Agent):
                             # backend-owned evidence is persisted, stop this
                             # turn before a later model response can overwrite
                             # result files and invalidate the fresh manifest.
+                            closeout_response = (response.content or "").strip()
+                            if not _has_method_narration(closeout_response):
+                                # 方案1+2：证据合格但模型这一轮只调了工具、未产出
+                                # 方法叙述。Writer 若拿不到本题叙事，会跨题借用
+                                # （历史故障：ques3 空叙述→5.3 抓 sensitivity 叙事跑题）。
+                                # 追加至多一轮纯文本受控叙述；失败/超时/仍空则用
+                                # 本题确定性兜底。二者都只用本题上下文。
+                                closeout_response = await self._narrate_closeout_once(
+                                    subtask_title=subtask_title,
+                                    formal_subtask_id=formal_subtask_id,
+                                    evidence_arguments=arguments,
+                                )
                             return CoderToWriter(
-                                code_response=(
-                                    response.content
-                                    or "已在受控收束阶段记录执行证据。"
-                                ),
+                                code_response=closeout_response,
                                 created_images=await self.code_interpreter.get_created_images(
                                     subtask_title
                                 ),
@@ -448,6 +544,14 @@ class CoderAgent(Agent):
                         evidence_failure_count += 1
                         errors = result.get("errors") or ["未知证据错误"]
                         evidence_error = "；".join(str(error) for error in errors)
+                        # 拒绝原因此前只进模型对话历史，人工排障时无从查起；
+                        # 记录到日志便于诊断模型为何连续提交不合格证据。
+                        logger.warning(
+                            "受控执行证据被拒: "
+                            f"subtask={formal_subtask_id}, "
+                            f"attempt={evidence_failure_count}, "
+                            f"errors={evidence_error[:500]}"
+                        )
                         if evidence_failure_count >= _EVIDENCE_FAILURE_LIMIT:
                             logger.error(
                                 "受控执行证据连续失败，停止正式子题: "
@@ -873,3 +977,93 @@ class CoderAgent(Agent):
                 f"{self.__class__.__name__}:完成执行子任务: "
                 f"title_chars={len(subtask_title)}"
             )
+
+    def _subtask_question_and_plan(
+        self, formal_subtask_id: str | None
+    ) -> tuple[str, str, list[str]]:
+        """从对话历史里取本题的题目/计划文本与产物路径（仅本题，不跨题）。
+
+        Coder 的首条 user 提示即本题的结构化交接（题目+Modeler 计划+产物清单），
+        据此为兜底叙述提供本题上下文；取不到时返回空串，由调用方降级。
+        """
+        question_text = ""
+        plan_summary = ""
+        for message in self.chat_history:
+            if message.get("role") != "user":
+                continue
+            content = str(message.get("content") or "")
+            if formal_subtask_id and formal_subtask_id in content:
+                plan_summary = content[:1200]
+                question_text = content[:400]
+                break
+        artifact_paths = sorted(
+            _subtask_artifact_paths(self.work_dir, formal_subtask_id)
+        )
+        return question_text, plan_summary, artifact_paths
+
+    async def _narrate_closeout_once(
+        self,
+        subtask_title: str,
+        formal_subtask_id: str | None,
+        evidence_arguments: object,
+    ) -> str:
+        """方案1：证据合格但无叙述时，追加至多一轮受控纯文本叙述。
+
+        约束：最多一轮、禁用工具、不计入 retry、不重进代码执行流；输入仅含本题
+        题目/计划/冻结指标/产物清单。超时、异常或仍为空时立即进入方案2 的本题
+        确定性兜底，绝不返回无信息占位符，也不卡住收束。
+        """
+        question_text, plan_summary, artifact_paths = self._subtask_question_and_plan(
+            formal_subtask_id
+        )
+        fallback = _deterministic_subtask_narration(
+            self.work_dir,
+            str(formal_subtask_id or subtask_title),
+            question_text,
+            plan_summary,
+            artifact_paths,
+        )
+        metrics = _subtask_frozen_metrics(
+            self.work_dir, str(formal_subtask_id or subtask_title)
+        )
+        frozen_lines = "\n".join(
+            f"- {m.get('label') or m.get('id')} = {m.get('value')} {m.get('unit', '')}".rstrip()
+            for m in metrics
+        )
+        narration_prompt = (
+            f"请仅为子任务 {formal_subtask_id or subtask_title} 撰写一段“方法—产物—结果”"
+            "叙述，供论文写作使用。只能依据下列本题信息，不得编写或执行代码、"
+            "不得修改结果文件、不得推测或新增任何数值，也不得引用其它子任务的内容。\n\n"
+            f"【本题题目】{question_text}\n\n"
+            f"【本题 Modeler 计划摘录】{plan_summary}\n\n"
+            f"【本题产物清单】{'、'.join(artifact_paths) or '（见结果目录）'}\n\n"
+            f"【本题已冻结关键结果】\n{frozen_lines or '（无，请勿杜撰数值）'}\n\n"
+            "只输出纯文本叙述，不要包含任何工具调用或代码块。"
+        )
+        # 独立历史：不污染主对话，也不携带其它子任务响应。
+        narration_history = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": narration_prompt},
+        ]
+        try:
+            response = await self._chat(
+                history=narration_history,
+                tools=None,
+                tool_choice=None,
+                agent_name=self.__class__.__name__,
+                sub_title=f"{formal_subtask_id or subtask_title}_closeout_narration",
+            )
+        except Exception as exc:  # noqa: BLE001 - 任何失败都降级到确定性兜底
+            logger.warning(
+                "收束叙述轮失败，使用本题确定性兜底: "
+                f"subtask={formal_subtask_id}, error={type(exc).__name__}"
+            )
+            return fallback
+        narration = (getattr(response, "content", "") or "").strip()
+        if getattr(response, "tool_calls", None) or not _has_method_narration(narration):
+            logger.warning(
+                "收束叙述轮未产出可用纯文本，使用本题确定性兜底: "
+                f"subtask={formal_subtask_id}"
+            )
+            return fallback
+        return narration

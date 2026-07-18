@@ -140,6 +140,51 @@ class TestExecutionValidation(unittest.TestCase):
             )
             self.assertTrue(angle_check["passed"], angle_check)
 
+    def test_per_question_parameter_audits_are_aggregated_for_angle_check(self):
+        """每题写各自的审计文件时，角度核对应聚合所有文件而非只认单一文件。"""
+        problem = (
+            "附件1和附件2是入射角分别为10°和15°时针对同一块晶圆片的测试结果。"
+        )
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_notebook(work_dir)
+            _write_manifest(work_dir)
+            with open(
+                os.path.join(work_dir, "task_request.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump({"ques_all": problem}, handle, ensure_ascii=False)
+            # 没有任何 per-question 审计文件时应判缺失。
+            missing = validate_execution_artifacts(
+                work_dir, required_subtasks=["ques3"]
+            )
+            angle_check = next(
+                item
+                for item in missing["checks"]
+                if item["id"] == "problem_parameter.incident_angles"
+            )
+            self.assertFalse(angle_check["passed"])
+            # 两题各写自己的审计文件，各覆盖一个角度；聚合后应通过。
+            with open(
+                os.path.join(work_dir, "ques2_input_parameter_audit.csv"),
+                "w",
+                encoding="utf-8-sig",
+            ) as handle:
+                handle.write("参数,值,单位,来源\n附件1入射角,10,度,题面附件说明\n")
+            with open(
+                os.path.join(work_dir, "ques3_input_parameter_audit.csv"),
+                "w",
+                encoding="utf-8-sig",
+            ) as handle:
+                handle.write("参数,值,单位,来源\n附件2入射角,15,度,题面附件说明\n")
+            correct = validate_execution_artifacts(
+                work_dir, required_subtasks=["ques3"]
+            )
+            angle_check = next(
+                item
+                for item in correct["checks"]
+                if item["id"] == "problem_parameter.incident_angles"
+            )
+            self.assertTrue(angle_check["passed"], angle_check)
+
     def test_trusted_evidence_recorder_hashes_files_and_derives_feasibility(self):
         with tempfile.TemporaryDirectory() as work_dir:
             result_path = os.path.join(work_dir, "ques1_results.json")

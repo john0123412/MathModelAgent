@@ -186,13 +186,62 @@ coder_tools_anthropic = [
             "Call it after execute_code has generated result files. The backend computes hashes, "
             "updates the manifest, and determines feasibility."
         ),
+        # 与 OpenAI 版保持同等字段约束：Anthropic 模型同样依赖 schema 了解
+        # comparison 合法枚举与 metrics 数值类型，否则证据会被后端逐项拒绝。
         "input_schema": {
             "type": "object",
             "properties": {
-                "subtask_id": {"type": "string"},
-                "constraints": {"type": "array", "items": {"type": "object"}},
-                "metrics": {"type": "array", "items": {"type": "object"}},
-                "figures": {"type": "array", "items": {"type": "object"}},
+                "subtask_id": {"type": "string", "description": "Formal question id, e.g. ques1."},
+                "constraints": {
+                    "type": "array",
+                    "description": "Verifiable constraints. source_path must name an existing task-relative result file.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "actual": {"type": "number"},
+                            "comparison": {"type": "string", "enum": ["abs_diff_lte", "lte", "gte", "gt", "lt", "between"]},
+                            "target": {"type": ["number", "null"]},
+                            "tolerance": {"type": ["number", "null"]},
+                            "lower": {"type": ["number", "null"]},
+                            "upper": {"type": ["number", "null"]},
+                            "unit": {"type": ["string", "null"]},
+                            "source_path": {"type": "string"},
+                        },
+                        "required": ["id", "actual", "comparison", "source_path"],
+                    },
+                },
+                "metrics": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "label": {"type": "string"},
+                            "value": {"type": "number"},
+                            "unit": {"type": "string"},
+                            "explanation": {"type": "string"},
+                            "aliases": {"type": "array", "items": {"type": "string"}},
+                            "source_path": {
+                                "type": "string",
+                                "description": "Task-relative numeric result file containing this value.",
+                            },
+                        },
+                        "required": ["id", "label", "value", "unit", "explanation", "source_path"],
+                    },
+                },
+                "figures": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "data_path": {"type": "string"},
+                            "metric_ids": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["path", "data_path"],
+                    },
+                },
             },
             "required": ["subtask_id", "constraints", "metrics", "figures"],
         },

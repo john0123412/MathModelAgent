@@ -7,6 +7,10 @@ import shutil
 # subprocess is limited to the controlled Pandoc export invocation below.
 import subprocess  # nosec B404
 import tempfile
+from pathlib import Path
+from urllib.parse import unquote
+
+from PIL import Image, UnidentifiedImageError
 from app.utils.log_util import logger
 from app.utils import font_utils
 from app.schemas.enums import ExportProfile
@@ -34,6 +38,184 @@ CJK_BREAK_RUN_RE = re.compile(r"[\u4e00-\u9fff，。！？；：、（）《》�
 FENCE_START_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 KEYWORDS_LINE_RE = re.compile(r"^\s*(?:\*\*)?\s*(?:关键词|关键字)\s*(?:\*\*)?\s*[：:]?")
 PDF_CJK_BREAK_INTERVAL = 18
+_FENCE_LINE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+_EXTERNAL_IMAGE_REF_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
+
+
+def _iter_markdown_image_destinations(markdown: str):
+    """Yield writable destination spans for inline Markdown images.
+
+    This deliberately parses balanced parentheses instead of using a one-line
+    regular expression: generated chart names frequently contain spaces or
+    parentheses.  Fenced code is ignored so an appendix source snippet cannot
+    be mistaken for a paper image.
+    """
+    offset = 0
+    in_fence = False
+    fence_char = ""
+    for line in markdown.splitlines(keepends=True):
+        fence = _FENCE_LINE_RE.match(line)
+        if fence:
+            marker = fence.group(1)
+            if not in_fence:
+                in_fence, fence_char = True, marker[0]
+            elif marker[0] == fence_char:
+                in_fence, fence_char = False, ""
+            offset += len(line)
+            continue
+        if in_fence:
+            offset += len(line)
+            continue
+
+        index = 0
+        while index < len(line) - 3:
+            if line.startswith("![", index) and (index == 0 or line[index - 1] != "\\"):
+                alt_end = line.find("]", index + 2)
+                if alt_end < 0:
+                    index += 2
+                    continue
+                destination_start = alt_end + 1
+                while destination_start < len(line) and line[destination_start].isspace():
+                    destination_start += 1
+                if destination_start >= len(line) or line[destination_start] != "(":
+                    index = alt_end + 1
+                    continue
+
+                depth = 1
+                cursor = destination_start + 1
+                escaped = False
+                while cursor < len(line) and depth:
+                    char = line[cursor]
+                    if escaped:
+                        escaped = False
+                    elif char == "\\":
+                        escaped = True
+                    elif char == "(":
+                        depth += 1
+                    elif char == ")":
+                        depth -= 1
+                    cursor += 1
+                if depth:
+                    index = destination_start + 1
+                    continue
+
+                raw = line[destination_start + 1 : cursor - 1]
+                stripped = raw.strip()
+                leading = len(raw) - len(raw.lstrip())
+                if stripped.startswith("<") and ">" in stripped:
+                    end = stripped.index(">")
+                    yield offset + destination_start + 1 + leading + 1, offset + destination_start + 1 + leading + end, stripped[1:end]
+                elif stripped:
+                    # A Markdown title is optional.  Preserve it while replacing
+                    # only the actual pathname.  Generated files with spaces are
+                    # still accepted when no quoted title is present.
+                    title = re.search(r'\s+(?:"[^"]*"|\'[^\']*\')\s*$', stripped)
+                    pathname = stripped[: title.start()] if title else stripped
+                    yield offset + destination_start + 1 + leading, offset + destination_start + 1 + leading + len(pathname), pathname
+                index = cursor
+                continue
+            index += 1
+        offset += len(line)
+
+
+def _unescape_markdown_path(value: str) -> str:
+    """Decode the small Markdown escaping subset used in local image links."""
+    decoded = unquote(value.strip())
+    return re.sub(r"\\([\\ ()\[\]#%])", r"\1", decoded)
+
+
+def _resolve_local_image_path(destination: str, md_path: str, work_dir: str) -> str | None:
+    """Resolve one local image reference, rejecting paths outside the task."""
+    value = _unescape_markdown_path(destination)
+    if not value or value.startswith(("#", "//")) or _EXTERNAL_IMAGE_REF_RE.match(value):
+        return None
+    if os.path.isabs(value):
+        raise ValueError("图片路径必须位于任务工作目录内")
+    source_path = os.path.realpath(os.path.join(os.path.dirname(md_path), value))
+    root = os.path.realpath(work_dir)
+    try:
+        if os.path.commonpath([root, source_path]) != root:
+            raise ValueError("图片路径越出任务工作目录")
+    except ValueError as exc:
+        raise ValueError("图片路径越出任务工作目录") from exc
+    return source_path
+
+
+def _prepare_pdf_image_assets(md_path: str, work_dir: str) -> tuple[str, str | None, str | None, list[dict]]:
+    """Validate local Markdown images and stage safe ASCII copies for Pandoc.
+
+    The source Markdown and images are never modified.  A failure is raised
+    before Pandoc runs, so an absent, empty, corrupt, or escaped-workdir image
+    becomes an actionable export error instead of an opaque XeLaTeX failure.
+    """
+    with open(md_path, encoding="utf-8") as handle:
+        markdown = handle.read()
+
+    references: list[dict] = []
+    failures: list[str] = []
+    for start, end, destination in _iter_markdown_image_destinations(markdown):
+        try:
+            source_path = _resolve_local_image_path(destination, md_path, work_dir)
+        except ValueError as exc:
+            failures.append(f"{destination}: {exc}")
+            continue
+        if source_path is None:
+            continue
+        label = destination or "<空路径>"
+        if not os.path.isfile(source_path):
+            failures.append(f"{label}: 文件不存在")
+            continue
+        if os.path.getsize(source_path) == 0:
+            failures.append(f"{label}: 文件为 0 字节")
+            continue
+        try:
+            with Image.open(source_path) as image:
+                image.verify()
+        except (OSError, UnidentifiedImageError, ValueError) as exc:
+            failures.append(f"{label}: 图片无法解码 ({type(exc).__name__})")
+            continue
+        references.append(
+            {"start": start, "end": end, "destination": destination, "source_path": source_path}
+        )
+
+    if failures:
+        raise ValueError("图片资源校验失败：" + "; ".join(failures))
+    if not references:
+        return md_path, None, None, []
+
+    os.makedirs(work_dir, exist_ok=True)
+    stage_dir = tempfile.mkdtemp(prefix=".mma_pdf_assets_", dir=work_dir)
+    replacements: list[tuple[int, int, str]] = []
+    staged_by_source: dict[str, str] = {}
+    staged_assets: list[dict] = []
+    try:
+        for reference in references:
+            source_path = reference["source_path"]
+            staged_name = staged_by_source.get(source_path)
+            if staged_name is None:
+                suffix = Path(source_path).suffix.lower()
+                if not re.fullmatch(r"\.[a-z0-9]{1,10}", suffix):
+                    suffix = ".img"
+                staged_name = f"asset_{len(staged_by_source) + 1:03d}{suffix}"
+                shutil.copy2(source_path, os.path.join(stage_dir, staged_name))
+                staged_by_source[source_path] = staged_name
+                staged_assets.append(
+                    {"source": reference["destination"], "staged": staged_name}
+                )
+            replacements.append(
+                (reference["start"], reference["end"], f"{os.path.basename(stage_dir)}/{staged_name}")
+            )
+        staged_markdown = markdown
+        for start, end, replacement in reversed(replacements):
+            staged_markdown = staged_markdown[:start] + replacement + staged_markdown[end:]
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", suffix=".pdf.md", prefix=".mma_pdf_", dir=work_dir, delete=False
+        ) as handle:
+            handle.write(staged_markdown)
+            return handle.name, handle.name, stage_dir, staged_assets
+    except Exception:
+        shutil.rmtree(stage_dir, ignore_errors=True)
+        raise
 
 
 def _insert_abstract_pagebreak(markdown: str) -> tuple[str, bool]:
@@ -298,6 +480,7 @@ def export_markdown_to_pdf(
         "font_resolution": [],
         "source_sha256": _file_sha256(md_path),
         "output_sha256": None,
+        "staged_assets": [],
     }
 
     # A failed re-export must never leave an older PDF looking current.
@@ -325,13 +508,42 @@ def export_markdown_to_pdf(
         return result
 
     profile_config = get_export_profile_config(export_profile)
+    staged_md_path: str | None = None
+    staged_assets_dir: str | None = None
     pdf_md_path = md_path
     cleanup_pdf_md = False
     try:
-        pdf_md_path, cleanup_pdf_md = _prepare_pdf_markdown_source(md_path, work_dir)
+        (
+            image_source_path,
+            staged_md_path,
+            staged_assets_dir,
+            staged_assets,
+        ) = _prepare_pdf_image_assets(md_path, work_dir)
+        result["staged_assets"] = staged_assets
+        pdf_md_path, cleanup_pdf_md = _prepare_pdf_markdown_source(
+            image_source_path, work_dir
+        )
+    except ValueError as exc:
+        result["reason"] = str(exc)
+        logger.error(f"PDF 导出图片资源校验失败: {exc}")
+        if staged_md_path:
+            try:
+                os.remove(staged_md_path)
+            except OSError:
+                pass
+        if staged_assets_dir:
+            shutil.rmtree(staged_assets_dir, ignore_errors=True)
+        return result
     except Exception as e:
         result["reason"] = f"PDF 输入预处理失败: {e}"
         logger.error("PDF 导出异常")
+        if staged_md_path:
+            try:
+                os.remove(staged_md_path)
+            except OSError:
+                pass
+        if staged_assets_dir:
+            shutil.rmtree(staged_assets_dir, ignore_errors=True)
         return result
 
     command = [
@@ -384,6 +596,13 @@ def export_markdown_to_pdf(
                 os.remove(pdf_md_path)
             except OSError:
                 logger.warning(f"PDF 临时 Markdown 清理失败: {pdf_md_path}")
+        if staged_md_path and (staged_md_path != pdf_md_path or not cleanup_pdf_md):
+            try:
+                os.remove(staged_md_path)
+            except OSError:
+                logger.warning(f"PDF 图片 staging Markdown 清理失败: {staged_md_path}")
+        if staged_assets_dir:
+            shutil.rmtree(staged_assets_dir, ignore_errors=True)
 
     if proc.returncode == 0 and os.path.exists(pdf_path):
         result["success"] = True

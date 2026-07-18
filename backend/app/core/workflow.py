@@ -30,6 +30,7 @@ from app.tools.tex_project_exporter import export_markdown_to_latex_project
 from app.tools.candidate_exporter import write_candidate_manifest
 from app.tools.export_profiles import normalize_export_profile
 from app.tools.paper_postprocessor import build_result_fact_summary, prepare_paper_markdown
+from app.tools.result_integrity import validate_result_freeze
 from app.tools.pdf_visual_checker import check_pdf_visual
 from app.tools.submission_audit import write_submission_audit_report
 from app.tools.execution_validation import (
@@ -688,6 +689,12 @@ class MathModelWorkFlow(WorkFlow):
         except Exception as exc:
             raise RuntimeError("执行验证通过但冻结结果写入失败") from exc
 
+        # 运行时一致性断言：Writer 分节写作依赖每条正式题指标的 subtask_id 做
+        # 物理隔离。若正式题指标缺 subtask_id，隔离会退化为“无归属放行”，可能
+        # 让本题看到其它子任务事实。此处在进入 Writer 前强制核验，发现缺失即
+        # 停止，不依赖兼容放行继续生成论文。
+        self._assert_formal_metrics_have_subtask_id()
+
         # 此处开始才允许 Writer 接触代码结果。即使旧检查点中有 Writer 文本，
         # 也必须重写，避免把冻结前生成的未验证数值带入本次导出。
         for key, coder_response in coder_responses.items():
@@ -889,6 +896,40 @@ class MathModelWorkFlow(WorkFlow):
         )
         with open(decision_md_path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines).rstrip() + "\n")
+
+    def _assert_formal_metrics_have_subtask_id(self) -> None:
+        """冻结后、Writer 前：确保正式题指标都能被明确归属到某个 quesN。
+
+        Writer 分节隔离靠 metric.subtask_id 物理过滤。缺 subtask_id 会退化为
+        “无归属放行”，可能让本题 prompt 看到其它子任务事实。为不让论文在这种
+        情况下继续生成，此处发现缺归属即抛错停在 Writer 之前。
+        """
+        validation = validate_result_freeze(self.work_dir)
+        if not validation.get("active") or not validation.get("passed"):
+            return
+        formal_re = re.compile(r"^ques[0-9]+$", re.IGNORECASE)
+        unattributed: list[str] = []
+        attributed: set[str] = set()
+        for metric in validation.get("metrics", []):
+            subtask_id = str(metric.get("subtask_id", "")).strip()
+            if formal_re.match(subtask_id):
+                attributed.add(subtask_id.lower())
+                continue
+            # 无归属或归属值非 quesN 形态：记录该指标以便定位
+            unattributed.append(
+                str(metric.get("id") or metric.get("label") or "<未命名指标>")
+            )
+        logger.info(
+            "冻结指标归属核验: attributed_subtasks=%s, unattributed_metric_count=%d",
+            sorted(attributed),
+            len(unattributed),
+        )
+        if unattributed:
+            raise RuntimeError(
+                "冻结结果存在无 subtask_id 归属的正式题指标，已在进入 Writer 前停止，"
+                "避免子任务隔离退化为无归属放行。缺归属指标："
+                f"{', '.join(unattributed[:20])}"
+            )
 
     @staticmethod
     def _preflight_failure_summary(report: dict) -> str:

@@ -793,5 +793,61 @@ class PreflightRepairableSectionsTest(unittest.TestCase):
         self.assertEqual(sections, [])
 
 
+class FormalMetricAttributionAssertionTest(unittest.TestCase):
+    """冻结后、Writer 前的 subtask_id 归属断言。"""
+
+    def _write_freeze(self, work_dir, metrics):
+        import hashlib
+        import json
+
+        source = Path(work_dir, "ques_results.csv")
+        source.write_text("verified\n", encoding="utf-8")
+        sha = hashlib.sha256(source.read_bytes()).hexdigest()
+        Path(work_dir, "frozen_results.json").write_text(
+            json.dumps(
+                {
+                    "schema": "mathmodel.result-freeze",
+                    "version": 1,
+                    "metrics": metrics,
+                    "sources": [
+                        {"relative_path": "ques_results.csv", "sha256": sha, "role": "evidence"}
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+    def test_passes_when_all_formal_metrics_have_subtask_id(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            self._write_freeze(
+                work_dir,
+                [
+                    {"id": "q1_m", "subtask_id": "ques1", "label": "L1", "value": 1.0, "unit": "u", "explanation": "e"},
+                    {"id": "q3_m", "subtask_id": "ques3", "label": "L3", "value": 3.0, "unit": "u", "explanation": "e"},
+                ],
+            )
+            workflow = MathModelWorkFlow()
+            workflow.work_dir = work_dir
+            # 不应抛错
+            workflow._assert_formal_metrics_have_subtask_id()
+
+    def test_raises_when_a_metric_lacks_subtask_id(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            self._write_freeze(
+                work_dir,
+                [
+                    {"id": "q1_m", "subtask_id": "ques1", "label": "L1", "value": 1.0, "unit": "u", "explanation": "e"},
+                    {"id": "orphan_m", "label": "无归属", "value": 9.0, "unit": "u", "explanation": "e"},
+                ],
+            )
+            workflow = MathModelWorkFlow()
+            workflow.work_dir = work_dir
+            with self.assertRaises(RuntimeError) as ctx:
+                workflow._assert_formal_metrics_have_subtask_id()
+            self.assertIn("无 subtask_id", str(ctx.exception))
+            self.assertIn("orphan_m", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

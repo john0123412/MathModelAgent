@@ -263,6 +263,10 @@ print("=" * 60)
   `source_path`), and optional figure `path`/`data_path`. Constraint ids,
   comparison directions and targets must exactly preserve the Modeler plan;
   never reverse `gt` into `lte` or otherwise make a failed metric pass.
+  `comparison` accepts only: `abs_diff_lte`, `lte`, `gte`, `gt`, `lt`,
+  `between` (plan `eq target` → `abs_diff_lte` with the same target and
+  `tolerance: 0`; plan `le`/`ge` → `lte`/`gte`). Every metric `value` and
+  constraint `actual` must be a JSON number, never a string like `"0.996"`.
   The backend validates paths, computes SHA-256, calculates `feasible`, and
   atomically updates the shared manifest without deleting other questions.
 - `record_execution_evidence` is an Agent tool shown in the tool list; it is

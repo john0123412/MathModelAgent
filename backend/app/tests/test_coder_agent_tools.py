@@ -450,6 +450,94 @@ class FinalResultWritingInterpreter(ResultWritingInterpreter):
         return "项目完成，所有文件已生成", False, ""
 
 
+class FakeEmptyCloseoutModel:
+    """证据合格但收束轮 content 为空；后续纯文本叙述轮返回可用叙述。
+
+    记录：代码执行次数、证据轮次、以及是否发生过 tools=None 的纯文本叙述轮。
+    """
+
+    api_type = ApiType.ANTHROPIC
+
+    def __init__(self, narration_content="本题采用双光束模型联合拟合并复算厚度。"):
+        self.calls = 0
+        self.code_calls = 0
+        self.narration_calls = 0
+        self.narration_content = narration_content
+
+    async def chat(self, history, **kwargs):
+        self.calls += 1
+        # 纯文本叙述轮：主循环之外，tools 显式为 None。
+        if kwargs.get("tools") is None:
+            self.narration_calls += 1
+            return StandardResponse(content=self.narration_content)
+        if any(msg.get("tool_call_id") == "code1" for msg in history):
+            # 证据轮：content 为空，只调证据工具。
+            resp = _evidence_response("ev1", "ques1", "ques1_results.json")
+            resp.content = ""
+            return resp
+        self.code_calls += 1
+        return StandardResponse(
+            content="Compute first.",
+            tool_calls=[
+                ToolCall(id="code1", name="execute_code", arguments='{"code":"print(1)"}')
+            ],
+        )
+
+
+class FakeEmptyCloseoutThenBadNarrationModel(FakeEmptyCloseoutModel):
+    """叙述轮再次返回空 → 应降级到本题确定性兜底。"""
+
+    def __init__(self, subtask_id="ques1"):
+        super().__init__()
+        self.subtask_id = subtask_id
+
+    async def chat(self, history, **kwargs):
+        self.calls += 1
+        if kwargs.get("tools") is None:
+            self.narration_calls += 1
+            return StandardResponse(content="")
+        if any(msg.get("tool_call_id") == "code1" for msg in history):
+            resp = _evidence_response(
+                "ev1", self.subtask_id, f"{self.subtask_id}_results.json"
+            )
+            resp.content = ""
+            return resp
+        self.code_calls += 1
+        return StandardResponse(
+            content="Compute first.",
+            tool_calls=[
+                ToolCall(id="code1", name="execute_code", arguments='{"code":"print(1)"}')
+            ],
+        )
+
+
+class FakeEmptyCloseoutThenRaisingNarrationModel(FakeEmptyCloseoutModel):
+    """叙述轮抛异常（模拟超时/协议错误）→ 应降级到本题确定性兜底。"""
+
+    def __init__(self, subtask_id="ques1"):
+        super().__init__()
+        self.subtask_id = subtask_id
+
+    async def chat(self, history, **kwargs):
+        self.calls += 1
+        if kwargs.get("tools") is None:
+            self.narration_calls += 1
+            raise TimeoutError("narration timed out")
+        if any(msg.get("tool_call_id") == "code1" for msg in history):
+            resp = _evidence_response(
+                "ev1", self.subtask_id, f"{self.subtask_id}_results.json"
+            )
+            resp.content = ""
+            return resp
+        self.code_calls += 1
+        return StandardResponse(
+            content="Compute first.",
+            tool_calls=[
+                ToolCall(id="code1", name="execute_code", arguments='{"code":"print(1)"}')
+            ],
+        )
+
+
 class CoderAgentToolHandlingTest(unittest.IsolatedAsyncioTestCase):
     async def test_record_execution_evidence_tool_writes_backend_generated_manifest(self):
         with tempfile.TemporaryDirectory() as work_dir:
@@ -761,6 +849,183 @@ class CoderAgentToolHandlingTest(unittest.IsolatedAsyncioTestCase):
                 for msg in agent.chat_history
             )
         )
+
+    async def test_empty_closeout_triggers_single_controlled_narration_turn(self):
+        """方案1：证据合格但收束轮 content 为空时，追加且仅追加一轮受控叙述。
+
+        受控叙述轮不得执行代码、不得增加主循环轮次/retry，也不得留下占位符。
+        """
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(os.path.join(work_dir, "ques1_results.json"), "w", encoding="utf-8") as handle:
+                json.dump({"objective_value": 1.0}, handle)
+            interpreter = ResultWritingInterpreter(
+                work_dir, "ques1_results.json", {"objective_value": 1.0}
+            )
+            model = FakeEmptyCloseoutModel()
+            agent = CoderAgent(
+                task_id="t1",
+                model=model,
+                work_dir=work_dir,
+                max_chat_turns=6,
+                code_interpreter=interpreter,
+            )
+
+            with patch("app.core.agents.coder_agent.redis_manager.publish_message", new=AsyncMock()):
+                result = await agent.run("solve ques1", "ques1")
+
+            # 叙述轮触发且仅触发一次
+            self.assertEqual(model.narration_calls, 1)
+            # 返回模型叙述，而非占位符
+            self.assertEqual(result.code_response, "本题采用双光束模型联合拟合并复算厚度。")
+            self.assertNotEqual(result.code_response, "已在受控收束阶段记录执行证据。")
+            # 叙述轮没有触发额外代码执行（只有主循环的那一次）
+            self.assertEqual(len(interpreter.executed_code), 1)
+            self.assertTrue(result.execution_succeeded)
+
+    async def test_empty_narration_falls_back_to_deterministic_subtask_summary(self):
+        """方案2：叙述轮再次返回空 → 用本题确定性兜底，含本题事实、无占位符。"""
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(os.path.join(work_dir, "ques3_results.json"), "w", encoding="utf-8") as handle:
+                json.dump({"thickness": 1.0}, handle)
+            # 冻结本题指标，供确定性兜底引用
+            with open(os.path.join(work_dir, "frozen_results.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "schema": "mathmodel.result-freeze",
+                        "version": 1,
+                        "metrics": [
+                            {
+                                "id": "q3_si_thickness",
+                                "subtask_id": "ques3",
+                                "label": "硅外延层Airy联合厚度",
+                                "value": 1.015833,
+                                "unit": "um",
+                                "explanation": "附件3/4硅晶圆片多光束联合拟合厚度。",
+                            }
+                        ],
+                        "sources": [{"relative_path": "ques3_results.json", "sha256": _sha256_of(work_dir, "ques3_results.json"), "role": "evidence"}],
+                    },
+                    handle,
+                    ensure_ascii=False,
+                )
+            interpreter = ResultWritingInterpreter(
+                work_dir, "ques3_results.json", {"thickness": 1.0}
+            )
+            model = FakeEmptyCloseoutThenBadNarrationModel(subtask_id="ques3")
+            agent = CoderAgent(
+                task_id="t1",
+                model=model,
+                work_dir=work_dir,
+                max_chat_turns=6,
+                code_interpreter=interpreter,
+            )
+            # 首条 user 提示带本题 key 和硅晶圆题目，供兜底提取
+            agent.chat_history = []
+
+            with patch("app.core.agents.coder_agent.redis_manager.publish_message", new=AsyncMock()):
+                result = await agent.run(
+                    "ques3 分析附件3和附件4硅晶圆片是否出现多光束干涉", "ques3"
+                )
+
+            self.assertEqual(model.narration_calls, 1)
+            self.assertNotEqual(result.code_response, "已在受控收束阶段记录执行证据。")
+            # 兜底为本题结构化说明，锁定到 ques3 且带本题题目
+            self.assertIn("ques3 方法—产物—结果", result.code_response)
+            self.assertIn("硅晶圆片是否出现多光束干涉", result.code_response)
+            # 不含其它子任务/碳化硅敏感性叙述
+            self.assertNotIn("碳化硅", result.code_response)
+            self.assertNotIn("sensitivity", result.code_response.lower())
+
+    def test_deterministic_narration_includes_only_current_subtask_facts(self):
+        """方案2 单元级：确定性兜底只引用本题冻结指标，排除其它子任务。"""
+        from app.core.agents.coder_agent import _deterministic_subtask_narration
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(os.path.join(work_dir, "ques3_results.json"), "w", encoding="utf-8") as handle:
+                handle.write("thickness=1.015833\n")
+            with open(os.path.join(work_dir, "frozen_results.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "schema": "mathmodel.result-freeze",
+                        "version": 1,
+                        "metrics": [
+                            {
+                                "id": "q3_si_thickness",
+                                "subtask_id": "ques3",
+                                "label": "硅外延层Airy联合厚度",
+                                "value": 1.015833,
+                                "unit": "um",
+                                "explanation": "附件3/4硅晶圆片多光束联合拟合厚度。",
+                            },
+                            {
+                                "id": "q1_sic_thickness",
+                                "subtask_id": "ques1",
+                                "label": "碳化硅外延层厚度",
+                                "value": 113.235423,
+                                "unit": "um",
+                                "explanation": "碳化硅双角度联合拟合厚度。",
+                            },
+                        ],
+                        "sources": [
+                            {
+                                "relative_path": "ques3_results.json",
+                                "sha256": _sha256_of(work_dir, "ques3_results.json"),
+                                "role": "evidence",
+                            }
+                        ],
+                    },
+                    handle,
+                    ensure_ascii=False,
+                )
+            narration = _deterministic_subtask_narration(
+                work_dir,
+                "ques3",
+                "分析附件3和附件4硅晶圆片是否出现多光束干涉",
+                "对附件3/4硅晶圆片双角度联合拟合并做多光束条件审计。",
+                ["ques3_multibeam_condition_audit.csv", "ques3_results.csv"],
+            )
+
+        # 含本题冻结指标
+        self.assertIn("硅外延层Airy联合厚度", narration)
+        self.assertIn("1.015833", narration)
+        # 含本题产物与方法
+        self.assertIn("ques3_multibeam_condition_audit.csv", narration)
+        self.assertIn("多光束条件审计", narration)
+        # 严格排除其它子任务（碳化硅 ques1）的指标
+        self.assertNotIn("碳化硅外延层厚度", narration)
+        self.assertNotIn("113.235423", narration)
+
+    async def test_narration_exception_falls_back_to_deterministic_summary(self):
+        """方案2：叙述轮抛异常（超时）→ 立即降级到确定性兜底，不卡住收束。"""
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(os.path.join(work_dir, "ques1_results.json"), "w", encoding="utf-8") as handle:
+                json.dump({"objective_value": 1.0}, handle)
+            interpreter = ResultWritingInterpreter(
+                work_dir, "ques1_results.json", {"objective_value": 1.0}
+            )
+            model = FakeEmptyCloseoutThenRaisingNarrationModel()
+            agent = CoderAgent(
+                task_id="t1",
+                model=model,
+                work_dir=work_dir,
+                max_chat_turns=6,
+                code_interpreter=interpreter,
+            )
+
+            with patch("app.core.agents.coder_agent.redis_manager.publish_message", new=AsyncMock()):
+                result = await agent.run("ques1 求最优方案", "ques1")
+
+            self.assertEqual(model.narration_calls, 1)
+            self.assertNotEqual(result.code_response, "已在受控收束阶段记录执行证据。")
+            self.assertIn("ques1", result.code_response)
+            self.assertTrue(result.execution_succeeded)
+
+
+def _sha256_of(work_dir, filename):
+    import hashlib
+
+    with open(os.path.join(work_dir, filename), "rb") as handle:
+        return hashlib.sha256(handle.read()).hexdigest()
 
 
 if __name__ == "__main__":

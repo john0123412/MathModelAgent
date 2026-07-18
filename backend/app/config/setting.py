@@ -97,6 +97,10 @@ class Settings(BaseSettings):
     # 覆盖代码报错反思与 LLM 故障兜底重试；内层 llm.py 每次调用已自带 3 次
     # 重试，外层 20 次足够跨越常见抖动，同时避免持续故障时无限烧钱。
     MAX_RETRIES: Optional[int] = 20
+    # LLM_MAX_RETRIES：llm.py 单次 chat 调用内的重试次数。远程网关（如中转
+    # 服务）偶发连接抖动时，默认 3 次约 6 秒的窗口经常跨不过一次抖动；按
+    # provider 稳定性在 env 中调大。
+    LLM_MAX_RETRIES: int = 3
     CODER_MAX_SUCCESSFUL_TOOL_CALLS_PER_SUBTASK: Optional[int] = 8
     LLM_REQUEST_TIMEOUT_SECONDS: float = 90.0
     HUMAN_MODEL_GATE_ENABLED: bool = False

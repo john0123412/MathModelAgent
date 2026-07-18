@@ -100,7 +100,7 @@ class Flows:
                 "coder_prompt": f"""
                         {contract_prompt}
                         不可变参数必须原样使用；如果建模手方案与题面参数契约冲突，以题面参数契约为准并在代码注释中说明已纠正。开始数值求解前，先在当前目录写入
-                        `input_parameter_audit.csv`，逐行记录本题使用的题面参数、单位、来源和代码断言结果；整个问题只能使用一套自洽单位制，禁止把 mm³/ms、mg/mm³、MPa 与 SI 单位混算。
+                        `{key}_input_parameter_audit.csv`（每道题写各自的审计文件，切勿共用同一个 `input_parameter_audit.csv`，否则后一题会覆盖前一题已记录的证据文件），逐行记录本题使用的题面参数、单位、来源和代码断言结果；整个问题只能使用一套自洽单位制，禁止把 mm³/ms、mg/mm³、MPa 与 SI 单位混算。
                         每项必须覆盖要求都要在代码输出中逐项说明验证结果；
                         若约束不满足，明确标记为不可行，禁止称为最优解。
                         这是正式题 {key}，不是探索性草稿。结束前必须在当前任务目录写入
@@ -199,6 +199,7 @@ class Flows:
                 "代码输出缓存缺失，使用已持久化的 Coder 响应继续写作: %s", key
             )
             code_output = ""
+        # 全局事实仅供 eda / 敏感性 / 全局校验类章节使用。
         result_fact_summary = build_result_fact_summary(code_interpreter.work_dir)
         freeze_validation = validate_result_freeze(code_interpreter.work_dir)
         if freeze_validation["active"]:
@@ -220,10 +221,39 @@ class Flows:
 
         questions_quesx_keys = self.get_questions_quesx_keys()
         bgc = self.questions["background"]
+        # 方案3：子任务隔离。Writer 写某个正式题时，方法与结果只能来自本题的
+        # 题目描述、Modeler 计划、本题 coder 响应与本题冻结指标；不得借用其它
+        # 子任务（尤其 sensitivity_analysis 的敏感性/Bootstrap 叙事）的方法或
+        # 结论。历史故障：ques3 方法叙述为空时，Writer 抓了 sensitivity_analysis
+        # 的碳化硅敏感性叙事填入 5.3，导致整节跑题。
+        def _subtask_isolation_notice(current_key: str) -> str:
+            other_keys = [
+                other
+                for other in (*questions_quesx_keys, "eda", "sensitivity_analysis")
+                if other != current_key
+            ]
+            current_question = str(self.questions.get(current_key, ""))
+            # 只声明本 prompt 实际注入的内容（本题题目、本题执行说明、本题冻结
+            # 指标）；不提未注入的 Modeler 计划/产物路径，避免空指代。
+            return (
+                f"【本节写作范围锁定：仅限 {current_key}】\n"
+                f"本节只能依据下方 {current_key} 的题目描述、{current_key} 的代码执行说明"
+                f"与 {current_key} 的冻结指标来撰写方法与结果。\n"
+                f"{current_key} 的题目：{current_question}\n"
+                f"严禁把其它子任务（{', '.join(other_keys)}）的方法、数据附件或结论"
+                f"作为本节的方法或结果来源；尤其不得引用 sensitivity_analysis 的"
+                f"敏感性/Bootstrap 叙事。若 {current_key} 的执行说明为空或信息不足，"
+                f"只能依据下方本题冻结指标如实叙述本题，不得用其它子任务内容填充。"
+            )
+
+        # 每个正式题的事实摘要按 task key 物理过滤：写 quesN 时只看到本题
+        # 冻结指标/CSV 事实，看不到其它子任务（含 sensitivity_analysis）的数值。
         quesx_writer_prompt = {
             key: f"""
-                    问题背景{bgc},不需要编写代码。执行说明（仅供方法叙述）{code_context}
-                    {result_fact_summary}
+                    问题背景{bgc},不需要编写代码。
+                    {_subtask_isolation_notice(key)}
+                    执行说明（仅供方法叙述，且仅限本题 {key}）{code_context}
+                    {build_result_fact_summary(code_interpreter.work_dir, subtask_id=key)}
                     {result_instruction}
                     按照如下模板撰写：{config_template[key]}
                 """

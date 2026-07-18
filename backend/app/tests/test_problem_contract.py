@@ -90,6 +90,44 @@ class TestProblemContract(unittest.TestCase):
         )
         self.assertTrue(result.valid, result.model_dump_json())
 
+    def test_accepts_plan_that_quotes_the_prohibition_itself(self):
+        """方案原样引用契约禁令（“不得改写为不同样品”）属于遵守，不得误判为违规。"""
+        result = validate_modeler_plan(
+            build_problem_contract(OPTICAL_ANGLE_PAIR_PROBLEM),
+            {
+                "ques1": "推导任意入射角下的双光束干涉模型。",
+                "ques2": (
+                    "附件1和附件2是同一块碳化硅晶圆片在题面实测入射角10°和15°下的"
+                    "配对测量联合建模，不得改写为不同样品或两个独立样品；"
+                    "最终厚度d必须在两组角度数据之间共享，不得将两组数据视为不同晶圆片。"
+                ),
+                "ques3": (
+                    "附件3和附件4是同一块硅晶圆片在10°和15°下的配对测量，"
+                    "联合检验多光束干涉，禁止视为两片独立晶圆。"
+                ),
+            },
+        )
+        self.assertTrue(result.valid, result.model_dump_json())
+
+    def test_accepts_decimal_angles_that_end_in_zero(self):
+        """10.0°/15.0度 的小数写法不得被 0° 覆写检查误判（.0° 不是 0°）。"""
+        result = validate_modeler_plan(
+            build_problem_contract(OPTICAL_ANGLE_PAIR_PROBLEM),
+            {
+                "ques1": "推导任意入射角下的双光束干涉模型。",
+                "ques2": (
+                    "附件1和附件2是同一块碳化硅晶圆片的配对测量；"
+                    "theta_1=10.0°、theta_2=15.0°为不可修改的题面参数，"
+                    "必须直接用于算法，不得替换入射角。"
+                ),
+                "ques3": (
+                    "附件3和附件4是同一块硅晶圆片在10.0度和15.0度下的配对测量，"
+                    "联合检验多光束干涉。"
+                ),
+            },
+        )
+        self.assertTrue(result.valid, result.model_dump_json())
+
     def test_rejects_wafer_itself_being_different_or_independent(self):
         result = validate_modeler_plan(
             build_problem_contract(OPTICAL_ANGLE_PAIR_PROBLEM),

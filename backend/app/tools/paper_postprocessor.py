@@ -2116,20 +2116,44 @@ def _load_result_numeric_facts(work_dir: str) -> list[dict]:
     return list(facts_by_id.values())
 
 
-def build_result_fact_summary(work_dir: str) -> str:
+def build_result_fact_summary(work_dir: str, subtask_id: str | None = None) -> str:
     """从冻结结果或兼容 CSV 生成给写作手使用的关键数值事实摘要。
 
     一旦任务已创建冻结结果，CSV 只保留作来源证据，不能再与冻结文件并列
     注入 Writer，避免同一结论出现两个互相竞争的数值来源。
+
+    当传入 ``subtask_id`` 时物理过滤为本题事实：冻结路径按 metric.subtask_id
+    过滤，非冻结 CSV 路径按 ``quesN_`` 文件名前缀过滤。用于 Writer 分节写作的
+    子任务隔离——写 quesN 时看不到其它子任务的数值事实。
     """
-    frozen_summary = build_frozen_result_summary(work_dir)
+    frozen_summary = build_frozen_result_summary(work_dir, subtask_id=subtask_id)
     if frozen_summary:
         return frozen_summary
     facts = _load_result_numeric_facts(work_dir)
+    if subtask_id:
+        # 非冻结路径没有可靠的 subtask 归属信号，文件名是唯一线索：
+        # - 带 quesN_ 前缀的 CSV 明确属于某题 → 仅保留本题；
+        # - 无 quesN_ 前缀的 CSV 无法归属 → 放行（不会误判给某个竞争子任务）。
+        # 生产路径 Writer 总在冻结后运行，走上面 build_frozen_result_summary 的
+        # subtask_id 精确过滤；此处仅为无冻结的降级兜底。
+        own_prefix = f"{str(subtask_id).lower()}_"
+        other_prefix_re = re.compile(r"^ques[0-9]+_", re.IGNORECASE)
+        filtered = []
+        for fact in facts:
+            source = str(fact.get("source", "")).lower()
+            if other_prefix_re.match(source) and not source.startswith(own_prefix):
+                continue
+            filtered.append(fact)
+        facts = filtered
     if not facts:
         return ""
+    header = (
+        f"【结构化结果事实（仅限本题 {subtask_id}）】"
+        if subtask_id
+        else "【结构化结果事实】"
+    )
     lines = [
-        "【结构化结果事实】",
+        header,
         "正文关键数值必须优先使用以上结构化事实；若与代码输出或上下文存在冲突，以结果 CSV 为准，不能凭印象改写。",
     ]
     for fact in facts:
@@ -2309,8 +2333,27 @@ def _range_span_candidates(text: str) -> list[float]:
     return spans
 
 
+def _shadowing_aliases(metric: dict, metrics: list[dict]) -> list[str]:
+    """Aliases of other metrics that strictly contain one of ``metric``'s aliases.
+
+    中文指标名没有词边界：“硅外延层厚度”是“碳化硅外延层厚度”的后缀子串。
+    若不排除，正文对碳化硅指标的正确陈述会被误判为硅指标的数值冲突，
+    并把假冲突写进回修证据，使定向回修永远无法收敛。
+    """
+    own = [alias for alias in metric_aliases(metric) if len(alias) >= 2]
+    own_id = str(metric.get("id"))
+    shadows: list[str] = []
+    for other in metrics:
+        if str(other.get("id")) == own_id:
+            continue
+        for other_alias in metric_aliases(other):
+            if any(alias != other_alias and alias in other_alias for alias in own):
+                shadows.append(other_alias)
+    return shadows
+
+
 def _metric_claim_occurrences(
-    sentence: str, metric: dict
+    sentence: str, metric: dict, shadow_aliases: tuple | list = ()
 ) -> list[tuple[list[float], bool]]:
     """Return per-occurrence candidate values explicitly assigned to ``metric``.
 
@@ -2346,6 +2389,15 @@ def _metric_claim_occurrences(
         for match in re.finditer(re.escape(alias), sentence):
             # “利润增长率” is a rate, not the frozen scalar “利润增加量”.
             if alias.endswith("增长") and sentence[match.end() :].startswith("率"):
+                continue
+            # 命中的其实是别的指标的更长名称（如本指标“硅外延层厚度”落在
+            # “碳化硅外延层厚度”内部）时，这次出现属于那个指标，跳过。
+            if any(
+                sentence[match.start() - idx : match.start() - idx + len(shadow)] == shadow
+                for shadow in shadow_aliases
+                for idx in [shadow.find(alias)]
+                if idx >= 0 and match.start() - idx >= 0
+            ):
                 continue
             prefix = sentence[max(0, match.start() - 16) : match.start()]
             attribution: str | None = None
@@ -2429,7 +2481,10 @@ def _shared_alias_metric_values(metric: dict, metrics: list[dict]) -> list[float
 
 
 def _frozen_claim_conflict_numbers(
-    sentence: str, metric: dict, sibling_values: list[float]
+    sentence: str,
+    metric: dict,
+    sibling_values: list[float],
+    shadow_aliases: tuple | list = (),
 ) -> list[float]:
     """Return claimed numbers conflicting with ``metric`` in ``sentence``.
 
@@ -2442,7 +2497,9 @@ def _frozen_claim_conflict_numbers(
     """
     expected = float(metric["value"])
     conflicting: list[float] = []
-    for candidates, explicit in _metric_claim_occurrences(sentence, metric):
+    for candidates, explicit in _metric_claim_occurrences(
+        sentence, metric, shadow_aliases
+    ):
         if any(_number_close_to_expected(number, expected) for number in candidates):
             continue
         if not explicit and any(
@@ -2513,7 +2570,10 @@ def _check_frozen_result_consistency(markdown: str, validation: dict) -> dict:
             if not _sentence_matches_metric_scope(sentence, section, metric):
                 continue
             numbers = _frozen_claim_conflict_numbers(
-                sentence, metric, _shared_alias_metric_values(metric, metrics)
+                sentence,
+                metric,
+                _shared_alias_metric_values(metric, metrics),
+                _shadowing_aliases(metric, metrics),
             )
             if not numbers:
                 continue
@@ -2672,6 +2732,7 @@ def _check_figure_result_consistency(work_dir: str, markdown: str) -> dict:
                         sentence,
                         metric,
                         _shared_alias_metric_values(metric, validation["metrics"]),
+                        _shadowing_aliases(metric, validation["metrics"]),
                     )
                     if not numbers:
                         continue

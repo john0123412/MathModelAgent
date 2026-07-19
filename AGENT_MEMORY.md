@@ -2,6 +2,8 @@
 
 ## 当前稳定状态
 
+- 2026-07-19：执行验证新增 ModelPlan 产物与可辨识性门禁。对每个正式 `quesN`，验证器会检查 `expected_artifacts` 是否实际存在、非空，且声明的 CSV 数值产物可解析；当 `figure_data` 明确为模型响应/损失/反射率扫描时，还会检查整体及按角度/样品等场景分组后的响应动态范围，拒绝把近常数曲线当作参数扫描证据。若 ModelPlan 明确要求多初值、Bootstrap、剖面或可辨识性分析，执行证据必须记录可辨识性、分支、区间或边界等诊断，单独的“记录有限”不再足以通过。该门禁不设置领域 RMSE 阈值，也不预设模型结论；它只阻断缺少稳定性证据的自动冻结/写作。触发后应生成真实诊断表，若不可辨识则如实报告并停止将单一局部/边界参数写为确定性结论。针对历史光学任务 `20260717-144854-2f67cf50c60faf5ad02eea5d3b52f2b1` 的只读复核现会拒绝：问题一按角度/材料分组的厚度扫描响应退化、三问缺少合格可辨识性诊断，且问题三缺少计划声明的 `ques3_multibeam_parameter_audit.csv`；不得只重导 PDF 使其看似通过。
+
 - 2026-07-14：仓库级 `AGENTS.md`、`skills/1start-mathmodel/SKILL.md` 与全局 `C:\Users\Johnny\.codex\AGENTS.md` 已按当前 Codex `spawn_agent` 接口更新多智能体限制：主 agent 创建子任务必须显式使用 `fork_context:false`，严禁 `fork_context:true`，不再使用不属于当前接口的 `fork_turns`；只有主 agent 可 spawn，subagent 不得嵌套 spawn；同一时刻活动的直接 subagent 最多 5 个，且仅接收阶段摘要、明确目标和文件路径。真实建模任务如需断点续传优先走后端 `POST /modeling`；发起子线程前必须确认经用户授权的隔离计费与预算限制。
 
 - 2026-07-14：主工作流的最终执行验证失败会保留已通过 `quesN` 的代码检查点，并对报告中定位到的失败题目最多进行一次自动定向回修；回修后再次失败或同一任务已记录两次真实验证失败时，停止 Writer/PDF 和自动重试，要求按恢复规程人工切换已验证 provider 或确认低开销算法。执行冻结通过后，若 `paper_preflight_report.json` 的硬失败只定位到 `result_consistency` 等可归属正文的检查项，工作流还会把冲突证据和冻结事实只交回受影响章节的 Writer 一次，再重新预检；无法归属的失败、或回修后仍为 `FAIL`，会停止候选 PDF 导出而不是生成貌似完成的论文。DOCX 收尾后生成 `final_acceptance_report.json/md`：`TECHNICAL_PASS` 同时要求执行验证、冻结来源哈希、preflight、PDF visual、正式字体、主交付文件/manifest 和论文附录完整源码通过；数学、引用、版式及平台规则始终是 `PENDING_HUMAN_REVIEW`。论文后处理不再将附录源码截断为 240 行，而是写入完整脚本/notebook 代码单元及 SHA-256；完整源码可能增加页数，仍须实际 PDF 视觉检查。

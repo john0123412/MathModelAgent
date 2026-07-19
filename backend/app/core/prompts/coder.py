@@ -282,6 +282,15 @@ print("=" * 60)
   display rounding is allowed). Every metric requires an id, Chinese label,
   finite value, unit, concrete explanation, and `source_path`. Figures require a task-relative image path and the
   task-relative data source that produced it.
+- The ModelPlan's `expected_artifacts` are completion requirements, not
+  optional scratch files: create every declared numerical artefact, keep CSV
+  files parseable and nonempty, and ensure a declared scan contains a varying
+  model response or score rather than only a changing x-axis. If the plan
+  mentions multi-start fitting, Bootstrap, branches, profile likelihood, or
+  identifiability, write an auditable diagnostic table and record a metric for
+  parameter identifiability / interval / branch count / active-bound status.
+  A result that is flat, bound-hitting, or multi-branch must be reported as
+  underdetermined; do not present a single fitted parameter as a stable answer.
 - For optimization questions, metrics must include the objective value and
   every decision variable used in the reported optimum (including each
   sensitivity scenario's new decision vector). Do not record only profit

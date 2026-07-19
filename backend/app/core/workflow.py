@@ -103,6 +103,7 @@ class MathModelWorkFlow(WorkFlow):
         comp_template: CompTemplate,
         format_output: FormatOutPut,
         user_input_provider,
+        problem_context: str,
     ) -> tuple[NotebookSerializer, BaseCodeInterpreter, CoderAgent, WriterAgent]:
         """构建代码手/写作手 Agent 及其依赖的沙盒环境（execute 与 resume 共享）。
 
@@ -112,6 +113,7 @@ class MathModelWorkFlow(WorkFlow):
             comp_template: 竞赛模板类型。
             format_output: 输出格式。
             user_input_provider: 实时消息干预的输入提供函数。
+            problem_context: 原始题面，供 Coder 在首次调用时核对确定性参数。
 
         Returns:
             (notebook_serializer, code_interpreter, coder_agent, writer_agent) 元组。
@@ -166,6 +168,7 @@ class MathModelWorkFlow(WorkFlow):
                 context_window=settings.CODER_CONTEXT_WINDOW,
                 cancel_event=self.cancel_event,
                 user_input_provider=user_input_provider,
+                problem_context=problem_context,
             )
 
             writer_agent = WriterAgent(
@@ -1482,6 +1485,7 @@ class MathModelWorkFlow(WorkFlow):
             problem.comp_template,
             problem.format_output,
             user_input_provider,
+            problem.ques_all,
         )
 
         flows = Flows(self.questions, problem_contract)
@@ -1609,6 +1613,7 @@ class MathModelWorkFlow(WorkFlow):
             comp_template,
             format_output,
             user_input_provider,
+            checkpoint.ques_all,
         )
 
         flows = Flows(self.questions, problem_contract)

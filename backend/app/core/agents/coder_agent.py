@@ -224,6 +224,7 @@ class CoderAgent(Agent):
         context_window: int = 128000,
         cancel_event: asyncio.Event | None = None,
         user_input_provider: Callable[[], list[str]] | None = None,
+        problem_context: str = "",
     ) -> None:
         super().__init__(
             task_id,
@@ -240,6 +241,7 @@ class CoderAgent(Agent):
         self.is_first_run = True
         self.system_prompt = CODER_PROMPT
         self.code_interpreter = code_interpreter
+        self.problem_context = problem_context.strip()
 
     async def run(self, prompt: str, subtask_title: str) -> CoderToWriter:  # type: ignore[reportIncompatibleMethodOverride]
         """执行代码手子任务，生成并运行代码。
@@ -270,6 +272,16 @@ class CoderAgent(Agent):
             await self.append_chat_history(
                 {"role": "system", "content": self.system_prompt}
             )
+            if self.problem_context:
+                await self.append_chat_history(
+                    {
+                        "role": "user",
+                        "content": (
+                            "【完整原始题面（唯一事实来源，不得省略其中参数）】\n"
+                            + self.problem_context
+                        ),
+                    }
+                )
             # 当前数据集文件
             await self.append_chat_history(
                 {

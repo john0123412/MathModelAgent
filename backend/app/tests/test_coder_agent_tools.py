@@ -539,6 +539,29 @@ class FakeEmptyCloseoutThenRaisingNarrationModel(FakeEmptyCloseoutModel):
 
 
 class CoderAgentToolHandlingTest(unittest.IsolatedAsyncioTestCase):
+    async def test_first_run_includes_complete_problem_context_before_eda(self):
+        """无附件的确定性题也必须把原始参数传给 EDA Coder。"""
+        agent = CoderAgent(
+            task_id="t1",
+            model=FakeModel(),
+            work_dir=".",
+            max_chat_turns=3,
+            code_interpreter=FakeInterpreter(),
+            problem_context="A 需2小时机器、1小时人工，利润40元；机器时间最多100小时。",
+        )
+
+        with patch("app.core.agents.coder_agent.redis_manager.publish_message", new=AsyncMock()):
+            await agent.run("仅做题面常量核验", "eda")
+
+        user_messages = [
+            message["content"]
+            for message in agent.chat_history
+            if message.get("role") == "user"
+        ]
+        self.assertIn("完整原始题面", user_messages[0])
+        self.assertIn("机器时间最多100小时", user_messages[0])
+        self.assertIn("当前文件夹下的数据集文件", user_messages[1])
+
     async def test_record_execution_evidence_tool_writes_backend_generated_manifest(self):
         with tempfile.TemporaryDirectory() as work_dir:
             with open(os.path.join(work_dir, "ques1_results.json"), "w", encoding="utf-8") as handle:

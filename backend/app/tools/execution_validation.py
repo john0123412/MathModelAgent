@@ -229,6 +229,253 @@ def _planned_acceptance_metrics(root: Path, subtask_id: str) -> list[dict[str, A
     return [item for item in metrics if isinstance(item, dict)] if isinstance(metrics, list) else []
 
 
+def _planned_subtask(root: Path, subtask_id: str) -> dict[str, Any]:
+    """Read one structured ModelPlan subtask without trusting free-form prose.
+
+    The plan already declares which numerical artefacts and diagnostics make a
+    result reviewable.  Completion used to enforce only the three selected
+    acceptance constraints, allowing the Coder to omit or silently degenerate
+    the rest of that promised evidence.
+    """
+    plan = _read_json(root / "modeler_plan.json")
+    if not plan:
+        return {}
+    model_plan = plan.get("model_plan", plan)
+    if not isinstance(model_plan, dict):
+        return {}
+    subtasks = model_plan.get("subtasks", {})
+    subtask = subtasks.get(subtask_id, {}) if isinstance(subtasks, dict) else {}
+    return subtask if isinstance(subtask, dict) else {}
+
+
+def _planned_expected_artifacts(root: Path, subtask_id: str) -> list[dict[str, Any]]:
+    artifacts = _planned_subtask(root, subtask_id).get("expected_artifacts", [])
+    return [item for item in artifacts if isinstance(item, dict)] if isinstance(artifacts, list) else []
+
+
+def _plan_requires_identifiability_evidence(root: Path, subtask_id: str) -> bool:
+    """Return whether the ModelPlan explicitly promises a stability diagnosis.
+
+    This is intentionally driven by the task-owned plan rather than a domain
+    threshold: optics, curve fitting and optimisation can all have local
+    branches or active-bound solutions.  The gate asks for an auditable status,
+    not for a preordained conclusion or a universal error tolerance.
+    """
+    subtask = _planned_subtask(root, subtask_id)
+    text = "\n".join(
+        str(subtask.get(field, ""))
+        for field in ("method", "constraints", "visualization")
+    )
+    for artifact in _planned_expected_artifacts(root, subtask_id):
+        text += "\n" + str(artifact.get("path", "")) + "\n" + str(artifact.get("description", ""))
+    lowered = text.lower()
+    return any(token in text or token in lowered for token in (
+        "可辨识", "多组初值", "多初值", "剖面似然", "初值分支", "bootstrap", "identifiability",
+    ))
+
+
+def _csv_numeric_columns(path: Path) -> tuple[dict[str, list[float]], str | None]:
+    """Read finite numeric CSV columns for low-cost evidence sanity checks."""
+    try:
+        with path.open(encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if not reader.fieldnames:
+                return {}, "CSV 缺少表头。"
+            values = {name: [] for name in reader.fieldnames if isinstance(name, str)}
+            row_count = 0
+            for row in reader:
+                row_count += 1
+                for name, raw_value in row.items():
+                    value = _as_number(_parse_csv_number(raw_value))
+                    if value is not None:
+                        values.setdefault(name or "", []).append(value)
+    except (OSError, csv.Error, UnicodeError) as exc:
+        return {}, f"CSV 无法解析：{type(exc).__name__}。"
+    if row_count == 0:
+        return {}, "CSV 没有数据行。"
+    return {name: column for name, column in values.items() if column}, None
+
+
+def _parse_csv_number(value: object) -> float | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = float(value.strip())
+    except ValueError:
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _response_columns(columns: dict[str, list[float]]) -> list[str]:
+    """Find columns that a planned scan presents as a model response/score."""
+    tokens = ("model", "predict", "response", "reflect", "loss", "rmse", "mae", "residual", "拟合", "预测", "反射", "损失", "残差")
+    return [name for name in columns if any(token in name.lower() or token in name for token in tokens)]
+
+
+def _scan_group_response_spans(path: Path, response_columns: list[str]) -> tuple[list[str], dict[str, dict[str, float]]]:
+    """Return per-series response spans when scan rows declare scenario fields."""
+    group_tokens = ("angle", "sample", "wafer", "material", "scenario", "group", "入射角", "角度", "样品", "晶圆", "材料", "场景", "类别")
+    try:
+        with path.open(encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            fields = [name for name in (reader.fieldnames or []) if isinstance(name, str)]
+            group_columns = [
+                name for name in fields
+                if any(token in name.lower() or token in name for token in group_tokens)
+            ]
+            if not group_columns:
+                return [], {}
+            groups: dict[tuple[str, ...], dict[str, list[float]]] = {}
+            for row in reader:
+                key = tuple(str(row.get(name, "")).strip() for name in group_columns)
+                values = groups.setdefault(key, {name: [] for name in response_columns})
+                for name in response_columns:
+                    value = _parse_csv_number(row.get(name))
+                    if value is not None:
+                        values[name].append(value)
+    except (OSError, csv.Error, UnicodeError):
+        return [], {}
+    spans: dict[str, dict[str, float]] = {}
+    for key, values in groups.items():
+        group_spans = {
+            name: max(series) - min(series)
+            for name, series in values.items()
+            if len(series) >= 2
+        }
+        if group_spans:
+            spans[" | ".join(key)] = group_spans
+    return group_columns, spans
+
+
+def _expected_artifact_issues(root: Path, subtask_id: str) -> list[dict[str, Any]]:
+    """Verify the numerical artefacts the ModelPlan committed to produce.
+
+    In particular, a declared scan must contain a varying response/score.  A
+    flat response can be a legitimate scientific finding, but then it is an
+    identifiability result and must not be used as an unqualified fit/parameter
+    scan.  This check therefore stops the automatic completion path and asks
+    the workflow to preserve that distinction explicitly.
+    """
+    issues: list[dict[str, Any]] = []
+    for index, artifact in enumerate(_planned_expected_artifacts(root, subtask_id)):
+        raw_path = artifact.get("path")
+        kind = str(artifact.get("kind") or "other")
+        description = str(artifact.get("description") or "")
+        artifact_path = _safe_source_path(root, raw_path)
+        check_id = f"{subtask_id}.expected_artifact.{index}"
+        if artifact_path is None or not artifact_path.is_file() or artifact_path.stat().st_size == 0:
+            issues.append(_issue(
+                check_id,
+                False,
+                f"ModelPlan 承诺的产物 {raw_path!r} 缺失或为空。",
+                {"path": raw_path, "kind": kind},
+            ))
+            continue
+        issues.append(_issue(
+            check_id,
+            True,
+            f"ModelPlan 承诺的产物 {artifact_path.name} 存在且非空。",
+            {"path": str(artifact_path.relative_to(root)), "kind": kind},
+        ))
+
+        if artifact_path.suffix.lower() != ".csv" or kind not in {"result_table", "constraint_table", "figure_data", "time_series", "parameter_audit", "dataset"}:
+            continue
+        columns, parse_error = _csv_numeric_columns(artifact_path)
+        csv_check_id = f"{check_id}.csv"
+        if parse_error:
+            issues.append(_issue(csv_check_id, False, f"{artifact_path.name} {parse_error}"))
+            continue
+        if not columns:
+            issues.append(_issue(
+                csv_check_id,
+                False,
+                f"{artifact_path.name} 虽可解析，但没有有限数值列，不能作为数值执行证据。",
+            ))
+            continue
+        issues.append(_issue(
+            csv_check_id,
+            True,
+            f"{artifact_path.name} 可解析，且包含有限数值列。",
+            {"numeric_columns": sorted(columns)},
+        ))
+
+        scan_text = f"{artifact_path.name}\n{description}".lower()
+        is_response_scan = kind == "figure_data" and (
+            "scan" in scan_text or "扫描" in scan_text
+        ) and any(token in scan_text for token in ("model", "拟合", "预测", "反射", "loss", "损失", "残差", "rmse", "mae"))
+        if not is_response_scan:
+            continue
+        responses = _response_columns(columns)
+        spans = {
+            name: max(values) - min(values)
+            for name, values in columns.items()
+            if name in responses and len(values) >= 2
+        }
+        # A scan curve that changes by less than 0.1% of its displayed scale is
+        # visually/numerically indistinguishable from a constant response.  It
+        # is not a fit-quality threshold; it only prevents a nearly flat trace
+        # from being presented as evidence that a parameter sweep located an
+        # informative optimum.
+        tolerance = {
+            name: max(1e-12, max(abs(value) for value in columns[name]) * 1e-3)
+            for name in spans
+        }
+        varying = [name for name, span in spans.items() if span > tolerance[name]]
+        group_columns, group_spans = _scan_group_response_spans(artifact_path, responses)
+        degenerate_groups = [
+            group for group, group_values in group_spans.items()
+            if not any(
+                span > tolerance.get(name, 1e-12)
+                for name, span in group_values.items()
+            )
+        ]
+        issues.append(_issue(
+            f"{check_id}.response_variation",
+            bool(varying) and not degenerate_groups,
+            (
+                f"{artifact_path.name} 的扫描响应具有可复核的非退化动态范围。"
+                if varying and not degenerate_groups
+                else f"{artifact_path.name} 的模型响应/评分列整体或某个声明场景内退化，不能支撑参数扫描结论。"
+            ),
+            {
+                "response_columns": responses,
+                "spans": spans,
+                "tolerances": tolerance,
+                "group_columns": group_columns,
+                "group_spans": group_spans,
+                "degenerate_groups": degenerate_groups,
+            },
+        ))
+    return issues
+
+
+def _identifiability_issues(root: Path, subtask_id: str, metrics: object) -> list[dict[str, Any]]:
+    if not _plan_requires_identifiability_evidence(root, subtask_id):
+        return []
+    records = metrics if isinstance(metrics, list) else []
+    meaningful_tokens = ("可辨识", "identifiability", "初值分支", "branch", "区间", "interval", "边界", "bound", "剖面", "profile")
+    finite_only_tokens = ("有限", "finite")
+    candidates = [
+        item for item in records
+        if isinstance(item, dict)
+        and any(token in f"{item.get('id', '')} {item.get('label', '')}".lower() or token in f"{item.get('id', '')} {item.get('label', '')}" for token in meaningful_tokens)
+    ]
+    meaningful = [
+        item for item in candidates
+        if not any(token in f"{item.get('id', '')} {item.get('label', '')}".lower() or token in f"{item.get('id', '')} {item.get('label', '')}" for token in finite_only_tokens)
+    ]
+    return [_issue(
+        f"{subtask_id}.identifiability_evidence",
+        bool(meaningful),
+        (
+            f"{subtask_id} 已记录参数可辨识性、分支、区间、边界或剖面诊断。"
+            if meaningful
+            else f"{subtask_id} 的 ModelPlan 明确要求可辨识性/多初值/Bootstrap 诊断，但只记录了有限性或未记录稳定性证据。"
+        ),
+        {"candidate_metric_ids": [item.get("id") for item in candidates]},
+    )]
+
+
 def _plan_constraint_errors(
     root: Path,
     subtask_id: str,
@@ -1003,6 +1250,12 @@ def _manifest_issues(
             linear_programming_evidence_required=linear_programming_evidence_required,
             balance_residual_required=_subtask_requires_balance_residual(work_dir, subtask),
         ))
+        # The structured plan promises more than the few values chosen as
+        # completion constraints.  Validate its numerical deliverables before
+        # freezing results, so a blank/flat scan cannot pass merely because an
+        # image path and a SHA-256 exist.
+        issues.extend(_expected_artifact_issues(work_dir, subtask))
+        issues.extend(_identifiability_issues(work_dir, subtask, item.get("metrics")))
 
         if strict_value_sources:
             subtask_metrics = item.get("metrics", [])

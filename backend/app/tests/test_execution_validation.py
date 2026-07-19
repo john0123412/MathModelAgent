@@ -864,6 +864,159 @@ class TestExecutionValidation(unittest.TestCase):
             self.assertFalse(check["passed"])
             self.assertEqual(len(check["evidence"]["missing"]), 5)
 
+    def test_model_plan_expected_artifact_must_exist_and_be_nonempty(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_notebook(work_dir)
+            _write_manifest(work_dir)
+            with open(os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "model_plan": {
+                            "subtasks": {
+                                "ques3": {
+                                    "expected_artifacts": [
+                                        {
+                                            "path": "ques3_model_comparison.csv",
+                                            "kind": "result_table",
+                                            "description": "两种模型的同口径结果表",
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    handle,
+                    ensure_ascii=False,
+                )
+
+            report = validate_execution_artifacts(work_dir, required_subtasks=["ques3"])
+
+            self.assertEqual(report["status"], "FAIL")
+            check = next(item for item in report["checks"] if item["id"] == "ques3.expected_artifact.0")
+            self.assertFalse(check["passed"])
+
+    def test_planned_response_scan_rejects_a_flat_model_curve(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_notebook(work_dir)
+            _write_manifest(work_dir)
+            with open(os.path.join(work_dir, "ques3_thickness_scan.csv"), "w", encoding="utf-8-sig") as handle:
+                # The overall response range is nonzero because the two
+                # angles have different baselines, but each displayed scan is
+                # flat and therefore cannot identify thickness.
+                handle.write(
+                    "angle_deg,thickness_um,R_model_mid\n"
+                    "10,1.0,0.2\n10,2.0,0.2\n10,3.0,0.2\n"
+                    "15,1.0,0.3\n15,2.0,0.3\n15,3.0,0.3\n"
+                )
+            with open(os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "model_plan": {
+                            "subtasks": {
+                                "ques3": {
+                                    "expected_artifacts": [
+                                        {
+                                            "path": "ques3_thickness_scan.csv",
+                                            "kind": "figure_data",
+                                            "description": "候选厚度扫描下的模型反射率响应",
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    handle,
+                    ensure_ascii=False,
+                )
+
+            report = validate_execution_artifacts(work_dir, required_subtasks=["ques3"])
+
+            self.assertEqual(report["status"], "FAIL")
+            check = next(
+                item for item in report["checks"]
+                if item["id"] == "ques3.expected_artifact.0.response_variation"
+            )
+            self.assertFalse(check["passed"])
+            self.assertEqual(check["evidence"]["degenerate_groups"], ["10", "15"])
+
+    def test_planned_numeric_csv_cannot_be_a_text_only_placeholder(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_notebook(work_dir)
+            _write_manifest(work_dir)
+            with open(os.path.join(work_dir, "ques3_results.csv"), "w", encoding="utf-8-sig") as handle:
+                handle.write("status,comment\npassed,waiting for calculation\n")
+            with open(os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "model_plan": {
+                            "subtasks": {
+                                "ques3": {
+                                    "expected_artifacts": [
+                                        {
+                                            "path": "ques3_results.csv",
+                                            "kind": "result_table",
+                                            "description": "需要由实际计算写入的结果表",
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    handle,
+                    ensure_ascii=False,
+                )
+
+            report = validate_execution_artifacts(work_dir, required_subtasks=["ques3"])
+
+            check = next(item for item in report["checks"] if item["id"] == "ques3.expected_artifact.0.csv")
+            self.assertFalse(check["passed"])
+            self.assertIn("没有有限数值列", check["message"])
+
+    def test_identifiability_plan_needs_a_diagnostic_beyond_finite_records(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_notebook(work_dir)
+            _write_manifest(work_dir)
+            with open(os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "model_plan": {
+                            "subtasks": {
+                                "ques3": {
+                                    "method": "使用多组初值和 Bootstrap 判断参数可辨识性与局部解分支。",
+                                    "constraints": [],
+                                    "visualization": "展示不同初值的拟合结果。",
+                                    "expected_artifacts": [],
+                                }
+                            }
+                        }
+                    },
+                    handle,
+                    ensure_ascii=False,
+                )
+
+            missing = validate_execution_artifacts(work_dir, required_subtasks=["ques3"])
+            check = next(item for item in missing["checks"] if item["id"] == "ques3.identifiability_evidence")
+            self.assertFalse(check["passed"])
+
+            manifest_path = os.path.join(work_dir, MANIFEST_NAME)
+            with open(manifest_path, encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            manifest["subtasks"][0]["metrics"].append(
+                {
+                    "id": "parameter_identifiability_status",
+                    "label": "参数可辨识性状态",
+                    "value": 1.0,
+                    "unit": "1=稳定识别",
+                    "explanation": "多初值均收敛到同一分支，Bootstrap 区间与边界状态已记录。",
+                }
+            )
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                json.dump(manifest, handle, ensure_ascii=False)
+
+            recorded = validate_execution_artifacts(work_dir, required_subtasks=["ques3"])
+            check = next(item for item in recorded["checks"] if item["id"] == "ques3.identifiability_evidence")
+            self.assertTrue(check["passed"], check)
+
 
 if __name__ == "__main__":
     unittest.main()

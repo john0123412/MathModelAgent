@@ -658,3 +658,7 @@ uv run python scripts/smoke_pdf_export.py
 - [2026-07-18] 上述目标任务随后未重跑 Coordinator/Modeler/Coder/Writer，而是以 `ques1_phase_scan.csv` 的80行、4组已验证扫描数据按 `res.md` 原 Cell 7 的绘图逻辑受控重建唯一坏图；本机指定 Microsoft YaHei 后中文图例/坐标正常。export-only 成功生成 `res.pdf`（1,576,416 字节），`pdf_visual_check.json = PASS`（全49页扫描）、`submission_audit_report.json = PASS`、`final_acceptance_report.json = TECHNICAL_PASS`，自动报告的正式字体均为 SimSun/SimHei/Times New Roman。人工渲染复核首页摘要/关键词、页码/边距以及第11页厚度扫描图均正常；任务状态已写为 `completed`。技术通过不替代数学、引用、匿名和提交平台的最终人工复核。
 
 - [2026-07-18] Docker Desktop 启动后，已用当前未提交工作树重建 backend 镜像并通过健康检查；容器内 PDF 图片回归11项与对应 Ruff 均通过。为不覆盖 Windows 正式字体候选稿，容器真实验证在 `/tmp` 临时目录复制已验收任务的 `res.md` 和全部9张 PNG，再执行 export-only：Pandoc/XeLaTeX 成功生成49页 PDF，`pdf_visual_check` 全页扫描为 `PASS`（49/49）。未启动新的建模任务或调用 provider；Docker 内字体 fallback 仅用于本次隔离验证，不改写正式候选产物。
+
+- [2026-07-19] PR #34 合入 `main` 后准备执行新的轻量真实建模验收。运行配置中未发现 Mimo provider 条目；Geek2API 的四个工作流角色已配置，但未读取或记录密钥正文。首次 `docker compose up --build -d` 在调用模型前即因 Docker Desktop Linux 引擎命名管道不存在而失败（`dockerDesktopLinuxEngine` 未运行），因此未产生任务、未调用 Mimo/Geek2API，当前真实端到端验收受本机 Docker 运行时阻塞；先恢复运行时再试，不把该环境失败归因于本次验证门禁或 provider。
+
+- [2026-07-19] Docker 恢复后，使用 Geek2API（Mimo 未配置）创建轻量线性规划真实任务 `20260719-092857-59d578a55d1d11383168f2380e151575`。Coordinator 和 Modeler 均真实成功：计划正确给出原问题 `(40,20), 2200` 及机器时间增加10小时后的 `(140/3,50/3), 7100/3`。但 EDA Coder 仅看到空数据集目录，错误声称“未提供具体产品收益、资源消耗、资源总量及题目约束”，没有 notebook 或执行证据；最终 `execution_validation_report.json=FAIL`（缺 notebook），任务为 `failed`。根因初判为无附件确定性题的 Coder 上下文未注入完整题面参数，非 provider、Modeler 计划或 PR #34 门禁故障。按规程不重提该请求；先修复题面/契约向 Coder 的上下文传递并加回归，再创建一次新任务。

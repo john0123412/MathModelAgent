@@ -264,9 +264,19 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         # 初始化 Jupyter 内核管理器和客户端
         logger.info("初始化本地内核")
         self._start_kernel()
-        self._pre_execute_code()
+        font_msg, font_type = self._pre_execute_code()
+        if font_msg:
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content=font_msg, type=font_type),
+            )
 
-    def _pre_execute_code(self):
+    def _pre_execute_code(self) -> tuple[str | None, str]:
+        """执行 matplotlib 初始化与论文样式注入，解析字体加载结果供前端展示。
+
+        Returns:
+            (消息文案, 消息类型)；无可展示信息时文案为 None。
+        """
         init_code = build_matplotlib_init_code(self.work_dir)
         # 保留本地解释器的保存钩子：生成代码即使调用 seaborn.set_theme，
         # 在最终写图前仍会恢复中文字体和统一论文样式。
@@ -315,7 +325,16 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
             "    matplotlib.figure.Figure.savefig = _mma_figure_savefig_with_style\n"
             "print('学术图表样式已配置')\n"
         )
-        self.execute_code_(init_code)
+        execution = self.execute_code_(init_code)
+        stdout = "\n".join(text for mark, text in execution if mark == "stdout")
+        for line in stdout.splitlines():
+            stripped = line.strip()
+            if "中文字体已加载" in stripped:
+                # 去掉日志前缀，前端只展示关键结论
+                return stripped.removeprefix("[matplotlib_setup] ").strip(), "success"
+            if "未找到中文字体" in stripped:
+                return stripped.removeprefix("[matplotlib_setup] ").strip(), "warning"
+        return None, "info"
 
     def _request_kernel_interrupt(self) -> None:
         """Interrupt the current kernel from the event-loop side safely."""

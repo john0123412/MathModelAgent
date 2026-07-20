@@ -1738,6 +1738,21 @@ class MathModelWorkFlow(WorkFlow):
         ) as contract_file:
             json.dump(problem_contract.model_dump(), contract_file, ensure_ascii=False, indent=2)
 
+        # 在创建 LLM 前预校验配置，避免进入 Agent 循环后才发现缺配置
+        missing = []
+        for name, model_val, key_val in [
+            ("Coordinator", settings.COORDINATOR_MODEL, settings.COORDINATOR_API_KEY),
+            ("Modeler", settings.MODELER_MODEL, settings.MODELER_API_KEY),
+            ("Coder", settings.CODER_MODEL, settings.CODER_API_KEY),
+            ("Writer", settings.WRITER_MODEL, settings.WRITER_API_KEY),
+        ]:
+            if not model_val or not str(model_val).strip():
+                missing.append(f"{name} 模型 ID")
+            if not key_val or not str(key_val).strip():
+                missing.append(f"{name} API Key")
+        if missing:
+            raise ValueError(f"以下配置缺失，请先在设置中填写并保存：{', '.join(missing)}")
+
         llm_factory = LLMFactory(self.task_id)
         coordinator_llm, modeler_llm, coder_llm, writer_llm = llm_factory.get_all_llms()
 

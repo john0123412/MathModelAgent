@@ -20,6 +20,10 @@ from app.tools.candidate_exporter import (
     collect_bounded_support_material_paths,
     support_material_category,
 )
+from app.tools.semantic_layout_review import (
+    review_markdown,
+    write_semantic_layout_review,
+)
 
 
 REFERENCE_HEADING_RE = re.compile(
@@ -3065,6 +3069,7 @@ def build_preflight_report(
     reference_sources_check = build_reference_source_trace(markdown, work_dir)
     similarity_ai_risk_check = scan_similarity_ai_risk(markdown, work_dir)
     problem_alignment_check = _check_problem_alignment(work_dir, markdown_without_code)
+    semantic_layout_check = review_markdown(markdown)
 
     checks = {
         "export_profile": _with_severity(export_profile_check, "fail"),
@@ -3105,6 +3110,8 @@ def build_preflight_report(
         "reference_relevance": _with_severity(reference_relevance_check, "fail"),
         "reference_sources": _with_severity(reference_sources_check, "conditional"),
         "similarity_ai_risk": _with_severity(similarity_ai_risk_check, "conditional"),
+        # 语义排版属于人工/提示词复核项：保留 WARN 发现，但不改变主预检 PASS。
+        "semantic_layout": _with_severity(semantic_layout_check, "info"),
         "claim_trace": _with_severity(
             claim_trace_check, _claim_trace_check_severity(claim_trace_check)
         ),
@@ -3141,7 +3148,7 @@ def _format_check_detail(check: dict) -> str:
         return f"chars={check['char_count']} ({check['min_chars']}-{check['max_chars']})"
     if "items" in check:
         return f"count={check['count']}; items={', '.join(check['items'])}"
-    if "headings" in check:
+    if "headings" in check and "missing" in check:
         return f"missing={', '.join(check['missing']) or 'none'}"
     if "wide_tables" in check:
         return (
@@ -3165,6 +3172,8 @@ def _format_check_detail(check: dict) -> str:
         )
     if "issues" in check:
         return f"issues={len(check['issues'])}"
+    if "issue_count" in check:
+        return f"issues={check['issue_count']}; blocking={check.get('blocking', False)}"
     if "status" in check and {"weak", "missing"}.issubset(check):
         return (
             f"status={check['status']}; total={check['total']}; "
@@ -3313,6 +3322,7 @@ def prepare_paper_markdown(
     markdown, inserted_figure_references = ensure_figure_references(markdown)
     markdown, escaped_table_math_pipes = escape_pipes_in_table_math_cells(markdown)
     markdown = ensure_table_captions(markdown)
+    write_semantic_layout_review(work_dir, markdown)
     outline = build_paper_outline(markdown)
     figure_usage = build_figure_usage(work_dir, markdown)
     claim_trace = build_claim_trace(markdown, code_sources, work_dir)

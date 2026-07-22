@@ -12,6 +12,8 @@
 `final_acceptance_report.json -> complete_source_appendix` 会检查附录是否实际包含完整源码。
 但自动报告仍不能替代人工运行源码、核对结果、阅读 PDF/DOCX 或确认最终提交规则。
 
+- [ ] 打开 `semantic_layout_review.json/md`：确认主章节为一级标题、1.1/5.1.1 等小标题层级一致、无 `{}` 空引用；若有附录分页提示，实际打开 PDF 检查附录是否按模板要求另起页，并抽查 PDF 书签层级。
+
 当前 workflow 还会生成 `problem_contract.json`、`execution_validation.json`、
 `execution_validation_report.json` 与 `frozen_results.json`。这些文件只能证明题面参数、
 代码执行、可行性约束和数值来源可追溯；它们不替代人工复算、数值收敛检查或领域判断。

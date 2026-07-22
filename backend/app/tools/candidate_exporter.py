@@ -44,6 +44,7 @@ _SUPPORT_EXCLUDED_FILENAMES = {
     "task_status.json", "export_status.json", "docx_export_status.json",
     "modeler_plan.json", "modeler_plan.md", "modeling_decision.json",
     "modeling_decision.md", "paper_preflight_report.json", "paper_preflight_report.md",
+    "semantic_layout_review.json", "semantic_layout_review.md",
     "paper_outline.json", "figure_usage.json", "claim_trace.json", "claim_trace.md",
     "pdf_visual_check.json", "submission_audit_report.json", "submission_audit_report.md",
     "final_acceptance_report.json", "final_acceptance_report.md", "tex_export_status.json",
@@ -293,6 +294,7 @@ def write_candidate_manifest(
     扫描 work_dir 下已产出的文件（res.md/res.json/res.docx/res.pdf/notebook.ipynb/
     export_status.json/modeling_decision.json/modeling_decision.md/
     paper_preflight_report.json/paper_preflight_report.md/
+    semantic_layout_review.json/semantic_layout_review.md/
     paper_outline.json/figure_usage.json/claim_trace.json/claim_trace.md/
     pdf_visual_check.json/execution_validation.json/execution_validation_report.json/
     submission_audit_report.json/图片），不存在的文件字段为 None，图片列表为空数组。
@@ -354,6 +356,12 @@ def write_candidate_manifest(
             ),
             "paper_preflight_report_md": _existing_or_none(
                 work_dir, "paper_preflight_report.md"
+            ),
+            "semantic_layout_review": _existing_or_none(
+                work_dir, "semantic_layout_review.json"
+            ),
+            "semantic_layout_review_md": _existing_or_none(
+                work_dir, "semantic_layout_review.md"
             ),
             "paper_outline": _existing_or_none(work_dir, "paper_outline.json"),
             "figure_usage": _existing_or_none(work_dir, "figure_usage.json"),

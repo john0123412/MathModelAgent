@@ -25,6 +25,7 @@ from app.utils.security import validate_llm_base_url
 # 兜底默认值；实际值优先取 settings.LLM_MAX_RETRIES，便于按 provider 稳定性调整
 # （远程网关偶发连接抖动时，3 次约 6 秒的重试窗口经常不够跨过一次抖动）。
 DEFAULT_LLM_MAX_RETRIES = 3
+_TRANSIENT_BASE_URL_VALIDATION_ERROR = "LLM Base URL 主机无法解析"
 
 
 def _record_token_usage_best_effort(
@@ -86,6 +87,17 @@ class LLM:
             allow_private_hosts=settings.ALLOW_PRIVATE_LLM_BASE_URLS,
         )
 
+    @staticmethod
+    def _is_retryable_config_error(exc: Exception) -> bool:
+        """Keep transient DNS failures inside the bounded LLM retry budget.
+
+        The endpoint must still be resolved and checked for public addresses
+        before *every* provider call.  Only a resolver outage is retryable;
+        missing credentials, unsafe URLs, and all other validation errors fail
+        immediately instead of being hidden by network retries.
+        """
+        return isinstance(exc, ValueError) and str(exc) == _TRANSIENT_BASE_URL_VALIDATION_ERROR
+
     async def chat(
         self,
         history: list | None = None,
@@ -97,7 +109,6 @@ class LLM:
         agent_name: str = "SystemAgent",
         sub_title: str | None = None,
     ) -> StandardResponse:
-        self._validate_config(agent_name)
         if max_retries is not None:
             max_attempts = max_retries
         else:
@@ -114,6 +125,11 @@ class LLM:
         attempt = 0
         while True:
             try:
+                # DNS validation is intentionally repeated before every remote
+                # call to retain the SSRF/DNS-rebinding protection.  Placing it
+                # inside this loop lets a short resolver outage use the same
+                # bounded retry policy as a transient provider connection error.
+                self._validate_config(agent_name)
                 # Providers also set their HTTP client timeout, but this outer bound
                 # prevents SDK retry policies from extending a single LLM attempt.
                 response = await asyncio.wait_for(
@@ -146,6 +162,8 @@ class LLM:
             except Exception as e:
                 attempt += 1
                 logger.error(f"第{attempt}次重试: {type(e).__name__}")
+                if isinstance(e, ValueError) and not self._is_retryable_config_error(e):
+                    raise
                 if attempt >= max_attempts:
                     raise
                 await asyncio.sleep(retry_delay * min(attempt, 10))

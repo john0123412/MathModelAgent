@@ -7,12 +7,15 @@
 - 主 PDF 会在摘要/关键词后做 PDF-only 分页，保证摘要页独占第一页、正文从第二页开始；该分页不写回 `res.md`，也不影响 DOCX 或 LaTeX sidecar。
 - 当前 DOCX reference 暂时复用 2025：
   `backend/app/templates/export_profiles/cumcm2025_docx/format2025_reference.docx`
-- 当前 LaTeX sidecar 暂时复用 2025 模板资源目录：
-  `backend/app/templates/export_profiles/cumcm2025/`
-- 当前 LaTeX 2026 main 模板由 `backend/app/tools/tex_project_exporter.py` 中的 `_CUMCM2026_MAIN_TEX_TEMPLATE` 派生实现，主要区别是移除了目录；默认、CUMCM 2025/2026 与华数杯 sidecar 均将 `listings` 代码字号统一为 `\ttfamily\footnotesize`，并开启自动换行，减少完整源码附录出现孤立尾页。
+- 当前 LaTeX sidecar 使用 `backend/app/tools/tex_project_exporter.py` 中的
+  `_CUMCM2026_MAIN_TEX_TEMPLATE` 无封面 `ctexart` 外壳，不复用 2025
+  `gmcmthesis`；后者的 `\maketitle` 会生成含学校、队号、队员字段的旧式封面，
+  不符合 2026 电子版“摘要页为第一页、不得放承诺书和编号专用页”的要求。默认、CUMCM
+  2025/2026 与华数杯 sidecar 均将 `listings` 代码字号统一为 `\ttfamily\footnotesize`，并开启自动换行，减少完整源码附录出现孤立尾页。2026 外壳同时加载 `array` 与 `calc`，用于兼容 Pandoc 生成的 longtable 列宽代码中的 `\arraybackslash` 和 `\real{}`。
 - 当前 LaTeX sidecar 导出器会复制正文引用的本地图片到 `latex_project/` /
   `latex_project/figures/`，并在 `tex_export_status.json` 记录 `copied_assets` /
-  `missing_assets`。
+  `missing_assets`；Windows bind mount 拒绝 `copy2` 元数据时会退化为字节复制，
+  自动编译前会清理明确列举的旧辅助文件，避免陈旧 `.aux` 破坏新稿。
 - 当前复用的 `gmcmthesis.cls` 对 `KaiTi` / `STXinwei` / `LiSu` 做了容器友好的
   fontspec fallback；若缺少 Windows 字体和 `AR PL KaitiM GB`，会继续 fallback 到
   Noto CJK 字体，优先保证 sidecar 可编译。
@@ -22,6 +25,8 @@
   `res.docx`
   `res.json`
   `candidate_manifest.json`
+- `candidate_manifest.json -> submission_file` 是唯一主上传文件（默认 `res.pdf`）；如平台允许另交支撑材料，再使用受控的 `support_materials_manifest.json` / `support_materials.zip`，不得把 ZIP 当成论文主文件。
+- `reference_sources` 只记录 DOI/URL 基本格式和本地来源哈希，`similarity_ai_risk` 只提示本地草稿风险；两者都不能替代人工来源核验或比赛指定的正式查重/AI 审核。
 - `latex_project/` 是候选 sidecar，不是当前主交付链路。
 - 当前 `paper_postprocessor.append_code_appendix()` 默认在附录 B 写入任务目录发现的完整可运行脚本及 notebook 代码单元（不含 notebook 输出），逐份记录原始 SHA-256；`final_acceptance_report.json -> complete_source_appendix` 会核对源码覆盖、哈希和正文代码内容。若启用 `paper_appendix_config.json -> mode=key`，只展示关键算法，技术验收会刻意保持非 `TECHNICAL_PASS`，正式提交必须恢复 `full`。
 - 自动完整性门禁仍不能替代人工运行源码、核对数学推导与数值、逐页审查 PDF/DOCX 和确认比赛平台最终规则；`TECHNICAL_PASS` 仍标记 `PENDING_HUMAN_REVIEW`。
@@ -51,8 +56,8 @@
 | API 默认值 | `backend/app/routers/modeling_router.py` | `/modeling` 默认 `cumcm2026` | 一般不需要改 |
 | 主 PDF 导出 | `backend/app/tools/pdf_exporter.py` | Pandoc + XeLaTeX，主交付 PDF | 仅当官方要求 raw TeX、目录、特殊参数时调整 |
 | DOCX reference | `backend/app/templates/export_profiles/cumcm2025_docx/format2025_reference.docx` | 当前 2026 暂时复用 2025 | 官方给 Word/DOCX 模板后新增 `cumcm2026_docx/format2026_reference.docx` 并切换 |
-| LaTeX 模板资源 | `backend/app/templates/export_profiles/cumcm2025/` | 当前 2026 sidecar 暂时复用 2025 `gmcmthesis` | 官方给 LaTeX 模板后新增 `cumcm2026/` 并切换 |
-| LaTeX sidecar main 模板 | `backend/app/tools/tex_project_exporter.py` | `_CUMCM2026_MAIN_TEX_TEMPLATE`；无目录，`listings` 使用 `\ttfamily\footnotesize` 并自动换行 | 官方 LaTeX 模板结构变化时修改；保留 `% MMA_SECTION_INPUTS` 与代码换行/字号回归 |
+| LaTeX 模板资源 | 无外部 2026 类文件 | 当前 2026 sidecar 使用代码内无封面 `ctexart` 外壳，不复制 2025 `gmcmthesis` | 官方给 LaTeX 模板后新增 `cumcm2026/` 并切换 |
+| LaTeX sidecar main 模板 | `backend/app/tools/tex_project_exporter.py` | `_CUMCM2026_MAIN_TEX_TEMPLATE`；无封面、无目录、无身份字段，`listings` 使用 `\ttfamily\footnotesize` 并自动换行 | 官方 LaTeX 模板结构变化时修改；保留 `% MMA_SECTION_INPUTS` 与代码换行/字号回归 |
 | 论文后处理/预检 | `backend/app/tools/paper_postprocessor.py` | 参考文献、附录、支撑材料、路径、宽表、claim trace；默认附录 B 写入完整脚本/notebook 代码单元及 SHA-256 | 官方附录或提交规则变化时修改；同步更新 `complete_source_appendix` 验收与回归测试 |
 | PDF 后验检查 | `backend/app/tools/pdf_visual_checker.py` | A4、非空、文本可提取、边缘溢出 | 官方尺寸/边距变化时调整 |
 | 使用文档 | `STARTUP.md`、`docs/md/PDF模板导出说明.md` | 使用与验收入口 | 每次模板替换后同步更新 |
@@ -122,7 +127,7 @@ uv run python -m app.tools.export_cli pdf --input examples\pdf_export_sample\res
 - 修改 `backend/app/tools/export_profiles.py`：
   - 新增：
     `CUMCM2026_TEMPLATE_DIR = os.path.join(TEMPLATES_ROOT, "cumcm2026")`
-  - 将 `CUMCM2026_PROFILE.latex_template_dir` 从 `CUMCM2025_TEMPLATE_DIR` 改为 `CUMCM2026_TEMPLATE_DIR`
+- 将 `CUMCM2026_PROFILE.latex_template_dir` 从当前的 `None` 改为 `CUMCM2026_TEMPLATE_DIR`
 - 修改 `backend/app/tools/tex_project_exporter.py`：
   - 根据官方 `main.tex` 更新 `_CUMCM2026_MAIN_TEX_TEMPLATE`
   - 保留 `% MMA_SECTION_INPUTS` 占位符

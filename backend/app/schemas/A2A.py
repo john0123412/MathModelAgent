@@ -57,6 +57,15 @@ class SubtaskPlan(BaseModel):
     expected_artifacts: list[ExpectedArtifact] = Field(min_length=1)
     acceptance_metrics: list[AcceptanceMetric] = Field(min_length=1)
     visualization: str = Field(min_length=3)
+    diagnostic_profile: Literal[
+        "exact",
+        "numerical",
+        "optimization",
+        "fitting",
+        "simulation",
+        "not_applicable",
+    ] = "not_applicable"
+    diagnostic_requirements: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def require_structured_numeric_evidence(self) -> "SubtaskPlan":
@@ -82,6 +91,8 @@ class SubtaskPlan(BaseModel):
             f"约束：{'；'.join(self.constraints)}\n"
             f"预期产物：{artifacts}\n"
             f"验收指标：{metrics}\n"
+            f"诊断类型：{self.diagnostic_profile}\n"
+            f"诊断要求：{'；'.join(self.diagnostic_requirements) or '无额外诊断'}\n"
             f"可视化：{self.visualization}"
         )
 

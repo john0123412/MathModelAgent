@@ -162,14 +162,19 @@ def _check_first_page_is_abstract(page_texts: list[str]) -> dict:
     first_page_text = page_texts[0] if page_texts else ""
     forbidden_terms = [term for term in BODY_START_TERMS if term in first_page_text]
     has_keywords = "关键词" in first_page_text or "关键字" in first_page_text
+    abstract_offset = first_page_text.find("摘要")
+    title_prefix = first_page_text[:abstract_offset].strip() if abstract_offset >= 0 else ""
+    has_title = bool(title_prefix)
     return {
         "passed": bool(page_texts)
         and "摘要" in first_page_text
         and has_keywords
+        and has_title
         and "目录" not in first_page_text
         and not forbidden_terms,
         "has_abstract": "摘要" in first_page_text,
         "has_keywords": has_keywords,
+        "has_title_before_abstract": has_title,
         "forbidden_terms": forbidden_terms,
     }
 

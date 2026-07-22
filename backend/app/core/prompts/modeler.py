@@ -167,6 +167,8 @@ EDA 或敏感性分析放进 `subtasks`。
         {"key": "objective_value", "label": "最优目标值", "comparator": "ge", "target": 0, "unit": "元", "description": "由结果表中的目标函数直接计算"},
         {"key": "max_constraint_violation", "label": "最大约束违反量", "comparator": "le", "target": 0, "unit": "题设单位", "description": "逐项代入全部约束得到"}
       ],
+      "diagnostic_profile": "optimization",
+      "diagnostic_requirements": ["记录求解器状态、最大约束违反量，并用独立顶点枚举复算最优目标。"],
       "visualization": "用可行域/约束边界图或敏感性折线图，并保存对应原始数据。"
     }
   },
@@ -180,7 +182,8 @@ EDA 或敏感性分析放进 `subtasks`。
 2. `method`：写清变量、方程/目标函数、算法和独立复算方式。优化问题必须出现决策变量、目标函数与约束；物理题必须说明状态方程或守恒关系及单位制。
 3. `constraints`：列出题面硬约束、物理边界或统计划分边界；不满足时必须输出不可行证据。
 4. `expected_artifacts`：至少一个 `result_table`、`time_series` 或 `dataset` 数值产物；PNG 不是证据。需要图时同时列出 `figure_data`。
-5. `acceptance_metrics`：至少一个可从结构化结果复算的指标，包含比较符、阈值/目标、单位和计算口径。`target` 必须是有限 JSON 数值，不得是字符串、数组、`null`、`NaN` 或无穷值。量纲正确、公式一致等定性检查必须转换为数值通过标志（例如 `eq 1`），并在 `unit` / `description` 说明 1 的含义。不要以“结果合理”“图像平滑”充当指标。RMSE、R²、拟合误差、偏差、准确率、显著性、物理合理性等经验质量阈值的 `description` 必须明确说明目标值来自题面/附件、数据统计或交叉验证、基线、文献或标准；“由结果计算”“符合物理常识”不构成阈值依据。没有可靠依据时，改用模型比较已完成、数据覆盖、数值有限或结果可复算等结论中立指标，不得臆造数值门槛。对于“判断是否存在/显著/改善”等开放性问题，禁止用 `fit_improvement ge 0.01`、`p_value le 0.05` 或存在标志 `eq 1` 在执行前强迫肯定结论。
+5. `acceptance_metrics`：至少一个可从结构化结果复算的指标，包含比较符、阈值/目标、单位和计算口径。`target` 必须是有限 JSON 数值，不得是字符串、数组、`null`、`NaN` 或无穷值。量纲正确、公式一致等定性检查必须转换为数值通过标志（例如 `eq 1`），并在 `unit` / `description` 说明 1 的含义。不要以“结果合理”“图像平滑”充当指标。RMSE、R²、拟合误差、偏差、准确率、显著性、物理合理性等经验质量阈值的 `description` 必须明确说明目标值来自题面/附件、数据统计或交叉验证、基线、文献或标准；“由结果计算”“符合物理常识”不构成阈值依据。题面仅说“约”“左右”“尽可能稳定”等定性语句时，**不得**自行把它转成 5%、0.1 秒等硬阈值；应记录实际偏差/达到时间并以“方案已计算、情景已覆盖、数值可复算”等结论中立指标验收。没有可靠依据时，改用模型比较已完成、数据覆盖、数值有限或结果可复算等结论中立指标，不得臆造数值门槛。对于“判断是否存在/显著/改善”等开放性问题，禁止用 `fit_improvement ge 0.01`、`p_value le 0.05` 或存在标志 `eq 1` 在执行前强迫肯定结论。
+6. `diagnostic_profile` 与 `diagnostic_requirements`：每个正式问题必须按实际方法选择诊断类型。`exact` 记录代入残差/等式核验；`numerical` 记录步长或网格加密、停止条件、误差/残差；`optimization` 记录求解器状态、可行性及非凸时多初值/分支信息；`fitting` 记录残差、数据划分与可辨识性；`simulation` 记录随机种子、重复/区间或时序守恒诊断。只有确实没有数值/算法诊断的纯定义性问题才选 `not_applicable`。诊断必须产生可在执行结果中登记的数值指标或数据表，不得只写“已验证”。
 
 ## 固定字段枚举（不得自造值）
 
@@ -188,6 +191,7 @@ EDA 或敏感性分析放进 `subtasks`。
 - `expected_artifacts[*].kind` 只能是：`result_table`、`constraint_table`、`figure_data`、`figure`、`time_series`、`parameter_audit`、`dataset`、`other`。
 - `acceptance_metrics[*].comparator` 只能是：`le`、`lt`、`ge`、`gt`、`eq`、`within`。
 - `acceptance_metrics[*].target` 必须是可由执行证据复算的有限数值；例如量纲检查使用 `{"comparator":"eq","target":1}`，不得使用 `"长度单位"` 等文字目标。
+- `diagnostic_profile` 只能是：`exact`、`numerical`、`optimization`、`fitting`、`simulation`、`not_applicable`；`diagnostic_requirements` 必须是字符串数组。
 - 说明性报告、模型说明等无法归入前述数值类型的产物统一使用 `other`，不得输出 `report` 或 `model_description`。
 - “核对/检查是否相等”使用 `eq`，不得输出 `check`。
 

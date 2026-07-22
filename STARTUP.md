@@ -7,11 +7,11 @@
 
 | 目标 | 使用的命令 | 代码执行方式 | 适用边界 |
 |---|---|---|---|
-| 日常使用、验收、真实 E2B 沙箱 | `docker compose up -d --wait` | `remote`，需要 `E2B_API_KEY` | 默认且推荐 |
-| E2B 暂不可用时恢复一个已有任务 | 加载 `docker-compose.local-execution.yml` | `local`，显式允许本地 Jupyter | 仅可信单用户本机 Docker |
+| 当前可信单用户本机、未配置 E2B | `docker compose up -d --wait` | `local`，由根目录 `.env` 持久加载受限覆盖 | 本机默认 |
+| 已配置 E2B 的共享/远程环境 | `docker-local-execution.ps1 -Action UseRemote` | `remote` | 显式选择，切换前强制验证 E2B |
+| 修改前端/后端源码的人工开发 | `win_start.bat` 或本地手动启动 | 由开发者自行配置 | 不与本机 agent 前端命令混用 |
 
-可信本地执行模式也提供了 Windows 一键入口。它只对当前 Compose 启动加载本地覆盖，
-不会修改 `backend/.env.dev`：
+可信本地执行模式也提供 Windows 一键入口，不会修改 `backend/.env.dev`：
 
 ```powershell
 cd D:\workspace\MathModelAgent
@@ -19,16 +19,19 @@ cd D:\workspace\MathModelAgent
 ```
 
 该模式明确选择本地解释器，不会因 E2B 配置变化而切换后端；后端会输出实际
-生效的 `mode`、`allow_local` 和 E2B 是否配置，但不会输出密钥。完成后恢复默认安全模式：
+生效的 `mode`、`allow_local` 和 E2B 是否配置，但不会输出密钥。只有确认已配置 E2B 后，
+才能显式切换 remote：
 
 ```powershell
-.\scripts\docker-local-execution.ps1 -Action RestoreRemote
+.\scripts\docker-local-execution.ps1 -Action UseRemote
 ```
-| 修改前端/后端源码的人工开发 | `win_start.bat` 或本地手动启动 | 由开发者自行配置 | 不与本机 agent 前端命令混用 |
 
-不要同时加载 `docker-compose.dev.yml` 与 `docker-compose.local-execution.yml`。如果根目录
-`.env` 已按下文设置 `COMPOSE_FILE` 持久启用本地覆盖，则普通 `docker compose up` 也会继续
-使用本地模式；恢复远程默认值前必须先删除或注释该行。
+旧的 `RestoreRemote` 动作仅作为兼容别名保留，同样会先验证 E2B；缺少 E2B 时脚本会在
+改变容器之前拒绝操作，避免把可用的 local 后端切换成不可执行代码的 remote 后端。
+
+不要同时加载 `docker-compose.dev.yml` 与 `docker-compose.local-execution.yml`。当前无 E2B
+工作站应在根目录 `.env` 保留 `COMPOSE_FILE`，使普通 `docker compose up` 始终使用本地模式。
+不要用手写的 `-f docker-compose.yml -f docker-compose.override.yml` 命令绕过该本机默认值。
 
 ## 环境要求
 - Docker Desktop
@@ -45,9 +48,10 @@ cd D:\workspace\MathModelAgent
 
 1. 如果还没有 `backend/.env.dev`，从示例创建它；只在该文件填入自己的 provider 配置，
    不要把 key 写进 Git、聊天或日志。
-2. 默认远程代码执行还需要设置 `E2B_API_KEY`。只配置 LLM provider 而没有 E2B 时，任务会在
-   代码执行前安全停止，这是预期保护，不是需要关闭的错误。
-3. 根目录 `.env` 仅用于可选的 Docker 字体挂载；它不能替代 `backend/.env.dev`。
+2. 当前可信单用户本机没有 E2B，应在根目录 `.env` 持久加载本地执行覆盖；共享或远程部署
+   必须改用 E2B，不能启用本地解释器。
+3. 根目录 `.env` 只保存 Compose 选择和可选字体路径，不能替代 `backend/.env.dev`，也不得
+   写入 provider 凭据。
 
 ```powershell
 cd D:\workspace\MathModelAgent
@@ -62,7 +66,7 @@ docker compose config -q
 ```
 
 `backend/.env.dev` 至少需要四个 Agent 的 `*_API_TYPE`、`*_API_KEY`、`*_MODEL`、
-`*_BASE_URL`，以及默认远程模式所需的 `E2B_API_KEY`。可选的 `OPENALEX_EMAIL`、
+`*_BASE_URL`；只有显式 remote 模式需要 `E2B_API_KEY`。可选的 `OPENALEX_EMAIL`、
 `TAVILY_API_KEY` 等不影响基础建模链路；详见后文“常见问题”。
 
 ### 启动
@@ -149,12 +153,12 @@ WebUI 侧边栏的 API Key 配置会通过 `/save-api-config` 应用到当前后
 `localStorage.apiKeys`。`persisted=false` 同时表示后端和浏览器都不会把该配置写入
 持久化存储。
 
-### 缺少 E2B 时的受控恢复与回退
+### 缺少 E2B 时的可信本地默认与回退
 
-默认 `CODE_INTERPRETER_KIND=remote` 没有 `E2B_API_KEY` 时，已开始的任务可能留下
-`checkpoint.json`，状态为 `interrupted`。不要把 `CODE_INTERPRETER_KIND=local` 或
-`ALLOW_LOCAL_CODE_EXECUTION=true` 写入普通 `backend/.env.dev` 来绕过保护。若这是可信的
-单用户本机 Docker 恢复场景，可按以下顺序只对本次恢复加载覆盖文件：
+基础 Compose 的安全默认仍是 `remote`；但当前无 E2B 的可信单用户工作站通过根目录 `.env`
+持久加载 `docker-compose.local-execution.yml`。不要把 `CODE_INTERPRETER_KIND=local` 或
+`ALLOW_LOCAL_CODE_EXECUTION=true` 写入普通 `backend/.env.dev`，也不要在共享服务启用该覆盖。
+需要显式启动或修复本机配置时运行：
 
 ```powershell
 cd D:\workspace\MathModelAgent
@@ -189,23 +193,21 @@ curl.exe http://127.0.0.1:8000/status
 `/status` 的 `code_execution` 必须显示 `status=ready`、`configured_kind=local`、
 `selected_kind=local`、`local_execution_allowed=true`。接口只报告 E2B 是否配置，不返回 Key。
 
-恢复任务完成并检查交付物后，立即切回默认模式：
+只有准备好有效 E2B 后才切换 remote，并使用带前置验证的脚本：
 
 ```powershell
-# 先从根目录 .env 删除或注释 COMPOSE_FILE 行
-docker compose -f docker-compose.yml -f docker-compose.override.yml up -d --wait
-docker compose ps
+.\scripts\docker-local-execution.ps1 -Action UseRemote
 ```
 
-本地恢复模式仍与后端共享文件系统和网络，不能用于共享服务、公开部署或正式远程验收。它用于
-验证恢复路径和生成可交付产物，不会把本地解释器变成项目的默认或正式执行器。本地覆盖还把
+本地模式仍与后端共享文件系统和网络，不能用于共享服务、公开部署或远程多租户验收。它是当前
+可信单用户工作站的默认执行器，但不是项目面向其它部署环境的全局安全默认。本地覆盖还把
 backend healthcheck 的等待窗口放宽到适合长时间 notebook 单元的范围，避免计算期间短暂的
 `/docs` 响应超时被误判为容器故障；任务完成后仍应以 `/api/status` 和任务状态为准。
 
 ### 代码执行隔离
 
-`CODE_INTERPRETER_KIND=remote` 是默认值，建模任务需要有效的 `E2B_API_KEY`。当 E2B
-不可用但必须在单用户可信 Docker 环境中继续开发时，使用本地执行覆盖文件：
+基础 Compose 的 `CODE_INTERPRETER_KIND=remote` 需要有效 `E2B_API_KEY`。当前可信单用户本机
+通过根目录 `.env` 自动加载本地执行覆盖；需要显式确认时也可运行：
 
 ```powershell
 docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.local-execution.yml build --pull
@@ -342,6 +344,11 @@ Origin 中作为网页执行。
 的实际执行新建或更新；不能把 checkpoint 中未更新的旧文件重新登记。一个 Coder 回合只允许记录
 自己的 `quesN`，且一次只接受一个工具动作。任务在最终验证失败后最多定向回修一次；第二次真实失败即停止，
 不要反复点击续传，而应先检查 `execution_validation_report.json` 和 `checkpoint.json` 的失败记录。
+若本轮写出标准 `quesN_acceptance_metrics.csv`，后端会从该表读取 ModelPlan 指标的精确数值、方向和来源，
+并复算 `数值/目标值/是否达标`；`quesN_constraint_check.csv` 的左右端、比较符与状态也会复算。表内自相矛盾、
+显示值舍入后无法复核，或证据虽已写入但 `feasible=false` 时，都必须回到 Coder 定向修复，不能进入 Writer。
+若表按压力、时段等场景把指标命名为 `原指标键_场景`，后端会按 ModelPlan 比较方向取最坏场景，并将对应
+metric/constraint 的精确数值和 SHA-256 来源统一绑定到该验收表；这不会把任何不达标的场景折算为通过。
 
 ### 建模方案人工确认
 
@@ -349,7 +356,8 @@ Origin 中作为网页执行。
 `modeling_decision.md/json`，任务状态变为 `waiting_review` 并等待人工确认。
 前端任务页会定时刷新任务状态，无需手动刷新即可显示“确认建模方案并继续”按钮；点击后调用
 `POST /modeling/{task_id}/approve-modeling`，后端标记方案已确认并从 Coder 阶段续跑。
-如需先查看方案，可打开文件面板下载 `modeler_plan.md` 或 `modeling_decision.md`。
+如需先查看方案，可打开文件面板下载 `modeler_plan.md` 或 `modeling_decision.md`。若审查发现模型、硬约束或验收口径有误，可在尚未批准时用一次
+`POST /modeling/{task_id}/revise-modeling` 退回完整意见；后端只重新运行 Modeler，并再次停在 `waiting_review`，不会直接进入 Coder。
 
 ### 实时消息干预
 
@@ -447,6 +455,7 @@ LaTeX 资源；2026 正式 DOCX/LaTeX 模板发布后，按
   不会被当作控制台噪声删除或阻断。
 - `paper_preflight_report.json` 是规则/正则驱动的格式与证据链门禁，不证明模型、求解和论证一定正确；`PASS` 后仍需人工复核数学内容。
 - **数学执行与结果冻结门禁**：新任务会在工作目录写入 `problem_contract.json`，把可识别的题面固定参数和必答要求传给 Modeler/Coder。所有 solution 代码阶段先单独完成并写入 checkpoint；每个正式 `quesN` 必须通过受控 `record_execution_evidence` 写入真实执行、可行性、可计算约束、任务内结果源 SHA-256、指标与图表数据来源，模型不得手写 manifest、哈希或顶层结构。每问都必须有任务目录内的结构化数值源（通常为 `quesN_results.csv`）；manifest 的 `source.path` 必须是精确任务相对路径，数值必须有限，PNG 等图片不能单独作为数值证据。优化题还必须冻结目标值和每个实际最优决策变量（包括灵敏度情景的新决策向量），不能只记录利润差或残差。工作流仅在 `execution_validation_report.json = PASS` 后生成 `frozen_results.json`，此后才启动 Writer；摘要、正文、图题和结论中的计算数值只能使用冻结结果。缺少 manifest、notebook 有未解决执行错误、约束不满足、优化变量缺失或来源哈希变化都会阻止论文写作与任务完成；一次失败只定向回交失败题，保留已通过题的检查点。历史任务目录没有这些文件时，必须按当前版本重跑后才能作为数学验收样本。
+- **Codex/人工执行质量复核门禁**：冻结后会先生成 `execution_quality_review.json/md`。结果表只要明确标记“不达标/失败”或出现 NaN/Inf，任务就停在 `waiting_quality_review`，Writer 不会启动；启用 `require_model_review=true` 时，即使机器筛查为 `PASS` 也会暂停，因为机器筛查不证明假设、量纲、守恒、推导和领域结论正确。审查者先读取题面、ModelPlan、代码、结果 CSV 和复核报告，再调用 `POST /modeling/<task_id>/execution-review`。请求 `{"action":"repair","review_id":"报告中的编号","failed_subtasks":["ques2"],"comment":"具体可执行修正意见"}` 会只让指定子题回到 Coder，并使依赖旧冻结事实的 Writer 文本失效；请求 `{"action":"approve","review_id":"报告中的编号","comment":"逐题复核依据和风险接受理由"}` 才会进入 Writer。审批只绑定当前结果文件哈希，结果变化后必须重审；返修最多一次，普通 `/resume` 不能绕过该状态。直接手改 CSV、manifest、冻结结果或论文数值不属于可信接管流程。
 
 - **Writer 预检回修与导出停止条件**：冻结通过并不保证 Writer 没有误写数值。若 `paper_preflight_report.json = FAIL` 的硬错误仅能明确归属到某个 `quesN` 正文或摘要中的 `result_consistency` 等事实冲突，系统会把冲突句和冻结事实只交回该章节 Writer 一次，然后重新预检；已通过章节不会重写。无法可靠定位的来源、附录、版式等失败不会盲目调用模型。一次回修后仍为 `FAIL` 时任务会停止在预检阶段，不生成候选 PDF；请先看报告的 `checks`/`conflicts` 和 checkpoint 中的 `last_paper_preflight_failure`，修正后再续传。`CONDITIONAL_PASS` 不触发自动改写，但仍必须按提交清单人工处理。
 
@@ -507,6 +516,18 @@ curl.exe -X POST http://127.0.0.1:5173/api/modeling/<task_id>/approve-modeling `
 ```
 
 确认接口会把 `modeling_decision.json` 标记为 `approved`，再复用现有 checkpoint/resume 链路从 Coder 阶段继续执行，不会重跑 Coordinator 或 Modeler。
+
+退回修订必须给出具体、可执行的审查意见，且每个任务最多一次：
+
+```powershell
+curl.exe -X POST http://127.0.0.1:5173/api/modeling/<task_id>/revise-modeling `
+  -H "Content-Type: application/json" `
+  -d '{"comment":"删除无来源的经验阈值；补齐守恒方程、单位与真实约束证据。"}'
+```
+
+若修订调用失败，`task_status.json` 是任务终态权威来源，`modeling_decision.json` 会记为 `revision_failed` 并保留审查历史；不得把旧方案批准为通过或绕过门禁。
+
+LLM 每次远程调用前都会重新进行 Base URL 的公网 DNS/SSRF 校验。若仅出现短暂“主机无法解析”，它会进入该次调用的有界重试并在每次重试重新校验；缺失密钥、非 HTTPS/私网地址等配置错误仍会立即失败。连续失败时先检查 provider 域名在 Docker 容器内的解析与 HTTPS 连通性，不要通过关闭公网地址校验来规避问题。
 
 ### LLM 请求超时
 
@@ -595,7 +616,8 @@ uv run python -m app.tools.export_cli pdf --input path\to\res.md --output path\t
 - `--local` 是关键参数：不加它会走跟 Docker 一样的策略（也能跑，但检测到 Times New Roman 缺失时不会给你打印本机安装状态提示，只写日志）；加了以后会明确报告每个字体是否命中本机已安装的版本，并且——只要你没有用下面的 `--mainfont` 等参数手动指定——官方字体检测到确实已经装了才会使用，检测不到就按开源字体回退并打印原因，不会不声不响换成别的字体。
 - `--update-status` 会在 PDF 重导成功后刷新 `export_status.json`、`pdf_visual_check.json`
   和 `submission_audit_report.json`；若 `candidate_manifest.json` 已存在，也会同步刷新，
-  避免正式字体重导后审核报告仍引用旧的 Docker fallback 记录。
+  重新生成 `final_acceptance_report.json`，并按最终技术验收结果把 `task_status.json`
+  同步为 `completed` 或 `failed`，避免正式字体/人工修复重导后 UI 仍引用旧状态。
 - `--profile` 可选 `default` / `cumcm2025` / `cumcm2026` / `huashubei`，与 Docker 端行为一致。高教社杯/国赛建议用 `cumcm2026`。
 
 仓库内提供了一个最小样例，可直接用来检查 Windows 本地导出链路：
@@ -850,6 +872,74 @@ curl.exe -X POST http://127.0.0.1:5173/api/modeling/<task_id>/resume `
    - 后端日志显示收到用户输入
    - Agent 行为是否有变化
 
+### Codex / 外部引导手：角色定向指导接口
+
+运行中的任务可接收**建议性**引导。该接口适合让 Codex 在查看题目、`modeler_plan.json`、
+执行报告后，分阶段提醒 Docker 内的建模手或编程手核查具体问题；它不是越过门禁的
+系统提示词覆盖接口。注入内容仍会被标记为不可信，题面契约、ModelPlan schema、受控执行
+证据和最终验收继续生效。
+
+建议使用后端端口（Docker 默认 `8000`），并明确指定接收角色：
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/modeling/<task_id>/guidance `
+  -H "Content-Type: application/json" `
+  -d '{"target":"coder","purpose":"execution","source":"codex","content":"先逐项验证全部硬约束；只有可行候选才可比较目标值。用真实时序数组计算并落盘守恒残差。"}'
+```
+
+若 Codex 已在任务创建前完成题面/附件复核，可在创建任务的 multipart 请求中预注入，
+避免首轮建模过快而错过建议：
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/modeling `
+  -F "ques_all=<题目.md" `
+  -F "comp_template=CHINA" `
+  -F "format_output=Markdown" `
+  -F "guidance_target=modeler" `
+  -F "guidance_purpose=modeling" `
+  -F "guidance_content=先明确全部硬约束和量纲关系；题面中的约、左右不能改写为任意数值阈值。"
+```
+
+- `target`：`coordinator`、`modeler`、`coder`、`writer` 或 `all`；`all` 会在每个角色下一次模型调用前各投递一次，通常应优先使用精确角色。
+- `purpose`：`modeling`、`execution`、`review`、`recovery`，用于审计和界面提示，不改变权限。
+- `source`：可标为 `codex` 或 `operator`，仅是审计元数据，**不是身份认证**。
+- 每条内容最多 4000 字符，每任务最多排队 20 条；任务完成或取消后不能再注入。若服务对外暴露，应设置 `API_AUTH_TOKEN`，否则该接口与其他本机 API 一样不具备访问令牌保护。
+
+推荐节奏是：Codex 先审题→创建任务时预注入 `modeler` 建议→开启建模人工门禁后审阅
+`modeler_plan.json`→批准前或 Coder 运行中向 `coder` 注入“约束、诊断、结果文件”检查项→
+只依据 `execution_validation_report.json`、冻结结果和预检报告判断是否继续。若方案本身错误，
+停止并重新建模；不要用引导文本直接改写既有 CSV、Manifest 或冻结结果。
+
+当需要由当前 ChatGPT Codex 实际担任引导执行者，而不依赖全局环境变量时，在创建任务时加入：
+
+```powershell
+-F "require_model_review=true"
+```
+
+该任务会在 `modeler_plan.json` 写入后停在 `waiting_review`。当前 Codex 可读取题面契约、
+计划和 `modeling_decision.md`，先向 `coder` 队列写入后续执行检查项，再调用
+`POST /modeling/<task_id>/approve-modeling` 继续。若计划的物理模型、硬约束或验收口径本身不成立，
+不要批准；当前 Codex 可用一次 `POST /modeling/<task_id>/revise-modeling` 写入具体退回意见，让 Modeler
+重建计划后再次审查。一次修订仍不合格或调用失败时应保留现场并停止，不得通过手工改写计划、伪造结果或绕过门禁。
+此模式只增加可复核暂停，不会把 Codex 或 API 调用者伪装成可信系统指令，也不会放宽两次失败后的恢复授权要求。
+
+如果 Modeler 在创建阶段连续返回不合格计划，而任务已启用 `require_model_review=true`，Coordinator 的拆分结果会保留为检查点。当前 Codex 可通过 `POST /modeling/<task_id>/codex-modeling` 提交符合 `ModelerToCoder` schema 的结构化 `model_plan`；后端仍会重新执行题面契约校验、保存审计产物，并回到 `waiting_review`。随后仍必须调用 `approve-modeling` 才会进入 Coder。该接口不能用于运行中、未启用人工门禁或非 Modeler 失败的任务，也不能绕过执行验证、冻结和论文门禁。
+
+冻结后的接管使用独立的 `execution-review` 接口，不再依赖运行中 advisory guidance 恰好被模型采纳。Codex/人工应优先选择 `repair` 并给出可验证的方程、量纲、约束或诊断方向；只有复算确认可接受时才 `approve`。这使“审查→定向重算→重新冻结→再次审查”成为正式链路，而不是手工篡改候选产物。
+
+若 provider/Coder 无法完成已经批准的执行质量返修，当前 Codex 或人工操作员可以准备一个确定性 Python 候选和静态 execution evidence，再从 **backend 容器内**调用受控候选 CLI：
+
+```powershell
+docker compose exec -T backend uv run python -m app.tools.repair_candidate_cli `
+  <task_id> ques2 <execution_quality_review.json中的review_id> `
+  operator_candidates/ques2_repair.py operator_candidates/ques2_evidence.json
+```
+
+该入口只接受任务目录内文件，并要求 checkpoint 已处于 `quality_repair/repair_requested`，或处于一次全量验证失败后保留了同一 `review_id`、失败子题与修复计数的 `repairing` 状态；子题必须在授权的 `failed_subtasks` 中，`review_id` 必须与当前结果哈希绑定。候选只能更新当前 `quesN_*` 产物；脚本/证据、附件、checkpoint、execution manifest、冻结结果和任务状态都不能由候选直接改写。执行超时、异常、越界文件、旧证据或证据门禁失败会回滚整个任务目录并留下脱敏拒绝审计；只有后端 `record_execution_evidence` 返回可行才写入成功 hand-off。CLI 在宿主机直接调用会拒绝，且它不会自动冻结、批准质量审查或启动 Writer。推荐闭环仍是：副本复算与教师复核 → 受控候选执行 → workflow 重新做全量 execution validation/freeze → 生成新的质量报告 → 人工按新 `review_id` 审批。
+
+任务目录会追加 `internal_guidance_audit.jsonl`，其中只记录路由、时间、长度和内容哈希，
+不记录引导正文；它不会进入候选论文或支撑材料。不要在引导内容中放置 API Key、令牌或其他凭据。
+
 ### 测试 C：cumcm2026 高教社杯/国赛导出模板
 
 前端排版选项默认就是 `cumcm2026`；也可以用 curl 直接提交（参考"导出模板选项"一节）：
@@ -930,4 +1020,4 @@ ls D:\workspace\MathModelAgent\backend\project\work_dir\<task_id>\checkpoint.jso
 - **P1 结构与全页视觉质量**：预检会拒绝重复参考文献、非法 Markdown 表格、表题紧贴表格等结构问题；`pdf_visual_check.json` 默认扫描全部页面，并把 `pdf_sha256`、`pages_checked`、`page_count` 写入报告。提交审计只接受与当前 `res.md` / `res.pdf` 哈希一致且覆盖全部页面的报告。
 - **P2 论文表达与复现闭环**：后处理会为正文中缺少邻近“图1、图2……”引用的图片补入中性图号说明（附录和代码块不改、重复运行不重复插入）；人工仍须确认图号与上下文语义匹配。连续型线性规划若把小数结果直接写成“46.67件”等，会产生 `continuous_quantity_wording` 条件警告，应改写为“连续生产当量”或另建整数规划。PDF/LaTeX 代码附录使用 `\footnotesize` 等宽字体，在保持可读的前提下减少只剩少量代码的尾页。
 
-`candidate_manifest.json` 现使用 schema `1.1`，包含 `artifact_set_id` 和主产物 SHA-256；内部审查目录、失败尝试目录和 `latex_project/figures/` 的 sidecar 复制图片不会进入正式候选图片列表。严格技术验收仍不替代模型、推导、引用和逐页排版的人工复核。
+`candidate_manifest.json` 现使用 schema `1.2`：`submission_file` 明确唯一可上传主文件（默认 `res.pdf`），并记录主产物哈希。受控支撑材料另写入 `support_materials_manifest.json` / `support_materials.zip`，按白名单、单文件/总大小与 SHA-256 打包，默认不属于主论文上传文件。引用来源追踪只校验 DOI/URL 基本格式和本地文件哈希，仍须人工查证原始来源；`similarity_ai_risk` 仅为本地可解释草稿风险提示，不是正式查重、AI 检测或抄袭判定。内部审查目录、失败尝试目录和 `latex_project/figures/` 的 sidecar 复制图片不会进入正式候选图片列表。严格技术验收仍不替代模型、推导、引用和逐页排版的人工复核。

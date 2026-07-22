@@ -56,6 +56,19 @@ def write_task_status(
         logger.warning(f"写入任务状态失败: {task_id}, {type(e).__name__}")
 
 
+def write_task_status_to_dir(
+    work_dir: str,
+    task_id: str,
+    status: TaskStatus,
+    message: str = "",
+) -> None:
+    """Persist status for an explicitly selected export/recovery directory."""
+    try:
+        _write_task_status_to_dir(work_dir, task_id, status, message)
+    except Exception as e:
+        logger.warning(f"写入指定目录任务状态失败: {task_id}, {type(e).__name__}")
+
+
 def read_task_status(work_dir: str) -> dict | None:
     """读取任务状态文件。"""
     status_path = os.path.join(work_dir, STATUS_FILENAME)

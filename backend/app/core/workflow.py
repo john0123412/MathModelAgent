@@ -37,6 +37,7 @@ from app.tools.execution_validation import (
     write_execution_validation_report,
     write_frozen_results_from_execution_validation,
 )
+from app.tools.execution_quality_review import write_execution_quality_review
 from app.core.flows import Flows
 from app.core.llm.llm_factory import LLMFactory
 from app.schemas.problem_contract import (
@@ -445,7 +446,7 @@ class MathModelWorkFlow(WorkFlow):
         checkpoint_manager: CheckpointManager,
         config_template: dict,
         recovery_context: str = "",
-    ) -> None:
+    ) -> str | None:
         """先完成全部代码求解与验证冻结，再允许论文手撰写。"""
         solution_flows = flows.get_solution_flows(self.questions, modeler_response)
         if checkpoint_manager.repair_attempts_exhausted():
@@ -522,8 +523,14 @@ class MathModelWorkFlow(WorkFlow):
                 or not coder_response.execution_succeeded
                 or coder_response.execution_error_occurred
             ):
+                # This is a formal question failure, not an EDA-only status
+                # snapshot.  Requiring the per-question manifest keeps the
+                # persisted report aligned with the authoritative failed task
+                # status instead of emitting a misleading PASS for a clean
+                # notebook that never recorded execution evidence.
                 report = write_execution_validation_report(
-                    self.work_dir, require_manifest=False
+                    self.work_dir,
+                    required_subtasks=[key],
                 )
                 await redis_manager.publish_message(
                     self.task_id,
@@ -698,6 +705,35 @@ class MathModelWorkFlow(WorkFlow):
         # 停止，不依赖兼容放行继续生成论文。
         self._assert_formal_metrics_have_subtask_id()
 
+        # 技术执行 PASS 只能证明代码证据完整，不能证明数学模型或物理结果合理。
+        # 明确失败/非有限数值一律暂停；启用 require_model_review 的任务即使机器
+        # 未命中也必须由 Codex/人工逐题复核。审批与结果表哈希绑定，改动结果后
+        # 旧审批自动失效。
+        quality_report = write_execution_quality_review(self.work_dir)
+        checkpoint = checkpoint_manager._checkpoint
+        requires_manual_review = bool(
+            quality_report.get("status") == "NEEDS_REVIEW"
+            or (checkpoint is not None and checkpoint.require_model_review)
+        )
+        review_id = str(quality_report.get("review_id", ""))
+        if requires_manual_review and not checkpoint_manager.quality_review_is_approved(
+            review_id
+        ):
+            checkpoint_manager.record_quality_review_pending(quality_report)
+            failed_subtasks = quality_report.get("failed_subtasks") or []
+            target_text = "、".join(map(str, failed_subtasks)) or "全部正式子题"
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(
+                    content=(
+                        "冻结结果等待 Codex/人工质量复核，论文写作尚未开始。"
+                        f"重点复核：{target_text}；请查看 execution_quality_review.md。"
+                    ),
+                    type="warning",
+                ),
+            )
+            return "waiting_quality_review"
+
         # 此处开始才允许 Writer 接触代码结果。即使旧检查点中有 Writer 文本，
         # 也必须重写，避免把冻结前生成的未验证数值带入本次导出。
         for key, coder_response in coder_responses.items():
@@ -725,6 +761,7 @@ class MathModelWorkFlow(WorkFlow):
             checkpoint_manager.mark_phase_completed(
                 key, coder_response.model_dump(), writer_response.model_dump()
             )
+        return None
 
     async def _run_write_flows(
         self,
@@ -854,10 +891,21 @@ class MathModelWorkFlow(WorkFlow):
         """写出人工建模确认门禁所需的审计文件。"""
         decision_json_path = os.path.join(self.work_dir, "modeling_decision.json")
         decision_md_path = os.path.join(self.work_dir, "modeling_decision.md")
+        review_history: list[dict] = []
+        if os.path.exists(decision_json_path):
+            try:
+                with open(decision_json_path, encoding="utf-8") as decision_file:
+                    prior_decision = json.load(decision_file)
+                prior_history = prior_decision.get("review_history", [])
+                if isinstance(prior_history, list):
+                    review_history = prior_history
+            except (OSError, json.JSONDecodeError):
+                logger.warning("读取已有建模审查历史失败，将重建确认文件")
+
         payload = {
             "task_id": self.task_id,
             "status": "waiting_review",
-            "gate_enabled": settings.HUMAN_MODEL_GATE_ENABLED,
+            "gate_enabled": settings.HUMAN_MODEL_GATE_ENABLED or problem.require_model_review,
             "created_at": datetime.datetime.now().isoformat(),
             "comp_template": problem.comp_template.value,
             "format_output": problem.format_output.value,
@@ -870,6 +918,7 @@ class MathModelWorkFlow(WorkFlow):
                 "approved_at": None,
                 "comment": "",
             },
+            "review_history": review_history,
         }
         with open(decision_json_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -899,6 +948,129 @@ class MathModelWorkFlow(WorkFlow):
         )
         with open(decision_md_path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines).rstrip() + "\n")
+
+    def accept_codex_modeling(self, task_id: str, modeler_response: ModelerToCoder) -> None:
+        """Accept a reviewer-authored plan through the same contract gate.
+
+        This is a bounded recovery path for a task whose Modeler exhausted its
+        schema/contract retries.  It does not grant a privileged bypass: the
+        submitted plan is parsed as the normal schema, validated against the
+        immutable problem contract, persisted as a checkpoint, and then paused
+        for the normal explicit approval before Coder may run.
+        """
+        self.task_id = task_id
+        self.work_dir = get_work_dir(task_id)
+        checkpoint_manager = CheckpointManager(self.work_dir)
+        checkpoint = checkpoint_manager.load()
+        if checkpoint is None:
+            raise FileNotFoundError(f"未找到可接管的检查点: {task_id}")
+        if modeler_response.model_plan is None:
+            raise ValueError("Codex 接管建模必须提交结构化 model_plan。")
+        self.questions = checkpoint.questions
+        self.ques_count = checkpoint.ques_count
+        problem_contract = build_problem_contract(checkpoint.ques_all)
+        result = validate_modeler_plan(
+            problem_contract,
+            modeler_response,
+            expected_question_keys={
+                key for key in self.questions if key.startswith("ques") and key != "ques_count"
+            },
+            questions=self.questions,
+        )
+        issues = result.violations + result.missing_requirements
+        if issues:
+            raise ValueError("Codex 接管方案未通过题面契约：" + "；".join(issues))
+        response = modeler_response.model_copy(
+            update={"questions_solution": modeler_response.model_plan.to_questions_solution()}
+        )
+        checkpoint_manager.replace_modeler_response(response.model_dump())
+        self._write_modeler_plan(response)
+        problem = Problem(
+            task_id=task_id,
+            ques_all=checkpoint.ques_all,
+            comp_template=CompTemplate(checkpoint.comp_template),
+            format_output=FormatOutPut(checkpoint.format_output),
+            export_profile=ExportProfile(checkpoint.export_profile),
+            require_model_review=checkpoint.require_model_review,
+        )
+        self._write_modeling_decision(problem, response)
+
+    async def revise_modeling(self, task_id: str, review_comment: str) -> str:
+        """Rebuild a paused ModelPlan once from an explicit reviewer comment.
+
+        This path never resumes Coder directly.  The new response is subject to
+        the same schema and problem-contract checks as task creation, replaces
+        the checkpointed plan atomically, and pauses at the review gate again.
+        """
+        self.task_id = task_id
+        self.work_dir = get_work_dir(task_id)
+        checkpoint_manager = CheckpointManager(self.work_dir)
+        checkpoint = checkpoint_manager.load()
+        if checkpoint is None:
+            raise FileNotFoundError(f"未找到可修订的检查点: {task_id}")
+
+        self.questions = checkpoint.questions
+        self.ques_count = checkpoint.ques_count
+        problem_contract = build_problem_contract(checkpoint.ques_all)
+        with open(
+            os.path.join(self.work_dir, "problem_contract.json"),
+            "w",
+            encoding="utf-8",
+        ) as contract_file:
+            json.dump(problem_contract.model_dump(), contract_file, ensure_ascii=False, indent=2)
+
+        llm_factory = LLMFactory(self.task_id)
+        _coordinator_llm, modeler_llm, _coder_llm, _writer_llm = (
+            llm_factory.get_all_llms()
+        )
+        user_input_provider = lambda target="all": user_input_queue.pop_for(  # noqa: E731
+            self.task_id, target
+        )
+        coordinator_context = CoordinatorToModeler(
+            questions=self.questions,
+            ques_count=self.ques_count,
+            problem_contract=problem_contract,
+        )
+        revision_context = (
+            "这是审查者退回后的唯一一次受控建模修订。必须逐项回应以下审查意见；"
+            "不得把无可靠题面、附件、可核验数据统计、文献或标准依据的经验数值写为硬阈值。"
+            "没有依据时改为结论中立、可复算的完成或记录指标。\n"
+            "审查意见：" + review_comment[:3000]
+        )
+
+        async def _run_modeler() -> ModelerToCoder:
+            modeler_agent = ModelerAgent(
+                self.task_id,
+                modeler_llm,
+                context_window=settings.MODELER_CONTEXT_WINDOW,
+                cancel_event=self.cancel_event,
+                user_input_provider=user_input_provider,
+            )
+            return await modeler_agent.run(
+                coordinator_context, recovery_context=revision_context
+            )
+
+        modeler_response = await _run_modeler()
+        modeler_response = await self._validate_plan_with_one_remodel(
+            problem_contract, modeler_response, _run_modeler
+        )
+        checkpoint_manager.replace_modeler_response(modeler_response.model_dump())
+        self._write_modeler_plan(modeler_response)
+
+        problem = Problem(
+            task_id=self.task_id,
+            ques_all=checkpoint.ques_all,
+            comp_template=CompTemplate(checkpoint.comp_template),
+            format_output=FormatOutPut(checkpoint.format_output),
+            export_profile=ExportProfile(checkpoint.export_profile),
+            require_model_review=checkpoint.require_model_review,
+        )
+        self._write_modeling_decision(problem, modeler_response)
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(content="建模方案已按审查意见修订，等待再次确认", type="warning"),
+        )
+        return "waiting_review"
 
     def _assert_formal_metrics_have_subtask_id(self) -> None:
         """冻结后、Writer 前：确保正式题指标都能被明确归属到某个 quesN。
@@ -1342,6 +1514,7 @@ class MathModelWorkFlow(WorkFlow):
                 "comp_template": problem.comp_template.value,
                 "format_output": problem.format_output.value,
                 "export_profile": problem.export_profile.value,
+                "require_model_review": problem.require_model_review,
             },
         )
         problem_contract = build_problem_contract(problem.ques_all)
@@ -1355,8 +1528,10 @@ class MathModelWorkFlow(WorkFlow):
         llm_factory = LLMFactory(self.task_id)
         coordinator_llm, modeler_llm, coder_llm, writer_llm = llm_factory.get_all_llms()
 
-        # 实时消息干预：取出排队中的用户输入，注入下一次 LLM 调用
-        user_input_provider = lambda: user_input_queue.pop_all(self.task_id)  # noqa: E731
+        # 角色定向的外部引导：每个 Agent 只取得给自己的建议，避免竞争消费。
+        user_input_provider = lambda target="all": user_input_queue.pop_for(  # noqa: E731
+            self.task_id, target
+        )
 
         coordinator_agent = CoordinatorAgent(
             self.task_id,
@@ -1401,6 +1576,25 @@ class MathModelWorkFlow(WorkFlow):
         )
 
         await self._check_cancelled()
+
+        # Keep the coordinator result recoverable even if Modeler exhausts its
+        # retries.  A Codex reviewer can then submit a separately validated
+        # plan instead of recreating the task or bypassing downstream gates.
+        checkpoint_manager = CheckpointManager(self.work_dir)
+        checkpoint_manager.save(
+            TaskCheckpoint(
+                task_id=self.task_id,
+                ques_all=problem.ques_all,
+                comp_template=problem.comp_template.value,
+                format_output=problem.format_output.value,
+                export_profile=problem.export_profile.value,
+                require_model_review=problem.require_model_review,
+                questions=self.questions,
+                ques_count=self.ques_count,
+                modeler_response={},
+                updated_at=datetime.datetime.now().isoformat(),
+            )
+        )
 
         modeler_agent = ModelerAgent(
             self.task_id,
@@ -1452,6 +1646,7 @@ class MathModelWorkFlow(WorkFlow):
                 comp_template=problem.comp_template.value,
                 format_output=problem.format_output.value,
                 export_profile=problem.export_profile.value,
+                require_model_review=problem.require_model_review,
                 questions=self.questions,
                 ques_count=self.ques_count,
                 modeler_response=modeler_response.model_dump(),
@@ -1459,7 +1654,7 @@ class MathModelWorkFlow(WorkFlow):
             )
         )
         self._write_modeling_decision(problem, modeler_response)
-        if settings.HUMAN_MODEL_GATE_ENABLED:
+        if settings.HUMAN_MODEL_GATE_ENABLED or problem.require_model_review:
             await redis_manager.publish_message(
                 self.task_id,
                 SystemMessage(
@@ -1493,7 +1688,7 @@ class MathModelWorkFlow(WorkFlow):
 
         ################################################ solution steps
         async with self._managed_interpreter(code_interpreter):
-            await self._run_solution_flows(
+            solution_result = await self._run_solution_flows(
                 flows,
                 modeler_response,
                 coder_agent,
@@ -1504,6 +1699,8 @@ class MathModelWorkFlow(WorkFlow):
                 config_template,
                 recovery_context,
             )
+            if solution_result == "waiting_quality_review":
+                return solution_result
 
         ################################################ write steps
         await self._run_write_flows(
@@ -1523,7 +1720,7 @@ class MathModelWorkFlow(WorkFlow):
             checkpoint_manager=checkpoint_manager,
         )
 
-    async def resume(self, task_id: str, recovery_context: str = "") -> None:
+    async def resume(self, task_id: str, recovery_context: str = "") -> str | None:
         """从检查点恢复并继续执行数学建模工作流。
 
         跳过协调者/建模手，跳过 checkpoint 中已完成的阶段，并通过重放
@@ -1568,7 +1765,9 @@ class MathModelWorkFlow(WorkFlow):
             llm_factory.get_all_llms()
         )
 
-        user_input_provider = lambda: user_input_queue.pop_all(self.task_id)  # noqa: E731
+        user_input_provider = lambda target="all": user_input_queue.pop_for(  # noqa: E731
+            self.task_id, target
+        )
 
         original_modeler_response = modeler_response
 
@@ -1624,7 +1823,7 @@ class MathModelWorkFlow(WorkFlow):
             await self._replay_notebook(code_interpreter, checkpoint_manager)
 
             ################################################ solution steps
-            await self._run_solution_flows(
+            solution_result = await self._run_solution_flows(
                 flows,
                 modeler_response,
                 coder_agent,
@@ -1635,6 +1834,8 @@ class MathModelWorkFlow(WorkFlow):
                 config_template,
                 recovery_context,
             )
+            if solution_result == "waiting_quality_review":
+                return solution_result
 
         ################################################ write steps
         await self._run_write_flows(
@@ -1653,3 +1854,4 @@ class MathModelWorkFlow(WorkFlow):
             writer_agent=writer_agent,
             checkpoint_manager=checkpoint_manager,
         )
+        return None

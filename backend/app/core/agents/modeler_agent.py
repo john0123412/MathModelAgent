@@ -193,6 +193,7 @@ class ModelerAgent(Agent):
             context_window,
             cancel_event=cancel_event,
             user_input_provider=user_input_provider,
+            guidance_target="modeler",
         )
         self.system_prompt = MODELER_PROMPT
 

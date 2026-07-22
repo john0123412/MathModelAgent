@@ -79,6 +79,7 @@
   控制数值、对应的压力核验值，以及过渡结束后切回/维持的稳态策略；不得只给正向仿真曲线。
 - `execution_validation_report.json` 是否为 `PASS`；每个正式问题是否存在 `executed=true`、
   `feasible=true` 和能复核 SHA-256 的约束来源。
+- [ ] 如存在 `quesN_acceptance_metrics.csv` / `quesN_constraint_check.csv`，是否逐行复核了数值、比较符、目标和“达标/状态”一致；不得把不满足约束的行标为通过，也不得用工具调用中的四舍五入数值替代表内精确来源。
 - 每个约束来源和图表数据源是否由当前求解/定向回修回合实际新建或更新；不得把 checkpoint
   中未更新的旧结果文件重新登记为本次计算证据。
 - `frozen_results.json` 中的指标是否与摘要、正文、表格和图题一致；不可行子问题是否没有被称为最优或已完成。
@@ -126,10 +127,12 @@
 - 引用内容是否支撑正文背景或方法。
 - 是否避免伪造来源。
 - 正文中是否没有孤立的 `: ... DOI ...`、英文文献残片或 definition-list 参考行。
+- `paper_preflight_report.json -> reference_sources` 中 DOI/URL 基本格式、本地文件哈希和 `manual_review_required` 是否正常；逐条打开原始来源，确认其真实可获取并支撑对应表述。不得把本地格式/哈希通过表述为联网真实性验证。
 
 ## 附录和支撑材料
 
 - 是否列出支撑材料。
+- `support_materials_manifest.json` / `support_materials.zip` 如存在，是否仅含允许的源码、数据和必要结果，成员大小与 SHA-256 是否均与清单一致；它们仅在平台允许时另交，不能替代主论文文件。
 - 支撑材料中是否包含完整可运行源码；同时检查 `final_acceptance_report.json` 的
   `complete_source_appendix=PASS`，并人工确认论文附录中源码可实际运行、与正文结果对应。
   不得将附录 A 文件清单或任务目录文件当作论文附录的替代。
@@ -167,11 +170,16 @@
 - `paper_preflight_report.json = PASS`；若为 `CONDITIONAL_PASS`，必须逐项查看
   `severity=conditional` 的检查，正式提交前优先修正为 `PASS`，无法修正时需人工接受风险。
 - `execution_validation_report.json = PASS`，`frozen_results.json` 的来源哈希仍有效；旧任务若缺少这些产物，不能按当前数学验收标准通过。
+- `execution_quality_review.json` 的 `review_id` 与 checkpoint 中已批准编号一致；若状态曾为 `NEEDS_REVIEW`，逐项核对 `failed_subtasks/findings` 的修复结果或书面放行依据。机器筛查 `PASS` 只表示未发现明确失败标记/NaN/Inf，不能替代模型、量纲、守恒、推导和关键数值的逐题复核。
+- 若使用过 Codex/人工受控候选，核对 `repair_candidate_manifest.json` 与 `repair_candidate_audit.jsonl`：候选必须绑定当前 `review_id`/`quesN`，`status=evidence_passed`，脚本和 evidence 哈希可复核；同时确认后续全量 execution validation、重新冻结和新的质量审批均已完成。单个候选 `evidence_passed` 不等于整题或论文验收通过。
+- 质量复核返修后确认对应 `quesN_results.csv`、execution manifest、`frozen_results.json` 和论文章节均来自同一轮结果；不得用直接编辑 CSV/manifest/论文数字代替 Coder 重算和重新冻结。
 - `paper_preflight_report.json` 中 `freeze_integrity`、`result_consistency`、
   `figure_result_consistency`、`infeasible_optimality`、`algorithm_evidence` 和
   `reference_relevance` 均为通过状态。
 - `paper_preflight_report.json -> checks.result_consistency.passed=true`；该项只覆盖
   已结构化到结果 CSV 的关键事实，不替代人工复算模型和公式。
+- 对变容、移动边界或多腔耦合模型，人工逐式核对 `d(ρV)/dt` 展开项和体积方向；
+  结果数字与冻结表一致并不能证明论文没有漏写 `ρ dV/dt` 或写反 `dV/dt` 符号。
 - `pdf_visual_check.json = PASS`
 - `submission_audit_report.json` 已查看；`WARN` 可来自 Docker 字体 fallback 或
   `paper_preflight_report.json = CONDITIONAL_PASS`，必须确认原因；正式提交前如启用
@@ -184,8 +192,8 @@
   Windows 本机重导并复核。
 - `res.pdf` 可打开。
 - `res.docx` 可打开。
-- `candidate_manifest.json` 登记主交付文件。
-- 正式上传只选择 `candidate_manifest.json` 所登记的当前 `res.pdf`；不上传工作目录中的
+- `candidate_manifest.json` 的 `submission_file` 登记唯一主交付文件，并确认其存在、大小和 SHA-256 与清单一致。
+- 正式上传只选择 `candidate_manifest.json` 所登记的当前主文件（默认 `res.pdf`）；不上传工作目录中的
   内部恢复候选 PDF（如 `res_recovery_candidate.pdf`）。
 - `final_acceptance_report.json -> technical_status = TECHNICAL_PASS`；同时明确理解其
   `human_review.status = PENDING_HUMAN_REVIEW`，不能将技术通过表述为数学正确或可直接提交。
@@ -204,7 +212,8 @@
 
 - [ ] `docx_export_status.json.success=true`，其 `source_sha256` 等于当前 `res.md`，`output_sha256` 等于当前 `res.docx`。
 - [ ] `export_status.json` 的 PDF 源/输出哈希与当前文件一致；失败重导后目录中不存在冒充当前结果的旧 PDF。
-- [ ] `candidate_manifest.json.schema_version=1.1`，`artifact_set_id` 与 `artifact_hashes` 已生成。
+- [ ] `candidate_manifest.json.schema_version=1.2`，`submission_file`、`artifact_set_id` 与主产物哈希已生成且一致。
+- [ ] 如生成支撑材料，`support_materials_manifest.json` / ZIP 已通过成员、大小和 SHA-256 审核，且明确不作为主论文上传文件。
 - [ ] `task_status.json` 为权威状态；`finalizing` / `failed` 不因旧 `res.md` 或 `res.docx` 存在而显示为 completed。
 
 ### P1：结构与逐页视觉
@@ -220,3 +229,6 @@
 - [ ] 影子价格写明有效区间/最优基条件，不能把局部边际价值无限外推。
 - [ ] 坐标轴顶点由哪条约束决定的解释，与实际等式和可行性计算一致。
 - [ ] 附录代码包含完整导入、参数、求解、校验断言、结果文件和作图调用；正式支撑材料另保留依赖锁定与运行说明。
+- [ ] `reproducibility_manifest.json` 已生成；其运行环境和入口仅记录本轮证据，`replay_status=not_independently_reexecuted` 时不得声称已独立复跑。
+- [ ] 非 `not_applicable` 的诊断 profile 有源码实际产出的对应收敛、残差、可行性、拟合或仿真复现实证；不能只在论文中宣称“已验证”。
+- [ ] 已人工复核 `similarity_ai_risk` 提示；它是本地草稿风险筛查，不是正式查重、AI 检测或抄袭结论。

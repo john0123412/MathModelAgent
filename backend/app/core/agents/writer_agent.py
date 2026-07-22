@@ -85,6 +85,7 @@ class WriterAgent(Agent):
             context_window,
             cancel_event=cancel_event,
             user_input_provider=user_input_provider,
+            guidance_target="writer",
         )
         self.format_out_put = format_output
         self.comp_template = comp_template

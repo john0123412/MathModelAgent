@@ -37,6 +37,7 @@ import shutil
 import sys
 
 from app.schemas.enums import ExportProfile
+from app.services.task_status import write_task_status_to_dir
 from app.tools.candidate_exporter import write_candidate_manifest
 from app.tools.pdf_exporter import export_markdown_to_pdf
 from app.tools.pdf_visual_checker import check_pdf_visual
@@ -148,7 +149,16 @@ def _refresh_task_status(
         manifest = _load_existing_json(manifest_path)
         task_id = manifest.get("task_id") or os.path.basename(os.path.abspath(work_dir))
         write_candidate_manifest(work_dir, str(task_id))
-        write_final_acceptance_report(work_dir)
+        final_report = write_final_acceptance_report(work_dir)
+        if final_report.get("technical_status") == "TECHNICAL_PASS":
+            write_task_status_to_dir(work_dir, str(task_id), "completed", "任务处理完成")
+        else:
+            write_task_status_to_dir(
+                work_dir,
+                str(task_id),
+                "failed",
+                "最终技术验收未通过，请查看 final_acceptance_report.json",
+            )
 
 
 def cmd_check(args: argparse.Namespace) -> int:

@@ -16,6 +16,10 @@ from app.tools.result_integrity import (
     metric_aliases,
     validate_result_freeze,
 )
+from app.tools.candidate_exporter import (
+    collect_bounded_support_material_paths,
+    support_material_category,
+)
 
 
 REFERENCE_HEADING_RE = re.compile(
@@ -71,6 +75,8 @@ EXTRA_PROBLEM_LABEL_RE = re.compile(r"问题(?P<number>\d+|[一二三四五六�
 CLAIM_SENTENCE_RE = re.compile(r"[^。！？.!?\n]*(?:最优|利润|提高|增加|降低|结果表明|敏感性|影子价格|准确率|误差)[^。！？.!?\n]*[。！？.!?]?")
 NUMERIC_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:%|元|小时|件|吨|亩|分|倍|年|万元)?")
 PLAIN_NUMBER_RE = re.compile(r"(?<![A-Za-z_\\])[-+]?\d+(?:\.\d+)?(?![A-Za-z_])")
+DOI_RE = re.compile(r"\b10\.\d{4,9}/[^\s<>\"']+", re.IGNORECASE)
+URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 STRONG_WORDING_RE = re.compile(r"证明|唯一|显著优于|最可靠|精确预测")
 OPTIMALITY_CLAIM_RE = re.compile(r"最优(?:解|方案|控制|参数)?|最佳(?:解|方案)?|Pareto(?:最优)?|帕累托(?:最优)?")
 ALGORITHM_CLAIMS = {
@@ -1013,33 +1019,13 @@ def collect_code_sources(work_dir: str) -> list[CodeSource]:
 
 
 def _support_category(filename: str) -> str | None:
-    lower = filename.lower()
-    ext = os.path.splitext(lower)[1]
-    if lower in _SUPPORT_EXCLUDED_FILENAMES:
-        return None
-    if ext in _CODE_EXT_LANGUAGES or lower.endswith(".ipynb"):
-        return "源程序代码"
-    if lower.endswith(_IMAGE_EXTS):
-        return "图片文件"
-    if ext in _DATA_EXTS:
-        return "数据/结果文件"
-    return None
+    # Keep Appendix A exactly aligned with candidate_exporter archive policy.
+    return support_material_category(filename)
 
 
 def collect_support_materials(work_dir: str) -> list[SupportMaterial]:
     """收集 CUMCM 附录A中的支撑材料文件列表。"""
-    materials: list[SupportMaterial] = []
-    if not os.path.isdir(work_dir):
-        return materials
-    for root, dirs, files in os.walk(work_dir):
-        dirs[:] = [d for d in dirs if d not in _SUPPORT_EXCLUDED_DIRS]
-        for filename in sorted(files):
-            category = _support_category(filename)
-            if category is None:
-                continue
-            rel_path = os.path.relpath(os.path.join(root, filename), work_dir).replace(os.sep, "/")
-            materials.append(SupportMaterial(rel_path, category))
-    return sorted(materials, key=lambda item: (item.category, item.name))
+    return [SupportMaterial(path, category) for path, category in collect_bounded_support_material_paths(work_dir)]
 
 
 def _appendix_code_mode(work_dir: str) -> str:
@@ -1896,11 +1882,101 @@ def _claim_matches(markdown: str) -> list[re.Match[str]]:
     return list(CLAIM_SENTENCE_RE.finditer(markdown))
 
 
-def build_claim_trace(markdown: str, code_sources: list[str]) -> dict:
+def build_reference_source_trace(markdown: str, work_dir: str | None = None) -> dict:
+    """Return local citation records with conservative DOI/URL checks.
+
+    A syntactically valid DOI/URL is not treated as proof that the source was
+    retrieved.  Entries without a local evidence file are explicitly marked
+    ``manual_review_required``.
+    """
+    _, reference_text = _reference_body_parts(_without_fenced_code_blocks(markdown))
+    entries = []
+    malformed = []
+    for number, content in _parse_reference_entries(reference_text):
+        dois = DOI_RE.findall(content)
+        urls = URL_RE.findall(content)
+        has_locator = bool(dois or urls)
+        valid_doi = all(bool(DOI_RE.fullmatch(value.rstrip(".,;"))) for value in dois)
+        valid_url = all(bool(URL_RE.fullmatch(value.rstrip(".,;"))) for value in urls)
+        local_candidates = []
+        if work_dir:
+            for token in re.findall(r"[A-Za-z0-9_./\\-]+\.(?:pdf|txt|csv|json)$", content):
+                path = os.path.normpath(os.path.join(work_dir, token.replace("/", os.sep)))
+                if os.path.isfile(path):
+                    local_candidates.append({"path": token.replace("\\", "/"), "sha256": _sha256_file(path)})
+        status = "verified_local" if local_candidates else "manual_review_required"
+        if has_locator and (not valid_doi or not valid_url):
+            malformed.append(number)
+        entries.append({
+            "number": number,
+            "source": content,
+            "doi": dois,
+            "url": urls,
+            "doi_url_format_valid": (valid_doi and valid_url),
+            "local_evidence": local_candidates,
+            "verification_status": status,
+        })
+    return {
+        "passed": not malformed,
+        "entries": entries,
+        "malformed_locator_numbers": malformed,
+        "manual_review_count": sum(1 for item in entries if item["verification_status"] == "manual_review_required"),
+        "note": "格式检查和本地文件哈希不等于联网检索或正式引用核验；人工复核仍必需。",
+    }
+
+
+def _sha256_file(path: str) -> str | None:
+    try:
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
+def scan_similarity_ai_risk(markdown: str, work_dir: str | None = None) -> dict:
+    """Run a small, explainable local risk scan (never a plagiarism detector)."""
+    visible = _without_fenced_code_blocks(markdown)
+    appendix_match = re.search(r"(?m)^#{1,6}\s*附录", visible)
+    body = visible[: appendix_match.start()] if appendix_match else visible
+    sentences = [re.sub(r"\s+", "", item) for item in re.split(r"[。！？.!?]\s*", body) if len(item.strip()) >= 16]
+    counts: dict[str, int] = {}
+    for sentence in sentences:
+        counts[sentence] = counts.get(sentence, 0) + 1
+    duplicate_sentences = sorted([s for s, count in counts.items() if count > 1])
+    ai_markers = sorted(set(re.findall(
+        r"(?:作为(?:人工智能|AI)|大语言模型|ChatGPT|提示词|prompt|根据用户要求|由模型生成|以下内容由AI)",
+        body,
+        re.IGNORECASE,
+    )))
+    boilerplate = ["综上所述", "本文提出", "结果表明"]
+    boilerplate_hits = {term: len(re.findall(re.escape(term), body)) for term in boilerplate}
+    boilerplate_hits = {key: value for key, value in boilerplate_hits.items() if value >= 4}
+    risks = []
+    if duplicate_sentences:
+        risks.append({"type": "repeated_sentences", "count": len(duplicate_sentences), "examples": duplicate_sentences[:3]})
+    if ai_markers:
+        risks.append({"type": "ai_draft_markers", "markers": ai_markers})
+    if boilerplate_hits:
+        risks.append({"type": "boilerplate_repetition", "counts": boilerplate_hits})
+    return {
+        "status": "RISK" if risks else "NO_LOCAL_INDICATOR",
+        "passed": not risks,
+        "risk_count": len(risks),
+        "risks": risks,
+        "scope": "local heuristic only",
+        "disclaimer": "本报告只提示可解释的文本风险，不是正式查重、AI检测或抄袭判定。请由人工结合平台工具复核。",
+    }
+
+
+def build_claim_trace(markdown: str, code_sources: list[str], work_dir: str | None = None) -> dict:
     """生成轻量 claim trace，标注核心结论是否有可追溯证据。"""
     markdown_without_code = _without_fenced_code_blocks(markdown)
     figure_paths = IMAGE_RE.findall(markdown_without_code)
     reference_count = 0
+    reference_trace = build_reference_source_trace(markdown, work_dir)
     reference_match = REFERENCE_HEADING_RE.search(markdown_without_code)
     if reference_match:
         reference_count = len(
@@ -1944,6 +2020,15 @@ def build_claim_trace(markdown: str, code_sources: list[str]) -> dict:
         if wording_check != "ok" and strength == "acceptable":
             strength = "weak"
 
+        source_records = []
+        for evidence_id in evidence_ids:
+            path = os.path.join(work_dir, evidence_id.replace("/", os.sep)) if work_dir else ""
+            exists = bool(path) and os.path.isfile(path)
+            source_records.append({
+                "source": evidence_id,
+                "status": "verified_local" if exists else "manual_review_required",
+                "sha256": _sha256_file(path) if exists else None,
+            })
         claims.append(
             {
                 "claim": claim,
@@ -1954,6 +2039,11 @@ def build_claim_trace(markdown: str, code_sources: list[str]) -> dict:
                 "evidence_id_file": evidence_ids,
                 "strength": strength,
                 "paper_wording_check": wording_check,
+                "source_records": source_records,
+                "source_verification": (
+                    "verified_local" if source_records and all(item["status"] == "verified_local" for item in source_records)
+                    else "manual_review_required"
+                ),
             }
         )
         if len(claims) >= 30:
@@ -1983,6 +2073,8 @@ def build_claim_trace(markdown: str, code_sources: list[str]) -> dict:
             "strong_wording_weak": strong_wording_weak_count,
         },
         "status": status,
+        "reference_sources": reference_trace,
+        "verification_disclaimer": "本地可验证仅表示文件存在并匹配 SHA-256；外部来源须人工核验，不得视为已检索或原创性证明。",
     }
 
 
@@ -2968,9 +3060,10 @@ def build_preflight_report(
     infeasible_optimality_check = _check_infeasible_optimality_claims(work_dir, markdown)
     figure_result_consistency_check = _check_figure_result_consistency(work_dir, markdown)
     reference_relevance_check = _check_reference_relevance(markdown)
-    claim_trace_check = _check_claim_trace(
-        claim_trace if claim_trace is not None else build_claim_trace(markdown, code_sources)
-    )
+    claim_trace_value = claim_trace if claim_trace is not None else build_claim_trace(markdown, code_sources, work_dir)
+    claim_trace_check = _check_claim_trace(claim_trace_value)
+    reference_sources_check = build_reference_source_trace(markdown, work_dir)
+    similarity_ai_risk_check = scan_similarity_ai_risk(markdown, work_dir)
     problem_alignment_check = _check_problem_alignment(work_dir, markdown_without_code)
 
     checks = {
@@ -3010,6 +3103,8 @@ def build_preflight_report(
         ),
         "problem_alignment": _with_severity(problem_alignment_check, "fail"),
         "reference_relevance": _with_severity(reference_relevance_check, "fail"),
+        "reference_sources": _with_severity(reference_sources_check, "conditional"),
+        "similarity_ai_risk": _with_severity(similarity_ai_risk_check, "conditional"),
         "claim_trace": _with_severity(
             claim_trace_check, _claim_trace_check_severity(claim_trace_check)
         ),
@@ -3220,7 +3315,7 @@ def prepare_paper_markdown(
     markdown = ensure_table_captions(markdown)
     outline = build_paper_outline(markdown)
     figure_usage = build_figure_usage(work_dir, markdown)
-    claim_trace = build_claim_trace(markdown, code_sources)
+    claim_trace = build_claim_trace(markdown, code_sources, work_dir)
     report = build_preflight_report(
         work_dir,
         markdown,

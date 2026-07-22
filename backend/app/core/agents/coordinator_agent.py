@@ -122,6 +122,7 @@ class CoordinatorAgent(Agent):
             context_window,
             cancel_event=cancel_event,
             user_input_provider=user_input_provider,
+            guidance_target="coordinator",
         )
         self.system_prompt = COORDINATOR_PROMPT
 

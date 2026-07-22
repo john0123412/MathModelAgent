@@ -282,6 +282,16 @@ print("=" * 60)
   display rounding is allowed). Every metric requires an id, Chinese label,
   finite value, unit, concrete explanation, and `source_path`. Figures require a task-relative image path and the
   task-relative data source that produced it.
+- 若写出标准验收表 `quesN_acceptance_metrics.csv`，必须使用表头
+  `指标ID,指标名称,数值,单位,目标值,是否达标`，并对每个 ModelPlan 验收指标写入完整
+  id 与未截断的实际数值；`是否达标` 必须由数值和目标值实际计算，不能把不满足条件的
+  记录标为“是”。若写出 `quesN_constraint_check.csv`，其 `左端值/比较/右端值/状态`
+  也必须自洽。后端会从该验收表绑定精确数值与 ModelPlan 约束，拒绝矛盾的表格，且不会
+  因修改“是否达标”文字而把失败计算变成通过。
+- 多目标压力、时段或情景可把明细行写为 `原指标键_情景`（例如
+  `pressure_stability_100MPa` / `pressure_stability_150MPa`）；每行仍必须填写精确数值和真实
+  状态。后端会按 ModelPlan 比较方向取所有情景中的最坏值，并把这些行的 metric/constraint
+  来源强制绑定到验收表，不能改用未包含该数值的概览文件。
 - The ModelPlan's `expected_artifacts` are completion requirements, not
   optional scratch files: create every declared numerical artefact, keep CSV
   files parseable and nonempty, and ensure a declared scan contains a varying
@@ -289,8 +299,26 @@ print("=" * 60)
   mentions multi-start fitting, Bootstrap, branches, profile likelihood, or
   identifiability, write an auditable diagnostic table and record a metric for
   parameter identifiability / interval / branch count / active-bound status.
+- If the ModelPlan declares `diagnostic_profile` other than `not_applicable`, its
+  `diagnostic_requirements` are hard completion requirements. Record at least one
+  matching, source-backed metric: exact models need residual/equality evidence;
+  numerical models need convergence/refinement/error evidence; optimization needs
+  solver/feasibility evidence; fitting needs residual/validation evidence; and
+  simulation needs seed/repetition, convergence, or conservation evidence.
   A result that is flat, bound-hitting, or multi-branch must be reported as
   underdetermined; do not present a single fitted parameter as a stable answer.
+- 对含流量、压力或库存状态的仿真题：先从 ModelPlan 提取全部硬约束，再在参数搜索中
+  排除不满足者；不得先按目标函数选出最小点、发现它超压或不守恒后仍把它写为“最优”。
+  若扫描区间没有可行点，必须如实写出“当前区间无可行解”及失败表，而不是伪造通过标志。
+  质量守恒必须由实际时序数组计算并落盘，例如比较
+  `∫(rho_in*Q_in-rho_out*Q_out)dt` 与系统储存质量变化 `M_end-M_start`；不得将
+  `mass_conservation_check=1` 写死。仿真诊断 CSV 必须包含积分步长/求解器设置、
+  守恒残差及相对残差、至少两个仿真时长（如 1 s 与 5 s）的稳态统计差异，并将这些
+  数值作为 source-backed metrics 提交。
+- 对高压油管/柱塞腔模型，先用端点断言校验几何方向：上止点必须满足
+  `V_cyl = V_residual`，压缩行程必须使 `dV/dt < 0`；以体积流量 Q 建立压力方程时，
+  应核对 `dP/dt = E*(Q_in-Q_out)/V` 的量纲，而不是把体积流量和质量流量混用。
+  在这个端点校验、守恒残差和全部压力上限均通过前，不得报告控制参数为“最优”。
 - For optimization questions, metrics must include the objective value and
   every decision variable used in the reported optimum (including each
   sensitivity scenario's new decision vector). Do not record only profit

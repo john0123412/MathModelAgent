@@ -123,6 +123,13 @@ class _BadFirstPageDocument(_FakeDocument):
         return _FakePage("二、问题分析")
 
 
+class _UntitledAbstractDocument(_FakeDocument):
+    def __getitem__(self, index):
+        if index == 0:
+            return _FakePage("摘要\n摘要正文\n关键词：优化")
+        return _FakePage("一、问题重述")
+
+
 class _LongBodyDocument(_FakeDocument):
     page_count = 33
 
@@ -241,6 +248,18 @@ class TestPdfVisualChecker(unittest.TestCase):
         self.assertEqual(report["status"], "FAIL")
         self.assertFalse(report["checks"]["abstract_first_page"]["passed"])
         self.assertFalse(report["checks"]["no_table_of_contents"]["passed"])
+
+    def test_first_page_requires_title_before_abstract(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(b"%PDF-1.4 fake")
+
+            with mock.patch("fitz.open", return_value=_UntitledAbstractDocument()):
+                report = check_pdf_visual(pdf_path, work_dir)
+
+        self.assertEqual(report["status"], "FAIL")
+        self.assertFalse(report["checks"]["abstract_first_page"]["has_title_before_abstract"])
 
     def test_body_pages_after_abstract_are_limited_to_30(self):
         with tempfile.TemporaryDirectory() as work_dir:

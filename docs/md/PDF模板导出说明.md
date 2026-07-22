@@ -72,7 +72,9 @@ Windows 本机工具读取 res.md -> Pandoc + XeLaTeX 用真实系统字体重�
 ## 高教社杯 `cumcm2026` 验收要点
 
 当前官方可见附件是 2026 论文格式规范 PDF；项目内没有官方 2026 DOCX/LaTeX
-源模板，`cumcm2026` 是按修订稿规范实现的暂定模板。正式比赛前必须重新检查
+源模板，`cumcm2026` 是按修订稿规范实现的暂定模板。LaTeX sidecar 使用无封面
+`ctexart` 外壳，不复用会生成学校、队号、队员字段的 2025 `gmcmthesis` 封面。
+正式比赛前必须重新检查
 官方站和知网提交系统；如果新增 Word/DOCX 或 LaTeX 模板，按
 `docs/md/CUMCM2026模板替换指南.md` 替换。
 
@@ -129,8 +131,8 @@ PDF/sidecar 自动编译会显式禁用 XeLaTeX shell escape；模型或 Markdow
 
 - 新建 `/modeling` 任务默认使用 `cumcm2026`；脚本、curl 或旧客户端仍建议显式传
   `export_profile=cumcm2026`，便于复核。
-- `cumcm2026` 当前复用 2025 年 LaTeX 模板资源目录和 DOCX reference-doc；2026
-  正式模板发布后应重新复核。
+- `cumcm2026` 当前仅复用 2025 DOCX reference-doc；LaTeX sidecar 使用项目内无封面
+  `ctexart` 外壳。2026 正式模板发布后应重新复核。
 - `latex_project/` 是候选 sidecar，不是主交付链路；导出器会尽量自动编译，
   但若失败只写入 `tex_export_status.json`，不影响 `res.md`/`res.pdf`/`res.docx`
   主交付。若要把它作为正式可编译工程交付，需要单独复核 `main.pdf` 和编译日志。
@@ -389,8 +391,14 @@ uv run python -m app.tools.export_cli pdf --input project\work_dir\<task_id>\res
 ```
 
 `--update-status` 会同步刷新 `export_status.json`、`pdf_visual_check.json`、
-`submission_audit_report.json` 和已有的 `candidate_manifest.json`，避免正式字体
-重导后审核仍引用旧的 Docker fallback 记录。
+`submission_audit_report.json`、已有的 `candidate_manifest.json` 和
+`final_acceptance_report.json`；最终技术验收通过/失败时还会同步写回
+`task_status.json`，避免正式字体或人工修复重导后审核/UI 仍引用旧记录。
+
+LaTeX sidecar 每次自动编译前会删除同目录中明确列举的旧 `.aux/.toc/.out/.fls/
+.fdb_latexmk/.xdv/.log/.synctex.gz` 临时文件，防止中断编译遗留的损坏辅助文件污染新稿；
+复制 Windows bind-mount 图片时，若 `copy2` 仅在复制时间/权限元数据阶段被文件系统
+拒绝，则退化为字节级 `copyfile`，真实内容复制错误仍会失败并写入状态报告。
 
 ### 图片资源校验失败
 
@@ -438,5 +446,14 @@ LibreOffice / `soffice`。如必须走 DOCX 转 PDF，需要额外安装 LibreOf
    - 附录仍必须保留完整可运行代码、源码 SHA-256、必要断言和输出文件生成逻辑；缩小字体不能替代代码完整性检查。
 
 5. **候选包**
-   - `candidate_manifest.json` schema `1.1` 写入 `artifact_set_id` 与 `artifact_hashes`。
+   - `candidate_manifest.json` schema `1.2` 以 `submission_file` 明确唯一主提交文件（默认 `res.pdf`），并记录主产物哈希。
+   - 另生成 `support_materials_manifest.json` / `support_materials.zip`：只收录允许的源码、数据和必要结果文件，排除密钥名、内部目录、恢复目录与运行态文件，并记录大小及 SHA-256。它是平台允许时的支撑材料候选，不能替代主论文上传文件。
+   - `reference_sources` / `claim_trace` 只完成 DOI/URL 基本格式和本地文件哈希追踪；每条来源仍需人工访问原文、确认可获取且确实支持相应表述。
+   - `similarity_ai_risk` 是本地、可解释的重复/AI 草稿风险筛查，不能表示已通过正式查重、AI 检测或原创性判定；正式提交前仍须按比赛要求使用授权系统和人工复核。
    - `recovery_review_pages/`、`failed_attempts/`、`.ipython/`、`.jupyter_runtime/`、`.matplotlib/`、`latex_project/` 等内部或 sidecar 目录不作为正式图表候选。
+
+6. **执行验收表**
+   - `quesN_acceptance_metrics.csv` 如存在，必须以精确数值、目标表达式和一致的“是否达标”记录 ModelPlan 指标；
+     `quesN_constraint_check.csv` 的左端、比较符、右端和状态也必须一致。后端会重新计算这些表，拒绝把不满足条件的数值标成通过，且以表中未截断数值绑定受控执行证据。
+     分压力/时段等场景的 `原指标键_场景` 明细会按 ModelPlan 比较方向汇总为最坏场景，不能用平均值掩盖某一失败工况。
+   - `execution_validation.json` 中 `feasible=false` 仅保留失败审计现场，不能据此导出候选论文；必须修复计算或证据来源后重新通过验证。

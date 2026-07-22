@@ -68,6 +68,11 @@ class TestExportCliPdf(unittest.TestCase):
                 mock.patch("app.tools.export_cli.check_pdf_visual", return_value={"status": "PASS"}),
                 mock.patch("app.tools.export_cli.write_submission_audit_report") as audit_mock,
                 mock.patch("app.tools.export_cli.write_candidate_manifest") as manifest_mock,
+                mock.patch(
+                    "app.tools.export_cli.write_final_acceptance_report",
+                    return_value={"technical_status": "TECHNICAL_PASS"},
+                ) as final_mock,
+                mock.patch("app.tools.export_cli.write_task_status_to_dir") as status_mock,
             ):
                 exit_code = export_cli.cmd_pdf(args)
 
@@ -79,6 +84,10 @@ class TestExportCliPdf(unittest.TestCase):
             self.assertEqual(status["pdf_visual_check"], {"status": "PASS"})
             audit_mock.assert_called_once_with(work_dir)
             manifest_mock.assert_called_once_with(work_dir, "task-1")
+            final_mock.assert_called_once_with(work_dir)
+            status_mock.assert_called_once_with(
+                work_dir, "task-1", "completed", "任务处理完成"
+            )
 
 
 class TestExportCliLatex(unittest.TestCase):

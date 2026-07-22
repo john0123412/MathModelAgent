@@ -5,7 +5,11 @@ import tempfile
 from unittest.mock import AsyncMock, patch
 
 from app.config.setting import ApiType
-from app.core.agents.coder_agent import CoderAgent, _EVIDENCE_FAILURE_LIMIT
+from app.core.agents.coder_agent import (
+    CoderAgent,
+    _EVIDENCE_FAILURE_LIMIT,
+    _formal_evidence_checklist,
+)
 from app.core.llm.types import StandardResponse, ToolCall
 
 
@@ -539,6 +543,53 @@ class FakeEmptyCloseoutThenRaisingNarrationModel(FakeEmptyCloseoutModel):
 
 
 class CoderAgentToolHandlingTest(unittest.IsolatedAsyncioTestCase):
+    def test_formal_evidence_checklist_repeats_every_model_plan_constraint(self):
+        """正式子题提示必须逐项带入不可省略的计划约束。"""
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(
+                os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(
+                    {
+                        "model_plan": {
+                            "subtasks": {
+                                "ques1": {
+                                    "acceptance_metrics": [
+                                        {
+                                            "key": "pressure_stability_error",
+                                            "comparator": "le",
+                                            "target": 5.0,
+                                        },
+                                        {
+                                            "key": "transition_time_error",
+                                            "comparator": "le",
+                                            "target": 0.1,
+                                        },
+                                    ],
+                                    "diagnostic_profile": "simulation",
+                                    "diagnostic_requirements": [
+                                        "验证系统总质量守恒并记录残差。",
+                                        "验证减压阀只在阈值上方开启。",
+                                    ],
+                                }
+                            }
+                        }
+                    },
+                    handle,
+                )
+
+            checklist = _formal_evidence_checklist(work_dir, "ques1")
+
+        self.assertIn("pressure_stability_error", checklist)
+        self.assertIn("le 5.0", checklist)
+        self.assertIn("transition_time_error", checklist)
+        self.assertIn("le 0.1", checklist)
+        self.assertIn("record_execution_evidence", checklist)
+        self.assertIn("不可省略的诊断证据", checklist)
+        self.assertIn("质量守恒", checklist)
+        self.assertIn("减压阀", checklist)
+        self.assertIn("source-backed metric", checklist)
+
     async def test_first_run_includes_complete_problem_context_before_eda(self):
         """无附件的确定性题也必须把原始参数传给 EDA Coder。"""
         agent = CoderAgent(

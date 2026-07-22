@@ -10,6 +10,7 @@ from app.services import user_input_queue
 from app.services.task_recovery import load_task_request_snapshot
 from app.services.task_status import read_task_status, write_task_status
 from app.schemas.request import DEFAULT_MODELING_EXPORT_PROFILE, Problem
+from app.schemas.A2A import ModelerToCoder
 from app.schemas.response import SystemMessage
 from app.utils.common_utils import (
     create_task_id,
@@ -28,12 +29,14 @@ import os
 import asyncio
 import shutil
 import datetime
+import hashlib
 import json
+import uuid
 from typing import Dict, Literal, Tuple
 from fastapi import HTTPException
 from icecream import ic  # type: ignore[import-unresolved]
 from app.schemas.request import ExampleRequest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.config.setting import settings, ApiType
 from app.core.llm.providers.openai_chat import OpenAIChatProvider
 from app.core.llm.providers.openai_responses import OpenAIResponsesProvider
@@ -134,12 +137,61 @@ class SaveApiConfigResponse(BaseModel):
     persisted: bool
 
 
+class GuidanceRequest(BaseModel):
+    """A bounded, role-addressed advisory note for an in-flight task."""
+
+    target: Literal["coordinator", "modeler", "coder", "writer", "all"]
+    content: str
+    purpose: Literal["modeling", "execution", "review", "recovery"] = "review"
+    source: Literal["codex", "operator"] = "operator"
+
+
+class GuidanceResponse(BaseModel):
+    task_id: str
+    target: str
+    status: str
+    audit_file: str
+
+
 def _require_safe_task_id(task_id: str) -> str:
     """验证 URL 中的任务 ID，非法时返回 400。"""
     try:
         return ensure_safe_task_id(task_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="非法任务ID") from exc
+
+
+def _append_guidance_audit(
+    work_dir: str,
+    *,
+    task_id: str,
+    target: str,
+    purpose: str,
+    source: str,
+    content: str,
+) -> str:
+    """Persist non-sensitive guidance metadata without storing prompt text.
+
+    The live queue holds the content only until the receiving Agent calls its
+    model.  The task directory keeps a hash, length and routing decision so a
+    later review can establish what was injected without copying potentially
+    sensitive operator text into candidate/support materials.
+    """
+    audit_file = "internal_guidance_audit.jsonl"
+    record = {
+        "id": uuid.uuid4().hex,
+        "created_at": datetime.datetime.now().isoformat(),
+        "task_id": task_id,
+        "target": target,
+        "purpose": purpose,
+        "source": source,
+        "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        "content_chars": len(content),
+        "delivery": "queued_untrusted_advisory",
+    }
+    with open(os.path.join(work_dir, audit_file), "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    return audit_file
 
 
 def _validated_llm_base_url(base_url: str | None) -> str | None:
@@ -429,6 +481,14 @@ async def modeling(
     comp_template: CompTemplate = Form(...),  # 从表单获取
     format_output: FormatOutPut = Form(...),  # 从表单获取
     export_profile: ExportProfile = Form(DEFAULT_MODELING_EXPORT_PROFILE),  # 从表单获取
+    require_model_review: bool = Form(False),
+    guidance_target: Literal["coordinator", "modeler", "coder", "writer", "all"] = Form(
+        "all"
+    ),
+    guidance_content: str = Form(""),
+    guidance_purpose: Literal["modeling", "execution", "review", "recovery"] = Form(
+        "review"
+    ),
     files: list[UploadFile] = File(default=None),
 ):
     if len(ques_all) > settings.MAX_PROBLEM_TEXT_CHARS:
@@ -474,6 +534,22 @@ async def modeling(
     # 存储任务ID
     await redis_manager.set(f"task_id:{task_id}", task_id)
 
+    # Optional preloaded guidance removes the race between task creation and
+    # the first Modeler call. It follows the same untrusted/advisory path as
+    # runtime guidance and therefore cannot override workflow safeguards.
+    if guidance_content.strip():
+        normalized_guidance = user_input_queue.normalize_content(guidance_content.strip())
+        if not user_input_queue.push(task_id, normalized_guidance, guidance_target):
+            raise HTTPException(status_code=429, detail="预注入引导队列已满或目标无效")
+        _append_guidance_audit(
+            work_dir,
+            task_id=task_id,
+            target=guidance_target,
+            purpose=guidance_purpose,
+            source="operator",
+            content=normalized_guidance,
+        )
+
     logger.info(f"Adding background task for task_id: {task_id}")
     # 将任务添加到后台执行
     background_tasks.add_task(
@@ -483,6 +559,7 @@ async def modeling(
         comp_template,
         format_output,
         export_profile,
+        require_model_review=require_model_review,
     )
     return {"task_id": task_id, "status": "processing"}
 
@@ -494,6 +571,7 @@ async def run_modeling_task_async(
     format_output: FormatOutPut,
     export_profile: ExportProfile = DEFAULT_MODELING_EXPORT_PROFILE,
     recovery_context: str = "",
+    require_model_review: bool = False,
 ):
     """异步执行建模任务。
 
@@ -512,6 +590,7 @@ async def run_modeling_task_async(
         comp_template=comp_template,
         format_output=format_output,
         export_profile=export_profile,
+        require_model_review=require_model_review,
     )
 
     # 创建取消信号
@@ -546,6 +625,13 @@ async def run_modeling_task_async(
                 SystemMessage(content="任务等待人工确认建模方案", type="warning"),
             )
             write_task_status(task_id, "waiting_review", "任务等待人工确认建模方案")
+            return
+        if workflow_result == "waiting_quality_review":
+            write_task_status(
+                task_id,
+                "waiting_quality_review",
+                "冻结结果等待 Codex/人工质量复核",
+            )
             return
 
         workflow_completed = True
@@ -583,6 +669,55 @@ class CancelTaskResponse(BaseModel):
     message: str
 
 
+@router.post(
+    "/modeling/{task_id}/guidance", response_model=GuidanceResponse, status_code=202
+)
+async def queue_guidance(task_id: str, request: GuidanceRequest):
+    """Queue bounded advisory guidance for one workflow role.
+
+    This is deliberately not a privileged prompt override.  The receiving
+    Agent labels it untrusted, and ModelPlan validation, execution validation,
+    task boundaries and cancellation rules remain authoritative.
+    """
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        work_dir = get_work_dir(safe_task_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="任务不存在") from None
+
+    state = (read_task_status(work_dir) or {}).get("status")
+    if state in {"completed", "cancelled"}:
+        raise HTTPException(status_code=409, detail="任务已结束，不能再注入引导")
+
+    content = user_input_queue.normalize_content(request.content.strip())
+    if not content:
+        raise HTTPException(status_code=422, detail="引导内容不能为空")
+    if not user_input_queue.push(safe_task_id, content, request.target):
+        raise HTTPException(status_code=429, detail="引导队列已满或目标无效")
+
+    audit_file = _append_guidance_audit(
+        work_dir,
+        task_id=safe_task_id,
+        target=request.target,
+        purpose=request.purpose,
+        source=request.source,
+        content=content,
+    )
+    await redis_manager.publish_message(
+        safe_task_id,
+        SystemMessage(
+            content=f"已接收面向 {request.target} 的外部引导（{request.purpose}）",
+            type="info",
+        ),
+    )
+    return GuidanceResponse(
+        task_id=safe_task_id,
+        target=request.target,
+        status="queued",
+        audit_file=audit_file,
+    )
+
+
 @router.post("/modeling/{task_id}/cancel", response_model=CancelTaskResponse)
 async def cancel_task(task_id: str):
     """取消正在运行的任务。"""
@@ -617,6 +752,28 @@ class ResumeTaskRequest(BaseModel):
 
 class ApproveModelingRequest(BaseModel):
     comment: str = ""
+
+
+class ReviseModelingRequest(BaseModel):
+    """Bounded reviewer feedback used to rebuild a paused ModelPlan once."""
+
+    comment: str
+
+
+class CodexModelingRequest(BaseModel):
+    """A structured, reviewer-authored ModelPlan for a failed Modeler task."""
+
+    modeler_response: ModelerToCoder
+    comment: str = ""
+
+
+class ExecutionReviewRequest(BaseModel):
+    """A reviewer decision bound to the current frozen-result review ID."""
+
+    action: Literal["approve", "repair"]
+    review_id: str
+    comment: str
+    failed_subtasks: list[str] = Field(default_factory=list)
 
 
 def _build_recovery_context(
@@ -671,6 +828,63 @@ def _mark_modeling_decision_approved(work_dir: str, comment: str = "") -> None:
     os.replace(tmp_path, decision_path)
 
 
+def _mark_modeling_decision_revision_requested(work_dir: str, comment: str) -> None:
+    """Persist an auditable rejection before a ModelPlan is rebuilt."""
+    decision_path = os.path.join(work_dir, "modeling_decision.json")
+    if not os.path.exists(decision_path):
+        raise HTTPException(status_code=404, detail="未找到建模确认文件")
+    try:
+        with open(decision_path, encoding="utf-8") as f:
+            decision = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail="建模确认文件读取失败") from exc
+
+    now = datetime.datetime.now().isoformat()
+    decision["status"] = "revising"
+    decision.setdefault("review", {})
+    decision["review"].update(
+        {"approved": False, "approved_at": None, "comment": comment}
+    )
+    history = decision.setdefault("review_history", [])
+    if not isinstance(history, list):
+        history = []
+        decision["review_history"] = history
+    history.append(
+        {"action": "revision_requested", "requested_at": now, "comment": comment}
+    )
+    tmp_path = decision_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(decision, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, decision_path)
+
+
+def _mark_modeling_decision_revision_failed(work_dir: str, message: str) -> None:
+    """Keep the paused-review artifact consistent with a failed rebuild."""
+    decision_path = os.path.join(work_dir, "modeling_decision.json")
+    if not os.path.exists(decision_path):
+        return
+    try:
+        with open(decision_path, encoding="utf-8") as f:
+            decision = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        logger.warning("建模修订失败后无法更新审查文件状态")
+        return
+    decision["status"] = "revision_failed"
+    history = decision.setdefault("review_history", [])
+    if isinstance(history, list):
+        history.append(
+            {
+                "action": "revision_failed",
+                "failed_at": datetime.datetime.now().isoformat(),
+                "message": message[:1000],
+            }
+        )
+    tmp_path = decision_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(decision, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, decision_path)
+
+
 @router.post("/modeling/{task_id}/approve-modeling", response_model=ResumeTaskResponse)
 async def approve_modeling(
     task_id: str,
@@ -705,6 +919,170 @@ async def approve_modeling(
     return ResumeTaskResponse(task_id=safe_task_id, status="resuming")
 
 
+@router.post("/modeling/{task_id}/revise-modeling", response_model=ResumeTaskResponse)
+async def revise_modeling(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    request: ReviseModelingRequest,
+):
+    """Return one paused ModelPlan to Modeler with explicit reviewer feedback."""
+    safe_task_id = _require_safe_task_id(task_id)
+    comment = request.comment.strip()
+    if not comment:
+        raise HTTPException(status_code=422, detail="退回意见不能为空")
+    try:
+        work_dir = get_work_dir(safe_task_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if safe_task_id in _active_tasks:
+        raise HTTPException(status_code=409, detail="任务仍在运行中")
+    prior_state = (read_task_status(work_dir) or {}).get("status")
+    if prior_state != "waiting_review":
+        raise HTTPException(status_code=409, detail="仅 waiting_review 状态可退回建模方案")
+
+    checkpoint_manager = CheckpointManager(work_dir)
+    checkpoint = checkpoint_manager.load()
+    if checkpoint is None:
+        raise HTTPException(status_code=404, detail="未找到可修订的检查点")
+    try:
+        checkpoint_manager.record_modeling_revision_request()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    normalized_comment = user_input_queue.normalize_content(comment)
+    if not user_input_queue.push(safe_task_id, normalized_comment, "modeler"):
+        raise HTTPException(status_code=429, detail="建模修订引导队列已满")
+    _append_guidance_audit(
+        work_dir,
+        task_id=safe_task_id,
+        target="modeler",
+        purpose="modeling",
+        source="codex",
+        content=normalized_comment,
+    )
+    _mark_modeling_decision_revision_requested(work_dir, normalized_comment)
+    write_task_status(safe_task_id, "revising", "建模方案已退回，正在按审查意见修订")
+    await redis_manager.publish_message(
+        safe_task_id,
+        SystemMessage(content="建模方案已退回，正在按审查意见修订", type="warning"),
+    )
+    background_tasks.add_task(run_revise_modeling_async, safe_task_id, normalized_comment)
+    return ResumeTaskResponse(task_id=safe_task_id, status="revising")
+
+
+@router.post("/modeling/{task_id}/codex-modeling", response_model=ResumeTaskResponse)
+async def submit_codex_modeling(task_id: str, request: CodexModelingRequest):
+    """Place a Codex-authored, contract-validated plan behind normal approval.
+
+    The endpoint is intentionally limited to a Modeler-failed task or a paused
+    reviewer task that requested the modeling review gate.  It is not a route around ModelPlan validation or
+    the downstream execution/freeze gates.
+    """
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        work_dir = get_work_dir(safe_task_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if safe_task_id in _active_tasks:
+        raise HTTPException(status_code=409, detail="任务仍在运行中")
+    prior_state = (read_task_status(work_dir) or {}).get("status")
+    if prior_state not in {"failed", "waiting_review"}:
+        raise HTTPException(status_code=409, detail="仅 Modeler 失败或等待建模审查的任务可由 Codex 接管")
+    checkpoint = CheckpointManager(work_dir).load()
+    if checkpoint is None or not checkpoint.require_model_review:
+        raise HTTPException(status_code=409, detail="该任务未启用可审计的建模人工门禁")
+    workflow = MathModelWorkFlow()
+    try:
+        workflow.accept_codex_modeling(safe_task_id, request.modeler_response)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    note = request.comment.strip()[:1000] or "当前 Codex 在 Modeler 失败后提交结构化建模方案。"
+    _append_guidance_audit(
+        work_dir, task_id=safe_task_id, target="modeler", purpose="review", source="codex", content=note
+    )
+    write_task_status(safe_task_id, "waiting_review", "Codex 建模方案已写入，等待人工确认")
+    await redis_manager.set(f"task_id:{safe_task_id}", safe_task_id)
+    await redis_manager.publish_message(
+        safe_task_id,
+        SystemMessage(content="Codex 建模方案已通过题面契约校验，等待人工确认", type="warning"),
+    )
+    return ResumeTaskResponse(task_id=safe_task_id, status="waiting_review")
+
+
+@router.post(
+    "/modeling/{task_id}/execution-review", response_model=ResumeTaskResponse
+)
+async def review_execution_quality(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    request: ExecutionReviewRequest,
+):
+    """Approve frozen evidence or send selected formal subtasks back to Coder."""
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        work_dir = get_work_dir(safe_task_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="任务不存在") from None
+    if safe_task_id in _active_tasks:
+        raise HTTPException(status_code=409, detail="任务仍在运行中")
+    prior_state = (read_task_status(work_dir) or {}).get("status")
+    if prior_state != "waiting_quality_review":
+        raise HTTPException(status_code=409, detail="任务不在执行质量复核状态")
+
+    manager = CheckpointManager(work_dir)
+    checkpoint = manager.load()
+    if checkpoint is None:
+        raise HTTPException(status_code=404, detail="未找到质量复核检查点")
+    comment = user_input_queue.normalize_content(request.comment.strip())
+    if not comment:
+        raise HTTPException(status_code=422, detail="复核理由或返修意见不能为空")
+
+    if request.action == "approve":
+        try:
+            manager.approve_quality_review(request.review_id.strip(), comment)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        status_message = "执行结果质量复核已放行，继续论文写作"
+    else:
+        allowed_subtasks = {
+            str(key)
+            for key in checkpoint.questions
+            if str(key).startswith("ques") and str(key) != "ques_count"
+        }
+        requested = sorted(set(request.failed_subtasks))
+        if not requested or any(key not in allowed_subtasks for key in requested):
+            raise HTTPException(status_code=422, detail="返修子题必须来自当前任务正式问题")
+        try:
+            manager.request_quality_repair(
+                request.review_id.strip(), requested, comment
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        guidance = (
+            "【执行质量复核定向返修】只重新求解以下子题："
+            + "、".join(requested)
+            + "。必须实际执行、覆盖对应结果文件并重新记录证据。\n审查意见："
+            + comment
+        )
+        _append_guidance_audit(
+            work_dir,
+            task_id=safe_task_id,
+            target="coder",
+            purpose="execution",
+            source="codex",
+            content=guidance,
+        )
+        status_message = "执行质量复核已退回指定子题，开始定向返修"
+
+    write_task_status(safe_task_id, "resuming", status_message)
+    await redis_manager.set(f"task_id:{safe_task_id}", safe_task_id)
+    await redis_manager.publish_message(
+        safe_task_id, SystemMessage(content=status_message, type="warning")
+    )
+    background_tasks.add_task(run_resume_task_async, safe_task_id, comment)
+    return ResumeTaskResponse(task_id=safe_task_id, status="resuming")
+
+
 @router.post("/modeling/{task_id}/resume", response_model=ResumeTaskResponse)
 async def resume_task(
     task_id: str,
@@ -727,6 +1105,8 @@ async def resume_task(
         raise HTTPException(status_code=409, detail="任务已完成，无需续传")
     if prior_state == "waiting_review":
         raise HTTPException(status_code=409, detail="任务等待建模方案确认，请使用 approve-modeling")
+    if prior_state == "waiting_quality_review":
+        raise HTTPException(status_code=409, detail="任务等待执行质量复核，请使用 execution-review")
 
     checkpoint_manager = CheckpointManager(work_dir)
     checkpoint = checkpoint_manager.load()
@@ -773,9 +1153,44 @@ async def resume_task(
             CompTemplate(snapshot["comp_template"]),
             FormatOutPut(snapshot["format_output"]),
             ExportProfile(snapshot["export_profile"]),
-            recovery_context,
+            recovery_context=recovery_context,
+            require_model_review=bool(snapshot.get("require_model_review", False)),
         )
     return ResumeTaskResponse(task_id=safe_task_id, status="resuming")
+
+
+async def run_revise_modeling_async(task_id: str, review_comment: str) -> None:
+    """Run the bounded ModelPlan revision and return to the review gate."""
+    logger.info(f"revise modeling plan for task_id: {task_id}")
+    cancel_event = asyncio.Event()
+    workflow = MathModelWorkFlow()
+    workflow.cancel_event = cancel_event
+    task = asyncio.create_task(workflow.revise_modeling(task_id, review_comment))
+    _active_tasks[task_id] = (task, cancel_event)
+
+    try:
+        result = await asyncio.wait_for(task, timeout=3600)
+        if result != "waiting_review":
+            raise RuntimeError(f"建模修订返回了意外状态: {result}")
+        write_task_status(task_id, "waiting_review", "修订后的建模方案等待人工确认")
+        await redis_manager.publish_message(
+            task_id,
+            SystemMessage(content="修订后的建模方案等待人工确认", type="warning"),
+        )
+    except asyncio.CancelledError:
+        logger.info(f"建模方案修订 {task_id} 被取消")
+        write_task_status(task_id, "cancelled", "建模方案修订已停止")
+    except Exception as exc:
+        logger.error(f"建模方案修订 {task_id} 失败: {type(exc).__name__}")
+        _mark_modeling_decision_revision_failed(get_work_dir(task_id), str(exc))
+        await redis_manager.publish_message(
+            task_id,
+            SystemMessage(content=f"建模方案修订失败: {exc}", type="error"),
+        )
+        write_task_status(task_id, "failed", f"建模方案修订失败: {exc}")
+    finally:
+        _active_tasks.pop(task_id, None)
+        user_input_queue.clear(task_id)
 
 
 async def run_resume_task_async(task_id: str, recovery_context: str = ""):
@@ -808,7 +1223,14 @@ async def run_resume_task_async(task_id: str, recovery_context: str = ""):
 
     workflow_completed = False
     try:
-        await asyncio.wait_for(task, timeout=3600 * 5)
+        workflow_result = await asyncio.wait_for(task, timeout=3600 * 5)
+        if workflow_result == "waiting_quality_review":
+            write_task_status(
+                task_id,
+                "waiting_quality_review",
+                "冻结结果等待 Codex/人工质量复核",
+            )
+            return
         workflow_completed = True
         checkpoint = CheckpointManager(get_work_dir(task_id)).load()
         export_profile = (

@@ -97,6 +97,58 @@ class _RepairOutput:
 
 
 class WorkflowExecutionGateTest(unittest.IsolatedAsyncioTestCase):
+    async def test_quality_review_pauses_before_writer_and_binds_checkpoint(self):
+        with tempfile.TemporaryDirectory() as raw_work_dir:
+            work_dir = Path(raw_work_dir)
+            checkpoint_manager = CheckpointManager(str(work_dir))
+            checkpoint_manager.save(
+                TaskCheckpoint(
+                    task_id="task",
+                    ques_all="test",
+                    comp_template="cumcm",
+                    format_output="markdown",
+                    questions={"ques_count": 2, "ques1": "q1", "ques2": "q2"},
+                    ques_count=2,
+                    modeler_response={"questions_solution": {}},
+                    updated_at="now",
+                )
+            )
+            events = []
+            workflow = MathModelWorkFlow()
+            workflow.task_id = "task"
+            workflow.work_dir = str(work_dir)
+
+            def freeze(directory):
+                Path(directory, "frozen_results.json").write_text("{}", encoding="utf-8")
+
+            review = {
+                "status": "NEEDS_REVIEW",
+                "review_id": "review-1",
+                "failed_subtasks": ["ques2"],
+            }
+            with (
+                patch("app.core.workflow.redis_manager.publish_message", AsyncMock()),
+                patch("app.core.workflow.write_execution_validation_report", return_value={"status": "PASS"}),
+                patch("app.core.workflow.write_frozen_results_from_execution_validation", side_effect=freeze),
+                patch("app.core.workflow.write_execution_quality_review", return_value=review),
+            ):
+                result = await workflow._run_solution_flows(
+                    _Flows(),
+                    ModelerToCoder(questions_solution={}),
+                    _Coder(events),
+                    _Writer(events),
+                    _Interpreter(str(work_dir)),
+                    _Output(),
+                    checkpoint_manager,
+                    {},
+                )
+
+            self.assertEqual(result, "waiting_quality_review")
+            self.assertEqual([event for event in events if event[0] == "writer"], [])
+            saved = checkpoint_manager.load()
+            self.assertEqual(saved.workflow_state, "waiting_quality_review")
+            self.assertEqual(saved.quality_review_id, "review-1")
+
     async def test_early_coder_failure_does_not_label_diagnostic_pass_as_validation(self):
         with tempfile.TemporaryDirectory() as raw_work_dir:
             work_dir = Path(raw_work_dir)

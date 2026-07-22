@@ -134,10 +134,13 @@ CUMCM2025_PROFILE = ExportProfileConfig(
 )
 
 # `cumcm2026` is a provisional implementation based on the 2026 revised
-# formatting specification. Until official 2026 DOCX/LaTeX template files are
-# published, it intentionally reuses the 2025 DOCX reference and LaTeX resource
-# directory. When official templates appear, replace these paths following
-# docs/md/CUMCM2026模板替换指南.md.
+# formatting specification. The official site currently publishes a formatting
+# specification, not a 2026 LaTeX source package.  Do not reuse the 2025
+# gmcmthesis resources here: its \maketitle emits the legacy cover with school,
+# team-number and member fields, which must not appear in the electronic paper.
+# The DOCX reference remains a temporary 2025 compatibility resource until an
+# official 2026 Word/DOCX template is published.  When official templates
+# appear, replace these paths following docs/md/CUMCM2026模板替换指南.md.
 CUMCM2026_PROFILE = ExportProfileConfig(
     key=ExportProfile.CUMCM2026,
     label="高教社杯/CUMCM 2026 模板",
@@ -161,8 +164,7 @@ CUMCM2026_PROFILE = ExportProfileConfig(
         "fontsize=12pt",
     ],
     pdf_extra_args=[],
-    latex_template_dir=CUMCM2025_TEMPLATE_DIR,
-    latex_template_key="zh/cumcm2026-gmcmthesis",
+    latex_template_key="zh/cumcm2026-ctexart",
     docx_reference_doc=CUMCM2025_DOCX_REFERENCE,
 )
 

@@ -8,6 +8,11 @@ _pycache_/
 # Project specific
 project/work_dir/*
 !project/work_dir/.gitkeep
+
+# Defensive guard: execution artifacts belong under project/work_dir/<task_id>,
+# never in the backend repository root.
+/checkpoint.json
+/ques*_results.csv
 .cursor/
 config/config.toml
 config/latex-template/

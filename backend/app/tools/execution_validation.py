@@ -15,6 +15,8 @@ import json
 import math
 import os
 import re
+import platform
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +26,7 @@ import nbformat
 REPORT_NAME = "execution_validation_report.json"
 MANIFEST_NAME = "execution_validation.json"
 FREEZE_NAME = "frozen_results.json"
+REPRODUCIBILITY_NAME = "reproducibility_manifest.json"
 MANIFEST_SCHEMA_V2 = "mathmodel.execution-validation.v2"
 _UNSUPPORTED_RESULT_TERMS = ("估计", "沿用问题", "直接取")
 _Q1_REQUIRED_CONTROL_METRICS = {
@@ -306,6 +309,284 @@ def _parse_csv_number(value: object) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
+_TABLE_PASS_STATUSES = {"是", "通过", "满足", "达标", "pass", "passed", "true"}
+_TABLE_FAIL_STATUSES = {"否", "不通过", "未通过", "不满足", "不达标", "fail", "failed", "false"}
+
+
+def _parse_table_comparison(value: object) -> tuple[str, float] | None:
+    """Parse a compact human-facing threshold such as ``≤1.0``.
+
+    These tables are ordinary Coder output, so they are not trusted as a
+    feasibility declaration.  We only use their explicit numeric cells to
+    cross-check the displayed pass/fail text and bind ModelPlan metrics to an
+    exact source value.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip().replace(" ", "")
+    match = re.fullmatch(r"(≤|<=|≥|>=|<|>|=|==)([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)", text)
+    if not match:
+        return None
+    comparison = {
+        "≤": "lte", "<=": "lte", "≥": "gte", ">=": "gte",
+        "<": "lt", ">": "gt", "=": "eq", "==": "eq",
+    }[match.group(1)]
+    target = _parse_csv_number(match.group(2))
+    return (comparison, target) if target is not None else None
+
+
+def _table_status(value: object) -> bool | None:
+    if not isinstance(value, str):
+        return None
+    normalised = value.strip().lower()
+    if normalised in _TABLE_PASS_STATUSES:
+        return True
+    if normalised in _TABLE_FAIL_STATUSES:
+        return False
+    return None
+
+
+def _evaluate_simple_comparison(actual: float, comparison: str, target: float) -> bool:
+    return {
+        "lte": actual <= target,
+        "gte": actual >= target,
+        "lt": actual < target,
+        "gt": actual > target,
+        "eq": math.isclose(actual, target, rel_tol=1e-12, abs_tol=1e-12),
+    }[comparison]
+
+
+def _read_csv_rows(path: Path) -> tuple[list[dict[str, str]], list[str], str | None]:
+    try:
+        with path.open(encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            fields = [field for field in (reader.fieldnames or []) if isinstance(field, str)]
+            if not fields:
+                return [], [], "CSV 缺少表头。"
+            return list(reader), fields, None
+    except (OSError, csv.Error, UnicodeError) as exc:
+        return [], [], f"CSV 无法解析：{type(exc).__name__}。"
+
+
+def _validate_declared_table_statuses(root: Path, subtask_id: str) -> list[str]:
+    """Reject CSV rows whose claimed status contradicts their own numbers."""
+    definitions = (
+        (f"{subtask_id}_acceptance_metrics.csv", "指标ID", "数值", "目标值", None, "是否达标"),
+        (f"{subtask_id}_constraint_check.csv", "约束ID", "左端值", "比较", "右端值", "状态"),
+    )
+    errors: list[str] = []
+    for filename, id_column, actual_column, comparison_column, target_column, status_column in definitions:
+        path = root / filename
+        if not path.is_file():
+            continue
+        rows, fields, read_error = _read_csv_rows(path)
+        if read_error:
+            errors.append(f"{filename} {read_error}")
+            continue
+        required = {id_column, actual_column, comparison_column, status_column}
+        if target_column is not None:
+            required.add(target_column)
+        if not required.issubset(fields):
+            continue  # A nonstandard scratch CSV is not treated as an acceptance table.
+        for index, row in enumerate(rows, start=2):
+            actual = _parse_csv_number(row.get(actual_column))
+            status = _table_status(row.get(status_column))
+            if target_column is None:
+                parsed = _parse_table_comparison(row.get(comparison_column))
+                displayed_threshold = row.get(comparison_column)
+            else:
+                operator = row.get(comparison_column)
+                target_value = _parse_csv_number(row.get(target_column))
+                parsed = (
+                    _parse_table_comparison(f"{operator}{target_value}")
+                    if target_value is not None
+                    else None
+                )
+                displayed_threshold = f"{operator}{row.get(target_column)}"
+            if actual is None or status is None or parsed is None:
+                continue
+            comparison, target = parsed
+            computed = _evaluate_simple_comparison(actual, comparison, target)
+            if computed != status:
+                metric_id = row.get(id_column, "").strip() or f"第 {index} 行"
+                expected = "通过" if computed else "不通过"
+                errors.append(
+                    f"{filename} 中 {metric_id}: 数值 {actual} 与目标 {displayed_threshold!r} "
+                    f"的计算结果为{expected}，却标为 {row.get(status_column)!r}。"
+                )
+    return errors
+
+
+def _bind_plan_constraints_from_acceptance_table(
+    root: Path,
+    subtask_id: str,
+    constraints: object,
+) -> tuple[object, list[str]]:
+    """Source ModelPlan acceptance constraints from the standard result CSV.
+
+    A model must not be able to make a constraint unverifiable merely by
+    rounding a value in a tool call.  When the standard table is present, the
+    backend owns the actual value, direction, target and source binding.
+    """
+    planned = _planned_acceptance_metrics(root, subtask_id)
+    table_path = root / f"{subtask_id}_acceptance_metrics.csv"
+    if not planned or not table_path.is_file() or not isinstance(constraints, list):
+        return constraints, []
+    rows, fields, read_error = _read_csv_rows(table_path)
+    if read_error:
+        return constraints, [f"{table_path.name} {read_error}"]
+    required_columns = {"指标ID", "数值"}
+    if not required_columns.issubset(fields):
+        return constraints, []
+    by_id = {
+        row.get("指标ID", "").strip(): row
+        for row in rows
+        if isinstance(row.get("指标ID"), str) and row.get("指标ID", "").strip()
+    }
+    planned_ids = {
+        item.get("key") for item in planned
+        if isinstance(item.get("key"), str) and item.get("key")
+    }
+    bound = [
+        dict(item) for item in constraints
+        if not (isinstance(item, dict) and item.get("id") in planned_ids)
+    ]
+    errors: list[str] = []
+    for expected in planned:
+        metric_id = expected.get("key")
+        if not isinstance(metric_id, str) or not metric_id:
+            continue
+        aliases = {metric_id}
+        if metric_id.endswith("_index"):
+            aliases.add(metric_id.removesuffix("_index"))
+        candidates = [
+            row for row_id, row in by_id.items()
+            if any(row_id == alias or row_id.startswith(f"{alias}_") for alias in aliases)
+        ]
+        if not candidates:
+            errors.append(f"{table_path.name} 缺少 ModelPlan 验收指标 {metric_id}。")
+            continue
+        plan_comparison = expected.get("comparator")
+        comparison = _PLAN_COMPARISONS.get(str(plan_comparison))
+        target = _as_number(expected.get("target"))
+        if comparison is None or target is None:
+            errors.append(f"ModelPlan 验收指标 {metric_id} 的 comparator/target 不可机检。")
+            continue
+        values: list[tuple[float, dict[str, str]]] = []
+        for row in candidates:
+            actual_value = _parse_csv_number(row.get("数值"))
+            row_id = row.get("指标ID", metric_id)
+            if actual_value is None:
+                errors.append(f"{table_path.name} 中 {row_id} 的数值不是有限数值。")
+                continue
+            displayed = _parse_table_comparison(row.get("目标值"))
+            if displayed is not None:
+                displayed_comparison, displayed_target = displayed
+                if displayed_comparison != comparison or not math.isclose(
+                    displayed_target, target, rel_tol=1e-12, abs_tol=1e-12
+                ):
+                    errors.append(
+                        f"{table_path.name} 中 {row_id} 的目标 {row.get('目标值')!r} "
+                        f"与 ModelPlan 的 {plan_comparison} {target} 不一致。"
+                    )
+            else:
+                displayed_target = _parse_csv_number(row.get("目标值"))
+                if displayed_target is not None and not math.isclose(
+                    displayed_target, target, rel_tol=1e-12, abs_tol=1e-12
+                ):
+                    errors.append(
+                        f"{table_path.name} 中 {row_id} 的目标 {row.get('目标值')!r} "
+                        f"与 ModelPlan 的 {target} 不一致。"
+                    )
+            declared_status = _table_status(row.get("是否达标"))
+            if declared_status is not None:
+                computed_status = _evaluate_simple_comparison(
+                    actual_value,
+                    {"abs_diff_lte": "eq"}.get(comparison, comparison),
+                    target,
+                )
+                if computed_status != declared_status:
+                    errors.append(
+                        f"{table_path.name} 中 {row_id}: 数值 {actual_value} 按 ModelPlan "
+                        f"{plan_comparison} {target} 应为{'通过' if computed_status else '不通过'}，"
+                        f"却标为 {row.get('是否达标')!r}。"
+                    )
+            values.append((actual_value, row))
+        if not values:
+            continue
+        if comparison in {"lte", "lt"}:
+            actual, selected_row = max(values, key=lambda item: item[0])
+        elif comparison in {"gte", "gt"}:
+            actual, selected_row = min(values, key=lambda item: item[0])
+        elif comparison == "abs_diff_lte":
+            actual, selected_row = max(values, key=lambda item: abs(item[0] - target))
+        else:
+            actual, selected_row = values[0]
+        constraint: dict[str, Any] = {
+            "id": metric_id,
+            "actual": actual,
+            "comparison": comparison,
+            "target": target,
+            "source_path": table_path.name,
+        }
+        if comparison == "abs_diff_lte":
+            constraint["tolerance"] = 0.0
+        unit = selected_row.get("单位")
+        if isinstance(unit, str) and unit.strip():
+            constraint["unit"] = unit.strip()
+        bound.append(constraint)
+    return bound, errors
+
+
+def _bind_records_to_acceptance_table(
+    root: Path,
+    subtask_id: str,
+    records: object,
+    *,
+    value_field: str,
+) -> tuple[object, list[str]]:
+    """Replace LLM-typed values/sources with exact standard-table cells.
+
+    Scenario metrics are useful paper-facing detail, but their numeric source
+    must be the acceptance table that records the same row.  This removes a
+    second avoidable failure mode where an LLM names the right value but cites
+    an unrelated summary CSV that does not contain its full precision.
+    """
+    table_path = root / f"{subtask_id}_acceptance_metrics.csv"
+    if not table_path.is_file() or not isinstance(records, list):
+        return records, []
+    rows, fields, read_error = _read_csv_rows(table_path)
+    if read_error:
+        return records, [f"{table_path.name} {read_error}"]
+    if not {"指标ID", "数值"}.issubset(fields):
+        return records, []
+    values = {
+        row.get("指标ID", "").strip(): _parse_csv_number(row.get("数值"))
+        for row in rows
+        if isinstance(row.get("指标ID"), str) and row.get("指标ID", "").strip()
+    }
+    bound: list[object] = []
+    errors: list[str] = []
+    for record in records:
+        if not isinstance(record, dict):
+            bound.append(record)
+            continue
+        record_id = record.get("id")
+        if not isinstance(record_id, str) or record_id not in values:
+            bound.append(dict(record))
+            continue
+        actual = values[record_id]
+        if actual is None:
+            errors.append(f"{table_path.name} 中 {record_id} 的数值不是有限数值。")
+            bound.append(dict(record))
+            continue
+        replacement = dict(record)
+        replacement[value_field] = actual
+        replacement["source_path"] = table_path.name
+        bound.append(replacement)
+    return bound, errors
+
+
 def _response_columns(columns: dict[str, list[float]]) -> list[str]:
     """Find columns that a planned scan presents as a model response/score."""
     tokens = ("model", "predict", "response", "reflect", "loss", "rmse", "mae", "residual", "拟合", "预测", "反射", "损失", "残差")
@@ -473,6 +754,117 @@ def _identifiability_issues(root: Path, subtask_id: str, metrics: object) -> lis
             else f"{subtask_id} 的 ModelPlan 明确要求可辨识性/多初值/Bootstrap 诊断，但只记录了有限性或未记录稳定性证据。"
         ),
         {"candidate_metric_ids": [item.get("id") for item in candidates]},
+    )]
+
+
+_DIAGNOSTIC_TOKENS: dict[str, tuple[str, ...]] = {
+    "exact": ("residual", "残差", "等式", "代入", "identity"),
+    "numerical": (
+        "convergence", "收敛", "step", "步长", "grid", "网格", "refinement",
+        "加密", "residual", "残差", "error", "误差",
+    ),
+    "optimization": (
+        "solver", "求解器", "status", "状态", "constraint", "约束", "feasible",
+        "可行", "gap", "间隙", "initial", "初值", "branch", "分支",
+    ),
+    "fitting": (
+        "residual", "残差", "rmse", "mae", "r2", "r²", "holdout", "验证集",
+        "bootstrap", "可辨识", "identifiability", "interval", "区间",
+    ),
+    "simulation": (
+        "seed", "随机种子", "replicate", "重复", "interval", "区间", "convergence",
+        "收敛", "step", "步长", "residual", "残差", "balance", "守恒",
+    ),
+}
+
+# A simulation plan may make several independent diagnostic claims. A generic
+# feasibility metric cannot also prove a separately requested mass-balance
+# check simply because both belong to the same simulation profile. These
+# groups apply only when the ModelPlan explicitly asks for the corresponding
+# diagnostic.
+_DIAGNOSTIC_REQUIREMENT_GROUPS = (
+    (("质量", "守恒", "balance", "residual"), ("质量", "守恒", "balance", "residual")),
+    (("双喷嘴", "双喷油器", "injector"), ("双喷嘴", "双喷油器", "injector")),
+    (("减压阀", "溢流阀", "relief"), ("减压阀", "溢流阀", "relief")),
+    (("可行性", "feasible"), ("可行性", "feasible")),
+    (("步长", "网格", "step", "grid"), ("步长", "网格", "step", "grid")),
+)
+
+
+def _diagnostic_profile_issues(root: Path, subtask_id: str, metrics: object) -> list[dict[str, Any]]:
+    """Bind ModelPlan's declared reliability diagnostic to executed evidence.
+
+    The gate checks that a task-owned plan becomes an auditable metric; it does
+    not impose a cross-domain RMSE or convergence threshold. Older plans omit
+    this optional field and remain compatible, while new plans are prompted to
+    declare an appropriate profile.
+    """
+    subtask = _planned_subtask(root, subtask_id)
+    profile = str(subtask.get("diagnostic_profile") or "not_applicable")
+    requirements = subtask.get("diagnostic_requirements", [])
+    if profile == "not_applicable":
+        return []
+    tokens = _DIAGNOSTIC_TOKENS.get(profile)
+    if tokens is None:
+        return [_issue(
+            f"{subtask_id}.diagnostic_profile",
+            False,
+            f"{subtask_id} 声明了不支持的 diagnostic_profile={profile!r}。",
+        )]
+    requirements_ok = isinstance(requirements, list) and any(
+        isinstance(item, str) and item.strip() for item in requirements
+    )
+    records = metrics if isinstance(metrics, list) else []
+    matching_metrics = []
+    metric_texts: list[str] = []
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        text = f"{item.get('id', '')} {item.get('label', '')} {item.get('explanation', '')}"
+        metric_texts.append(text.lower())
+        lowered = text.lower()
+        if any(token in text or token in lowered for token in tokens):
+            matching_metrics.append(item)
+    missing_requirements: list[str] = []
+    if isinstance(requirements, list):
+        for requirement in requirements:
+            if not isinstance(requirement, str) or not requirement.strip():
+                continue
+            lowered_requirement = requirement.lower()
+            for requirement_tokens, metric_tokens in _DIAGNOSTIC_REQUIREMENT_GROUPS:
+                if not any(
+                    token in requirement or token in lowered_requirement
+                    for token in requirement_tokens
+                ):
+                    continue
+                if not any(
+                    any(token in metric_text for token in metric_tokens)
+                    for metric_text in metric_texts
+                ):
+                    missing_requirements.append(requirement)
+                break
+    passed = requirements_ok and bool(matching_metrics) and not missing_requirements
+    return [_issue(
+        f"{subtask_id}.diagnostic_profile",
+        passed,
+        (
+            f"{subtask_id} 的 {profile} 诊断已由执行指标和计划要求共同支撑。"
+            if passed
+            else (
+                f"{subtask_id} 声明为 {profile}，但缺少诊断要求或可复核的诊断指标。"
+                + (
+                    " 以下计划诊断没有对应的 source-backed metric："
+                    + "；".join(missing_requirements)
+                    if missing_requirements else ""
+                )
+            )
+        ),
+        {
+            "profile": profile,
+            "requirements": requirements if isinstance(requirements, list) else [],
+            "matching_metric_ids": [item.get("id") for item in matching_metrics],
+            "missing_requirements": missing_requirements,
+        },
     )]
 
 
@@ -730,15 +1122,42 @@ def record_execution_evidence(
     if not root.is_dir():
         return {"ok": False, "errors": ["任务工作目录不存在。"]}
 
-    normalised_metrics, metric_errors = _normalise_metric_records(root, metrics)
-    normalised_constraints, constraint_errors = _normalise_constraint_records(root, constraints)
+    table_errors = _validate_declared_table_statuses(root, subtask_id)
+    table_bound_metrics, metric_binding_errors = _bind_records_to_acceptance_table(
+        root, subtask_id, metrics, value_field="value"
+    )
+    table_bound_constraints, constraint_binding_errors = _bind_records_to_acceptance_table(
+        root, subtask_id, constraints, value_field="actual"
+    )
+    bound_constraints, plan_binding_errors = _bind_plan_constraints_from_acceptance_table(
+        root, subtask_id, table_bound_constraints
+    )
+    normalised_metrics, metric_errors = _normalise_metric_records(root, table_bound_metrics)
+    normalised_constraints, constraint_errors = _normalise_constraint_records(root, bound_constraints)
     normalised_figures, figure_errors = _normalise_figure_records(root, figures)
     plan_errors = (
         _plan_constraint_errors(root, subtask_id, normalised_constraints)
         if normalised_constraints is not None
         else []
     )
-    errors = metric_errors + constraint_errors + figure_errors + plan_errors
+    diagnostic_errors = []
+    if normalised_metrics is not None:
+        diagnostic_errors = [
+            str(issue.get("message", "诊断证据不完整。"))
+            for issue in _diagnostic_profile_issues(root, subtask_id, normalised_metrics)
+            if issue.get("passed") is False
+        ]
+    errors = (
+        table_errors
+        + metric_binding_errors
+        + constraint_binding_errors
+        + plan_binding_errors
+        + metric_errors
+        + constraint_errors
+        + figure_errors
+        + plan_errors
+        + diagnostic_errors
+    )
     if errors or normalised_metrics is None or normalised_constraints is None or normalised_figures is None:
         return {"ok": False, "errors": errors}
 
@@ -794,11 +1213,28 @@ def record_execution_evidence(
         os.fsync(handle.fileno())
     os.replace(temporary_path, manifest_path)
 
+    failed_constraints = [
+        {
+            "id": str(constraint.get("id", "unknown")),
+            "actual": constraint.get("actual"),
+            "comparison": constraint.get("comparison"),
+            "target": constraint.get("target"),
+            "tolerance": constraint.get("tolerance"),
+            "lower": constraint.get("lower"),
+            "upper": constraint.get("upper"),
+        }
+        for constraint, passed in zip(normalised_constraints, constraint_results, strict=True)
+        if not passed
+    ]
     return {
         "ok": True,
         "subtask_id": subtask_id,
         "feasible": entry["feasible"],
         "constraint_passed": constraint_results,
+        # A failed record remains auditable in the manifest, but the Coder also
+        # needs the semantic failure (not an opaque list index) to make its one
+        # bounded repair attempt useful.
+        "failed_constraints": failed_constraints,
         "manifest_path": MANIFEST_NAME,
         "metric_count": len(normalised_metrics),
         "figure_count": len(normalised_figures),
@@ -1256,6 +1692,7 @@ def _manifest_issues(
         # image path and a SHA-256 exist.
         issues.extend(_expected_artifact_issues(work_dir, subtask))
         issues.extend(_identifiability_issues(work_dir, subtask, item.get("metrics")))
+        issues.extend(_diagnostic_profile_issues(work_dir, subtask, item.get("metrics")))
 
         if strict_value_sources:
             subtask_metrics = item.get("metrics", [])
@@ -1484,6 +1921,26 @@ def write_frozen_results_from_execution_validation(
     output = root / FREEZE_NAME
     with output.open("w", encoding="utf-8") as handle:
         json.dump(document, handle, ensure_ascii=False, indent=2)
+    reproducibility = {
+        "schema_version": "mathmodel.reproducibility.v1",
+        "generated_at": datetime.datetime.now().isoformat(),
+        "entrypoints": ["notebook.ipynb"] if notebook_path.is_file() else [],
+        "source_artifacts": source_entries,
+        "runtime": {
+            "python_version": sys.version.split()[0],
+            "platform": platform.platform(),
+        },
+        "replay_status": "not_independently_reexecuted",
+        "replay_command_hint": (
+            "在隔离环境中执行 notebook.ipynb，并将生成的结果 CSV/JSON 与 source_artifacts 的 SHA-256 对照。"
+        ),
+        "verification_note": (
+            "本清单只记录本次受控执行的入口、来源哈希与运行时信息；"
+            "不声称已在独立环境重跑，也不替代人工复现。"
+        ),
+    }
+    with (root / REPRODUCIBILITY_NAME).open("w", encoding="utf-8") as handle:
+        json.dump(reproducibility, handle, ensure_ascii=False, indent=2)
     return output
 
 

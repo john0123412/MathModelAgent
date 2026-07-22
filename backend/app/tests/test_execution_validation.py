@@ -13,6 +13,7 @@ from nbformat import v4 as nbf
 
 from app.tools.execution_validation import (
     MANIFEST_NAME,
+    REPRODUCIBILITY_NAME,
     record_execution_evidence,
     validate_execution_artifacts,
     write_frozen_results_from_execution_validation,
@@ -98,6 +99,52 @@ def _write_manifest(
 
 
 class TestExecutionValidation(unittest.TestCase):
+    def test_recorded_infeasible_evidence_returns_failed_constraint_details(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            source_path = os.path.join(work_dir, "ques2_constraint_check.csv")
+            with open(source_path, "w", encoding="utf-8") as handle:
+                handle.write("id,actual,target\\nmax_pressure,177.99,150.0\\n")
+
+            recorded = record_execution_evidence(
+                work_dir,
+                subtask_id="ques2",
+                constraints=[
+                    {
+                        "id": "max_pressure",
+                        "actual": 177.99,
+                        "comparison": "lte",
+                        "target": 150.0,
+                        "unit": "MPa",
+                        "source_path": "ques2_constraint_check.csv",
+                    }
+                ],
+                metrics=[
+                    {
+                        "id": "pipe_pressure_peak",
+                        "label": "油管压力最大值",
+                        "value": 177.99,
+                        "unit": "MPa",
+                        "explanation": "由已执行的压力时序数组取得最大值。",
+                        "source_path": "ques2_constraint_check.csv",
+                    }
+                ],
+            )
+
+            self.assertTrue(recorded["ok"])
+            self.assertFalse(recorded["feasible"])
+            self.assertEqual(
+                recorded["failed_constraints"],
+                [{
+                    "id": "max_pressure",
+                    "actual": 177.99,
+                    "comparison": "lte",
+                    "target": 150.0,
+                    "tolerance": None,
+                    "lower": None,
+                    "upper": None,
+                }],
+            )
+
     def test_explicit_incident_angles_must_survive_parameter_audit(self):
         problem = (
             "附件1和附件2是入射角分别为10°和15°时针对同一块晶圆片的测试结果。"
@@ -374,6 +421,188 @@ class TestExecutionValidation(unittest.TestCase):
                 "ques2_fit_results.json",
             )
 
+    def test_recorder_binds_plan_constraints_to_exact_acceptance_table_values(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(os.path.join(work_dir, "ques1_results.json"), "w", encoding="utf-8") as handle:
+                json.dump({"objective": 10.0}, handle)
+            with open(os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {"model_plan": {"subtasks": {"ques1": {"acceptance_metrics": [
+                        {"key": "pressure_deviation_rms", "comparator": "le", "target": 3.0}
+                    ]}}}},
+                    handle,
+                )
+            with open(
+                os.path.join(work_dir, "ques1_acceptance_metrics.csv"),
+                "w", encoding="utf-8-sig",
+            ) as handle:
+                handle.write(
+                    "指标ID,指标名称,数值,单位,目标值,是否达标\n"
+                    "pressure_deviation_rms,稳态压力均方根误差,2.586323599964039,MPa,≤3.0,是\n"
+                )
+
+            recorded = record_execution_evidence(
+                work_dir,
+                subtask_id="ques1",
+                constraints=[
+                    {
+                        "id": "physical_bound",
+                        "actual": 10.0,
+                        "comparison": "lte",
+                        "target": 10.0,
+                        "source_path": "ques1_results.json",
+                    }
+                ],
+                metrics=[
+                    {
+                        "id": "objective",
+                        "label": "目标值",
+                        "value": 10.0,
+                        "unit": "无量纲",
+                        "explanation": "由本次实际计算结果读取。",
+                        "source_path": "ques1_results.json",
+                    }
+                ],
+                figures=[],
+            )
+
+            self.assertTrue(recorded["ok"], recorded)
+            self.assertTrue(recorded["feasible"])
+            with open(os.path.join(work_dir, MANIFEST_NAME), encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            bound = next(
+                item for item in manifest["subtasks"][0]["constraints"]
+                if item["id"] == "pressure_deviation_rms"
+            )
+            self.assertEqual(bound["actual"], 2.586323599964039)
+            self.assertEqual(bound["source"]["path"], "ques1_acceptance_metrics.csv")
+
+    def test_recorder_rejects_internally_inconsistent_acceptance_tables(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(os.path.join(work_dir, "ques1_results.json"), "w", encoding="utf-8") as handle:
+                json.dump({"objective": 10.0}, handle)
+            with open(os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {"model_plan": {"subtasks": {"ques1": {"acceptance_metrics": [
+                        {"key": "pressure_deviation_rms", "comparator": "le", "target": 1.0}
+                    ]}}}},
+                    handle,
+                )
+            with open(
+                os.path.join(work_dir, "ques1_acceptance_metrics.csv"),
+                "w", encoding="utf-8-sig",
+            ) as handle:
+                handle.write(
+                    "指标ID,指标名称,数值,单位,目标值,是否达标\n"
+                    "pressure_deviation_rms,稳态压力均方根误差,2.586323599964039,MPa,≤1.0,是\n"
+                )
+            with open(
+                os.path.join(work_dir, "ques1_constraint_check.csv"),
+                "w", encoding="utf-8-sig",
+            ) as handle:
+                handle.write(
+                    "约束ID,约束名称,左端值,比较,右端值,状态\n"
+                    "C6,pressure_deviation_rms约束,2.586323599964039,≤,1.0,满足\n"
+                )
+
+            recorded = record_execution_evidence(
+                work_dir,
+                subtask_id="ques1",
+                constraints=[
+                    {
+                        "id": "physical_bound",
+                        "actual": 10.0,
+                        "comparison": "lte",
+                        "target": 10.0,
+                        "source_path": "ques1_results.json",
+                    }
+                ],
+                metrics=[
+                    {
+                        "id": "objective",
+                        "label": "目标值",
+                        "value": 10.0,
+                        "unit": "无量纲",
+                        "explanation": "由本次实际计算结果读取。",
+                        "source_path": "ques1_results.json",
+                    }
+                ],
+                figures=[],
+            )
+
+            self.assertFalse(recorded["ok"])
+            errors = " ".join(recorded["errors"])
+            self.assertIn("acceptance_metrics.csv", errors)
+            self.assertIn("constraint_check.csv", errors)
+            self.assertIn("却标为", errors)
+            self.assertFalse(os.path.exists(os.path.join(work_dir, MANIFEST_NAME)))
+
+    def test_recorder_binds_scenario_rows_using_the_worst_plan_value(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(os.path.join(work_dir, "ques1_results.json"), "w", encoding="utf-8") as handle:
+                json.dump({"objective": 10.0}, handle)
+            with open(os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {"model_plan": {"subtasks": {"ques1": {"acceptance_metrics": [
+                        {"key": "pressure_stability_index", "comparator": "le", "target": 5.0}
+                    ]}}}},
+                    handle,
+                )
+            with open(
+                os.path.join(work_dir, "ques1_acceptance_metrics.csv"),
+                "w", encoding="utf-8-sig",
+            ) as handle:
+                handle.write(
+                    "指标ID,指标名称,数值,单位,目标值,是否达标\n"
+                    "pressure_stability_100MPa,压力稳定度,2.4,MPa,5.0,True\n"
+                    "pressure_stability_150MPa,压力稳定度,10.5,MPa,5.0,False\n"
+                )
+
+            recorded = record_execution_evidence(
+                work_dir,
+                subtask_id="ques1",
+                constraints=[
+                    {
+                        "id": "physical_bound",
+                        "actual": 10.0,
+                        "comparison": "lte",
+                        "target": 10.0,
+                        "source_path": "ques1_results.json",
+                    }
+                ],
+                metrics=[
+                    {
+                        "id": "objective",
+                        "label": "目标值",
+                        "value": 10.0,
+                        "unit": "无量纲",
+                        "explanation": "由本次实际计算结果读取。",
+                        "source_path": "ques1_results.json",
+                    },
+                    {
+                        "id": "pressure_stability_150MPa",
+                        "label": "150MPa 压力稳定度",
+                        "value": 999.0,
+                        "unit": "MPa",
+                        "explanation": "由情景仿真表读取。",
+                        "source_path": "ques1_results.json",
+                    }
+                ],
+                figures=[],
+            )
+
+            self.assertTrue(recorded["ok"], recorded)
+            self.assertFalse(recorded["feasible"])
+            self.assertEqual(recorded["constraint_passed"], [True, False])
+            with open(os.path.join(work_dir, MANIFEST_NAME), encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            scenario_metric = next(
+                item for item in manifest["subtasks"][0]["metrics"]
+                if item["id"] == "pressure_stability_150MPa"
+            )
+            self.assertEqual(scenario_metric["value"], 10.5)
+            self.assertEqual(scenario_metric["source"]["path"], "ques1_acceptance_metrics.csv")
+
     def test_recorder_requires_metric_and_constraint_values_in_bound_source(self):
         with tempfile.TemporaryDirectory() as work_dir:
             result_path = os.path.join(work_dir, "ques2_fit_results.json")
@@ -501,6 +730,9 @@ class TestExecutionValidation(unittest.TestCase):
                 os.path.exists(os.path.join(work_dir, "execution_validation_report.json"))
             )
             frozen_path = write_frozen_results_from_execution_validation(work_dir)
+            self.assertTrue(
+                os.path.exists(os.path.join(work_dir, REPRODUCIBILITY_NAME))
+            )
             with open(frozen_path, encoding="utf-8") as handle:
                 frozen = json.load(handle)
             self.assertEqual(frozen["schema"], "mathmodel.result-freeze")
@@ -686,6 +918,19 @@ class TestExecutionValidation(unittest.TestCase):
             self.assertEqual(report["status"], "FAIL")
             check = next(item for item in report["checks"] if item["id"] == "notebook_errors")
             self.assertFalse(check["passed"])
+
+    def test_formal_subtask_without_manifest_writes_fail_report(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_notebook(work_dir)
+
+            report = write_execution_validation_report(
+                work_dir, required_subtasks=["ques1"]
+            )
+
+            self.assertEqual(report["status"], "FAIL")
+            self.assertFalse(
+                next(item for item in report["checks"] if item["id"] == "execution_manifest")["passed"]
+            )
 
     def test_historical_notebook_error_needs_hashed_manifest_evidence(self):
         with tempfile.TemporaryDirectory() as work_dir:
@@ -1016,6 +1261,141 @@ class TestExecutionValidation(unittest.TestCase):
             recorded = validate_execution_artifacts(work_dir, required_subtasks=["ques3"])
             check = next(item for item in recorded["checks"] if item["id"] == "ques3.identifiability_evidence")
             self.assertTrue(check["passed"], check)
+
+    def test_declared_diagnostic_profile_needs_matching_execution_metric(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_notebook(work_dir)
+            _write_manifest(work_dir)
+            with open(os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "model_plan": {
+                            "subtasks": {
+                                "ques3": {
+                                    "diagnostic_profile": "optimization",
+                                    "diagnostic_requirements": ["记录求解器状态和可行性。"],
+                                }
+                            }
+                        }
+                    },
+                    handle,
+                    ensure_ascii=False,
+                )
+
+            missing = validate_execution_artifacts(work_dir, required_subtasks=["ques3"])
+            check = next(item for item in missing["checks"] if item["id"] == "ques3.diagnostic_profile")
+            self.assertFalse(check["passed"])
+
+            manifest_path = os.path.join(work_dir, MANIFEST_NAME)
+            with open(manifest_path, encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            manifest["subtasks"][0]["metrics"].extend(
+                [
+                    {
+                        "id": "solver_status",
+                        "label": "求解器状态",
+                        "value": 1.0,
+                        "unit": "1=optimal",
+                        "explanation": "线性规划求解器返回 optimal。",
+                    },
+                    {
+                        "id": "feasibility_check",
+                        "label": "约束可行性",
+                        "value": 1.0,
+                        "unit": "1=可行",
+                        "explanation": "求解器返回 optimal 后独立检查约束可行性。",
+                    },
+                ]
+            )
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                json.dump(manifest, handle, ensure_ascii=False)
+
+            recorded = validate_execution_artifacts(work_dir, required_subtasks=["ques3"])
+            check = next(item for item in recorded["checks"] if item["id"] == "ques3.diagnostic_profile")
+            self.assertTrue(check["passed"], check)
+
+    def test_recording_simulation_evidence_requires_each_explicit_diagnostic(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            source_path = os.path.join(work_dir, "ques3_results.csv")
+            with open(source_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "id,value\nmean_pressure,100.0\nrelief_valve_activity,1.0\n"
+                    "mass_balance_residual,0.001\n"
+                )
+            with open(os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "model_plan": {
+                            "subtasks": {
+                                "ques3": {
+                                    "diagnostic_profile": "simulation",
+                                    "diagnostic_requirements": [
+                                        "验证减压阀仅在阈值上方开启。",
+                                        "验证系统总质量守恒并记录残差。",
+                                    ],
+                                }
+                            }
+                        }
+                    },
+                    handle,
+                    ensure_ascii=False,
+                )
+
+            missing = record_execution_evidence(
+                work_dir,
+                subtask_id="ques3",
+                constraints=[{
+                    "id": "pressure_recorded",
+                    "actual": 100.0,
+                    "comparison": "abs_diff_lte",
+                    "target": 100.0,
+                    "tolerance": 0.0,
+                    "source_path": "ques3_results.csv",
+                }],
+                metrics=[{
+                    "id": "mean_pressure",
+                    "label": "油管平均压力",
+                    "value": 100.0,
+                    "unit": "MPa",
+                    "explanation": "由压力时序数组计算。",
+                    "source_path": "ques3_results.csv",
+                }],
+            )
+            self.assertFalse(missing["ok"])
+            self.assertTrue(any("质量守恒" in error for error in missing["errors"]))
+            self.assertTrue(any("减压阀" in error for error in missing["errors"]))
+
+            recorded = record_execution_evidence(
+                work_dir,
+                subtask_id="ques3",
+                constraints=[{
+                    "id": "pressure_recorded",
+                    "actual": 100.0,
+                    "comparison": "abs_diff_lte",
+                    "target": 100.0,
+                    "tolerance": 0.0,
+                    "source_path": "ques3_results.csv",
+                }],
+                metrics=[
+                    {
+                        "id": "relief_valve_activity",
+                        "label": "减压阀开启核验",
+                        "value": 1.0,
+                        "unit": "1=已核验",
+                        "explanation": "减压阀仅在压力超过阈值时开启。",
+                        "source_path": "ques3_results.csv",
+                    },
+                    {
+                        "id": "mass_balance_residual",
+                        "label": "质量守恒残差",
+                        "value": 0.001,
+                        "unit": "mm³",
+                        "explanation": "由真实时序数组积分得到的单周期质量守恒残差。",
+                        "source_path": "ques3_results.csv",
+                    },
+                ],
+            )
+            self.assertTrue(recorded["ok"], recorded)
 
 
 if __name__ == "__main__":

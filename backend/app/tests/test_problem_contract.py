@@ -612,6 +612,26 @@ class TestStructuredModelPlan(unittest.TestCase):
         )
         self.assertTrue(supported.valid, supported.model_dump_json())
 
+    def test_vague_problem_wording_cannot_be_recast_as_numeric_quality_threshold(self):
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(
+                key="transition_time_error",
+                label="过渡时间误差",
+                comparator="le",
+                target=0.1,
+                unit="s",
+                description="阈值 0.1s 基于题面“约 2s”的模糊表述，取为目标时间的 5%。",
+            )
+        ]
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertFalse(result.valid)
+        self.assertIn("transition_time_error", " ".join(result.violations))
+
     def test_common_sense_is_not_a_physical_plausibility_threshold_basis(self):
         plan = self._linear_plan()
         plan.subtasks["ques1"].acceptance_metrics = [

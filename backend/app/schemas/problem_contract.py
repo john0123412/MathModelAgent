@@ -148,8 +148,8 @@ _BOOLEAN_OUTCOME_METRIC = re.compile(
 _EMPIRICAL_QUALITY_METRIC = re.compile(
     r"(?:rmse|mae|mse|r[_ -]?(?:2|squared)|fit[_ -]?(?:r2|error|quality|score)"
     r"|fitting[_ -]?(?:error|quality|score)|error[_ -]?(?:bound|rate)"
-    r"|deviation|accuracy|plausibility|p[_ -]?value|significance"
-    r"|均方根|拟合(?:误差|优度|精度)|误差(?:界|率|上限)|偏差|准确率|精度"
+    r"|deviation|accuracy|plausibility|p[_ -]?value|significance|time[_ -]?error"
+    r"|均方根|拟合(?:误差|优度|精度)|误差(?:界|率|上限)|时间误差|偏差|准确率|精度"
     r"|合理性|p值|显著性)",
     re.IGNORECASE,
 )
@@ -181,6 +181,11 @@ _THRESHOLD_BASIS = re.compile(
     rf".{{0,24}}{_THRESHOLD_TERM}?"
     rf"|{_THRESHOLD_SOURCE}.{{0,32}}(?:给出|规定|确定|导出|作为|specif|determin|derive)"
     rf".{{0,24}}{_THRESHOLD_TERM})",
+    re.IGNORECASE,
+)
+_VAGUE_PROMPT_AS_NUMERIC_BASIS = re.compile(
+    r"(?:题面|题设).{0,48}(?:约|左右|尽可能|定性|模糊).{0,96}"
+    r"(?:阈值|容许|允许|误差|偏差|[0-9]+\s*%)",
     re.IGNORECASE,
 )
 
@@ -550,7 +555,10 @@ def _unsupported_empirical_thresholds(plan: object) -> list[str]:
             and target == 0
         ):
             continue
-        if _THRESHOLD_BASIS.search(description):
+        # “约”“左右”“尽可能”等题面语言说明需要报告目标和结果，不能反推
+        # 一个未经题面给出的 5%/0.1 秒硬质量门槛。否则模型会把自己的
+        # 假设变成必须通过的 acceptance contract，造成无解或伪造证据。
+        if _THRESHOLD_BASIS.search(description) and not _VAGUE_PROMPT_AS_NUMERIC_BASIS.search(description):
             continue
         issues.append(f"{getattr(metric, 'key', 'unknown')} {comparator} {target:g}")
     return issues

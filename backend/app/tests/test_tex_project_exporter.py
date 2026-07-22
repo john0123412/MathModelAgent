@@ -92,6 +92,36 @@ class TestTexProjectExporterAssetHelpers(unittest.TestCase):
                 os.path.exists(os.path.join(latex_project_dir, "figures", "figure_01.png"))
             )
 
+    def test_copy_file_falls_back_when_bind_mount_rejects_copy2_metadata(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            src = os.path.join(work_dir, "source.png")
+            dst = os.path.join(work_dir, "latex_project", "figures", "target.png")
+            with open(src, "wb") as handle:
+                handle.write(b"verified-image-bytes")
+
+            with mock.patch(
+                "app.tools.tex_project_exporter.shutil.copy2",
+                side_effect=PermissionError("metadata operation not permitted"),
+            ):
+                copied = tex_project_exporter._copy_file_once(src, dst)
+
+            self.assertTrue(copied)
+            with open(dst, "rb") as handle:
+                self.assertEqual(handle.read(), b"verified-image-bytes")
+
+    def test_stale_latex_build_files_are_removed_without_touching_sources(self):
+        with tempfile.TemporaryDirectory() as latex_project_dir:
+            for filename in ("main.aux", "main.log", "main.xdv", "main.tex"):
+                with open(os.path.join(latex_project_dir, filename), "wb") as handle:
+                    handle.write(filename.encode("ascii"))
+
+            tex_project_exporter._clear_stale_latex_build_files(latex_project_dir)
+
+            self.assertFalse(os.path.exists(os.path.join(latex_project_dir, "main.aux")))
+            self.assertFalse(os.path.exists(os.path.join(latex_project_dir, "main.log")))
+            self.assertFalse(os.path.exists(os.path.join(latex_project_dir, "main.xdv")))
+            self.assertTrue(os.path.exists(os.path.join(latex_project_dir, "main.tex")))
+
 
 @unittest.skipUnless(shutil.which("pandoc"), "本机未安装 pandoc，跳过真实转换用例")
 class TestTexProjectExporterHappyPath(unittest.TestCase):
@@ -242,7 +272,7 @@ class TestTexProjectExporterCumcm2025Profile(unittest.TestCase):
                 main_tex_content,
             )
 
-    def test_cumcm2026_profile_uses_gmcmthesis_without_toc(self):
+    def test_cumcm2026_profile_uses_coverless_ctexart_without_toc(self):
         real_which = shutil.which
 
         def which_side_effect(cmd, *args, **kwargs):
@@ -265,12 +295,16 @@ class TestTexProjectExporterCumcm2025Profile(unittest.TestCase):
 
             self.assertTrue(result["success"], msg=result)
             self.assertEqual(result["export_profile"], "cumcm2026")
-            self.assertEqual(result["template_key"], "zh/cumcm2026-gmcmthesis")
+            self.assertEqual(result["template_key"], "zh/cumcm2026-ctexart")
 
             main_tex_path = os.path.join(work_dir, "latex_project", "main.tex")
             with open(main_tex_path, "r", encoding="utf-8") as f:
                 main_tex_content = f.read()
-            self.assertIn(r"\documentclass[bwprint]{gmcmthesis}", main_tex_content)
+            self.assertIn(r"\documentclass[a4paper,12pt]{ctexart}", main_tex_content)
+            self.assertIn(
+                r"\usepackage[a4paper,left=31.7mm,right=31.7mm,top=30mm,bottom=28mm]{geometry}",
+                main_tex_content,
+            )
             self.assertIn(
                 r"\graphicspath{{./}{../}{sections/}{figures/}}",
                 main_tex_content,
@@ -278,7 +312,12 @@ class TestTexProjectExporterCumcm2025Profile(unittest.TestCase):
             self.assertIn(r"\providecommand{\pandocbounded}[1]{#1}", main_tex_content)
             self.assertIn(r"\providecommand{\passthrough}[1]{#1}", main_tex_content)
             self.assertIn(r"basicstyle=\ttfamily\footnotesize", main_tex_content)
+            self.assertIn(r"\usepackage{array}", main_tex_content)
+            self.assertIn(r"\usepackage{calc}", main_tex_content)
             self.assertNotIn(r"\tableofcontents", main_tex_content)
+            self.assertNotIn(r"\maketitle", main_tex_content)
+            self.assertNotIn("gmcmthesis", main_tex_content)
+            self.assertNotIn(r"\baominghao", main_tex_content)
 
     def test_referenced_root_images_are_copied_into_latex_project(self):
         real_which = shutil.which

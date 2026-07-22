@@ -6,6 +6,7 @@ from app.config.setting import settings
 from app.core.llm.llm import LLM
 from app.core.llm.providers.openai_chat import OpenAIChatProvider
 from app.core.llm.providers.openai_responses import OpenAIResponsesProvider
+from app.core.llm.types import StandardResponse, Usage
 
 
 class ProviderTimeoutTest(unittest.IsolatedAsyncioTestCase):
@@ -87,6 +88,45 @@ class ProviderTimeoutTest(unittest.IsolatedAsyncioTestCase):
                 await model.chat(max_retries=1)
 
         self.assertTrue(provider.cancelled.is_set())
+
+    async def test_llm_chat_retries_transient_dns_validation_failure(self):
+        class SuccessfulProvider:
+            def __init__(self):
+                self.calls = 0
+
+            async def call(self, **_kwargs):
+                self.calls += 1
+                return StandardResponse(content="ok", usage=Usage())
+
+        model = LLM(api_key="test-key", model="test-model")
+        provider = SuccessfulProvider()
+        model.provider = provider
+        with (
+            mock.patch.object(
+                model,
+                "_validate_config",
+                side_effect=[ValueError("LLM Base URL 主机无法解析"), None],
+            ) as validate,
+            mock.patch.object(model, "send_message", new=mock.AsyncMock()),
+            mock.patch("app.core.llm.llm.asyncio.sleep", new=mock.AsyncMock()),
+        ):
+            response = await model.chat(max_retries=2, retry_delay=0)
+
+        self.assertEqual(response.content, "ok")
+        self.assertEqual(validate.call_count, 2)
+        self.assertEqual(provider.calls, 1)
+
+    async def test_llm_chat_does_not_retry_invalid_configuration(self):
+        model = LLM(api_key="test-key", model="test-model")
+        with mock.patch.object(
+            model,
+            "_validate_config",
+            side_effect=ValueError("ModelerAgent 未配置 API Key"),
+        ) as validate:
+            with self.assertRaisesRegex(ValueError, "未配置 API Key"):
+                await model.chat(max_retries=3, retry_delay=0)
+
+        self.assertEqual(validate.call_count, 1)
 
 
 if __name__ == "__main__":

@@ -80,6 +80,55 @@ def _formal_subtask_id(subtask_title: str) -> str | None:
     return matched.group(1) if matched else None
 
 
+def _formal_evidence_checklist(work_dir: str, subtask_id: str | None) -> str:
+    """Render the immutable ModelPlan contract beside each formal Coder turn."""
+    if not subtask_id:
+        return ""
+    try:
+        payload = json.loads((Path(work_dir) / "modeler_plan.json").read_text(encoding="utf-8"))
+        subtasks = payload.get("model_plan", {}).get("subtasks", {})
+        plan = subtasks.get(subtask_id, {}) if isinstance(subtasks, dict) else {}
+        metrics = plan.get("acceptance_metrics", []) if isinstance(plan, dict) else []
+        diagnostic_profile = plan.get("diagnostic_profile") if isinstance(plan, dict) else None
+        diagnostic_requirements = plan.get("diagnostic_requirements", []) if isinstance(plan, dict) else []
+    except (OSError, ValueError, TypeError):
+        return ""
+    if not isinstance(metrics, list):
+        metrics = []
+    lines = []
+    for metric in metrics:
+        if not isinstance(metric, dict):
+            continue
+        key = metric.get("key")
+        comparator = metric.get("comparator")
+        target = metric.get("target")
+        if isinstance(key, str) and isinstance(comparator, str):
+            lines.append(f"- `{key}`: `{comparator} {target}`")
+    sections = []
+    if lines:
+        sections.append(
+            "【本题不可省略的 ModelPlan 约束清单】\\n"
+            + "\\n".join(lines)
+            + "\\n每一项都必须写入本题新建/更新的数值约束表，并作为 "
+            "record_execution_evidence 的 constraints 提交；缺项会直接失败。"
+        )
+    if diagnostic_profile and diagnostic_profile != "not_applicable":
+        requirements = [
+            str(item).strip()
+            for item in diagnostic_requirements
+            if isinstance(item, str) and item.strip()
+        ]
+        sections.append(
+            "【本题不可省略的诊断证据】\\n"
+            f"诊断类型：`{diagnostic_profile}`。"
+            + ("\\n计划要求：\\n" + "\\n".join(f"- {item}" for item in requirements) if requirements else "")
+            + "\\n每一项计划要求都要有至少一个 source-backed metric；指标 id、标签或说明必须直接包含相应关键词。"
+            "例如质量守恒/平衡要求必须提交由时序数组算出的 residual 或 balance metric；"
+            "减压阀、双喷嘴和可行性要求也必须各自有对应指标。只写 `check=1` 或仅在 CSV 中提及而不提交 metric 会被拒绝。"
+        )
+    return "\\n\\n".join(sections)
+
+
 def _snapshot_task_files(work_dir: str) -> dict[str, tuple[int, int]]:
     """Return cheap fingerprints for task-local files created by this Coder turn."""
     root = Path(work_dir).resolve()
@@ -232,6 +281,7 @@ class CoderAgent(Agent):
             context_window,
             cancel_event=cancel_event,
             user_input_provider=user_input_provider,
+            guidance_target="coder",
         )
         self.work_dir = work_dir
         self.max_chat_turns = max_chat_turns
@@ -290,16 +340,19 @@ class CoderAgent(Agent):
                 }
             )
 
+        formal_subtask_id = _formal_subtask_id(subtask_title)
         # 添加 sub_task
         logger.info(f"添加子任务提示: chars={len(prompt)}")
         await self.append_chat_history({"role": "user", "content": prompt})
+        evidence_checklist = _formal_evidence_checklist(self.work_dir, formal_subtask_id)
+        if evidence_checklist:
+            await self.append_chat_history({"role": "user", "content": evidence_checklist})
 
         retry_count = 0
         last_error_message = ""
         consecutive_final_outputs = 0
         successful_tool_calls = 0
         execution_error_occurred = False
-        formal_subtask_id = _formal_subtask_id(subtask_title)
         evidence_commit_required = False
         evidence_changed_paths: set[str] = set()
         evidence_failure_count = 0
@@ -513,21 +566,57 @@ class CoderAgent(Agent):
                                 "content": json.dumps(result, ensure_ascii=False),
                             }
                         )
+                        evidence_accepted = (
+                            result.get("ok") is True and result.get("feasible") is True
+                        )
+                        if result.get("ok") is True and result.get("feasible") is False:
+                            # The manifest is intentionally retained as a failed
+                            # audit record, but the Coder must not treat it as a
+                            # completed question.  Route it through the focused
+                            # repair path with an explicit, actionable error.
+                            failed_constraints = result.get("failed_constraints", [])
+                            failure_details = []
+                            for constraint in failed_constraints:
+                                if not isinstance(constraint, dict):
+                                    continue
+                                constraint_id = str(constraint.get("id", "unknown"))
+                                actual = constraint.get("actual")
+                                comparison = constraint.get("comparison")
+                                target = constraint.get("target")
+                                lower = constraint.get("lower")
+                                upper = constraint.get("upper")
+                                if target is not None:
+                                    bound = f"{comparison} {target}"
+                                elif lower is not None or upper is not None:
+                                    bound = f"between [{lower}, {upper}]"
+                                else:
+                                    bound = str(comparison)
+                                failure_details.append(
+                                    f"{constraint_id}: actual={actual}, required {bound}"
+                                )
+                            result = {
+                                **result,
+                                "ok": False,
+                                "errors": [
+                                    "执行证据已记录，但以下硬约束未满足："
+                                    + ("；".join(failure_details) if failure_details else "请检查约束表的实际数值。"),
+                                ],
+                            }
                         await redis_manager.publish_message(
                             self.task_id,
                             SystemMessage(
                                 content=(
                                     "代码手已记录可验证执行证据"
-                                    if result.get("ok")
+                                    if evidence_accepted
                                     else "代码手提交的执行证据不完整，请按错误信息修正"
                                 ),
-                                type="error" if not result.get("ok") else "info",
+                                type="error" if not evidence_accepted else "info",
                             ),
                         )
                         # The LLM receives the exact server-generated outcome and
                         # can correct only the failing source/record on its next
                         # turn.  This call never counts as code execution itself.
-                        if result.get("ok"):
+                        if evidence_accepted:
                             # A formal Coder turn owns one question.  Once its
                             # backend-owned evidence is persisted, stop this
                             # turn before a later model response can overwrite

@@ -23,6 +23,10 @@ class TaskCheckpoint(BaseModel):
     comp_template: str
     format_output: str
     export_profile: str = "default"
+    require_model_review: bool = False
+    # 审查者可退回 ModelPlan 一次，以给出明确、可审计的建模修订意见；
+    # 它不是无限重试预算，超过一次必须由人工另行决定如何处置。
+    modeling_review_revisions: int = 0
     questions: dict[str, str | int]
     ques_count: int
     modeler_response: dict  # ModelerToCoder.model_dump()
@@ -49,6 +53,12 @@ class TaskCheckpoint(BaseModel):
     # 自动重试预算，且会保留批准理由供任务审计。
     manual_recovery_attempts: int = 0
     last_manual_recovery: dict = Field(default_factory=dict)
+    # 执行证据 PASS 不等于数学/物理质量合格。冻结结果在进入 Writer 前必须
+    # 经过可审计的 Codex/人工复核；审批只绑定到当前结果文件哈希生成的 review_id。
+    quality_review_status: str = "not_run"
+    quality_review_id: str = ""
+    quality_review_repairs: int = 0
+    quality_review_history: list[dict] = Field(default_factory=list)
 
 
 class CheckpointManager:
@@ -180,6 +190,87 @@ class CheckpointManager:
         self._checkpoint.updated_at = datetime.datetime.now().isoformat()
         self.save(self._checkpoint)
 
+    def record_quality_review_pending(self, report: dict) -> None:
+        """Pause before Writer until the current frozen evidence is reviewed."""
+        if self._checkpoint is None:
+            raise RuntimeError("CheckpointManager 尚未初始化")
+        review_id = str(report.get("review_id", "")).strip()
+        if not review_id:
+            raise RuntimeError("质量复核报告缺少 review_id")
+        self._checkpoint.workflow_state = "waiting_quality_review"
+        self._checkpoint.quality_review_status = "pending"
+        self._checkpoint.quality_review_id = review_id
+        self._checkpoint.updated_at = datetime.datetime.now().isoformat()
+        self.save(self._checkpoint)
+
+    def quality_review_is_approved(self, review_id: str) -> bool:
+        """Return whether approval is bound to this exact frozen-result review."""
+        return bool(
+            self._checkpoint is not None
+            and self._checkpoint.quality_review_status == "approved"
+            and self._checkpoint.quality_review_id == review_id
+        )
+
+    def approve_quality_review(self, review_id: str, comment: str) -> None:
+        """Approve one exact review packet with a mandatory audit rationale."""
+        if self._checkpoint is None:
+            raise RuntimeError("CheckpointManager 尚未初始化")
+        if self._checkpoint.workflow_state != "waiting_quality_review":
+            raise RuntimeError("当前任务不在执行质量复核状态")
+        if self._checkpoint.quality_review_id != review_id:
+            raise RuntimeError("结果文件已变化，请重新读取最新质量复核报告")
+        rationale = comment.strip()
+        if not rationale:
+            raise RuntimeError("质量复核放行理由不能为空")
+        self._checkpoint.quality_review_status = "approved"
+        self._checkpoint.quality_review_history.append(
+            {
+                "action": "approved",
+                "review_id": review_id,
+                "comment": rationale[:2000],
+                "recorded_at": datetime.datetime.now().isoformat(),
+            }
+        )
+        self._checkpoint.updated_at = datetime.datetime.now().isoformat()
+        self.save(self._checkpoint)
+
+    def request_quality_repair(
+        self, review_id: str, failed_subtasks: list[str], comment: str
+    ) -> None:
+        """Invalidate selected code hand-offs for one reviewer-directed repair."""
+        if self._checkpoint is None:
+            raise RuntimeError("CheckpointManager 尚未初始化")
+        if self._checkpoint.workflow_state != "waiting_quality_review":
+            raise RuntimeError("当前任务不在执行质量复核状态")
+        if self._checkpoint.quality_review_id != review_id:
+            raise RuntimeError("结果文件已变化，请重新读取最新质量复核报告")
+        if self._checkpoint.quality_review_repairs >= 1:
+            raise RuntimeError("本任务已使用一次质量复核定向返修，不再自动返修")
+        subtasks = sorted(set(failed_subtasks))
+        if not subtasks:
+            raise RuntimeError("质量返修至少需要一个子题")
+        rationale = comment.strip()
+        if not rationale:
+            raise RuntimeError("质量返修意见不能为空")
+        self._checkpoint.quality_review_repairs += 1
+        self._checkpoint.quality_review_status = "repair_requested"
+        self._checkpoint.workflow_state = "quality_repair"
+        for key in subtasks:
+            self._checkpoint.solution_coder_responses.pop(key, None)
+        # 冻结事实变化后所有 Writer 章节都必须重建，不能复用旧论文文字。
+        self._checkpoint.completed_phases.clear()
+        self._checkpoint.quality_review_history.append(
+            {
+                "action": "repair_requested",
+                "review_id": review_id,
+                "failed_subtasks": subtasks,
+                "comment": rationale[:2000],
+                "recorded_at": datetime.datetime.now().isoformat(),
+            }
+        )
+        self._checkpoint.updated_at = datetime.datetime.now().isoformat()
+        self.save(self._checkpoint)
+
     def repair_attempts_exhausted(self) -> bool:
         """Return whether two real final-validation failures were recorded."""
         return bool(
@@ -253,6 +344,18 @@ class CheckpointManager:
         self._checkpoint.has_variable_snapshot = False
         self._checkpoint.updated_at = datetime.datetime.now().isoformat()
         self.save(self._checkpoint)
+
+    def record_modeling_revision_request(self) -> int:
+        """Record one reviewer-requested ModelPlan revision with a hard cap."""
+        if self._checkpoint is None:
+            raise RuntimeError("CheckpointManager 尚未初始化")
+        if self._checkpoint.modeling_review_revisions >= 1:
+            raise RuntimeError("本任务已使用一次建模方案退回修订，不再自动重建模")
+        self._checkpoint.modeling_review_revisions += 1
+        self._checkpoint.workflow_state = "modeling_revision"
+        self._checkpoint.updated_at = datetime.datetime.now().isoformat()
+        self.save(self._checkpoint)
+        return self._checkpoint.modeling_review_revisions
 
     def mark_phase_completed(
         self,

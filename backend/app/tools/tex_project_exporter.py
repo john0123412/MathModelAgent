@@ -152,21 +152,70 @@ _CUMCM2025_MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 \end{document}
 """
 
-# Current CUMCM 2026 sidecar main template is derived from the 2025 template and
-# mainly removes the table of contents for the electronic-paper flow. If an
-# official 2026 LaTeX template is released, replace this with the official
-# structure while preserving the % MMA_SECTION_INPUTS placeholder so generated
-# sections/*.tex files are still input into main.tex.
-_CUMCM2026_MAIN_TEX_TEMPLATE = _CUMCM2025_MAIN_TEX_TEMPLATE.replace(
-    "CUMCM 2025 LaTeX sidecar",
-    "CUMCM 2026 LaTeX sidecar",
-).replace(
-    "摘要/关键词位置、目录、附录和参考文献。",
-    "摘要/关键词位置、附录和参考文献；2026 修订稿电子版不生成目录。",
-).replace(
-    "\\maketitle\n\\tableofcontents\n\n% MMA_SECTION_INPUTS",
-    "\\maketitle\n\n% MMA_SECTION_INPUTS",
-)
+# The official 2026 specification requires the electronic paper to start with
+# the abstract and excludes the commitment letter and numbered cover page.  The
+# legacy 2025 gmcmthesis class cannot be used here because its \maketitle
+# unconditionally emits those cover-style identity fields.  This deliberately
+# minimal ctexart shell lets the generated Markdown supply the title, abstract
+# and keywords on page one, without adding a cover or a table of contents.
+# If an official 2026 LaTeX package is released, replace this structure while
+# preserving % MMA_SECTION_INPUTS so generated sections/*.tex remain usable.
+_CUMCM2026_MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
+% =============================================================================
+%  CUMCM 2026 LaTeX sidecar（由 MathModelAgent 自动生成）
+%  对齐《全国大学生数学建模竞赛论文格式规范（2026年修订稿）》电子版要求：
+%  不生成承诺书、编号专用页、身份封面或目录；首个输入内容应为题目、摘要和关键词。
+%  正文由 pandoc 从 res.md 转为 sections/*.tex，本文件不重写论文内容。
+% =============================================================================
+\documentclass[a4paper,12pt]{ctexart}
+
+% 官方规范要求各边页边距至少 2.5cm；此处沿用主 PDF 的保守边距。
+\usepackage[a4paper,left=31.7mm,right=31.7mm,top=30mm,bottom=28mm]{geometry}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{calc}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{hyperref}
+\usepackage{longtable}
+\usepackage{listings}
+\lstset{
+  breaklines=true,
+  breakatwhitespace=false,
+  columns=fullflexible,
+  keepspaces=true,
+  showspaces=false,
+  showstringspaces=false,
+  showtabs=false,
+  basicstyle=\ttfamily\footnotesize
+}
+\providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+
+% 兼容新版 pandoc 图片片段：限制图片不超过文本区域，并定义 \pandocbounded。
+\makeatletter
+\def\maxwidth{\ifdim\Gin@nat@width>\linewidth\linewidth\else\Gin@nat@width\fi}
+\def\maxheight{\ifdim\Gin@nat@height>\textheight\textheight\else\Gin@nat@height\fi}
+\makeatother
+\setkeys{Gin}{width=\maxwidth,height=\maxheight,keepaspectratio}
+\providecommand{\pandocbounded}[1]{#1}
+\providecommand{\passthrough}[1]{#1}
+
+% pandoc 对无标题的 longtable 会输出 \def\LTcaptype{none}；兜底定义计数器。
+\makeatletter
+\@ifundefined{c@none}{\newcounter{none}}{}
+\makeatother
+
+\graphicspath{{./}{../}{sections/}{figures/}}
+\pagestyle{plain}
+
+\begin{document}
+
+% MMA_SECTION_INPUTS
+
+\end{document}
+"""
 
 _HUASHUBEI_MAIN_TEX_TEMPLATE = rf"""% !TEX program = xelatex
 % =============================================================================
@@ -352,7 +401,14 @@ def _copy_file_once(src: str, dst: str) -> bool:
                 return False
         except OSError:
             pass
-    shutil.copy2(src, dst)
+    try:
+        shutil.copy2(src, dst)
+    except PermissionError:
+        # Windows bind mounts can accept the file bytes but reject the
+        # chmod/utime metadata phase performed by copy2.  A LaTeX sidecar
+        # only needs an exact byte copy; retry with copyfile and still let
+        # genuine content-copy errors propagate.
+        shutil.copyfile(src, dst)
     return True
 
 
@@ -447,6 +503,23 @@ def _write_status(status_path: str, result: dict) -> None:
             json.dump(result, f, ensure_ascii=False, indent=2)
     except Exception as e:
         logger.error(f"写入 tex_export_status.json 失败: {e}")
+
+
+def _clear_stale_latex_build_files(latex_project_dir: str) -> None:
+    """Remove only known transient files that can poison a fresh compile."""
+    for filename in (
+        "main.aux",
+        "main.toc",
+        "main.out",
+        "main.fls",
+        "main.fdb_latexmk",
+        "main.xdv",
+        "main.log",
+        "main.synctex.gz",
+    ):
+        path = os.path.join(latex_project_dir, filename)
+        if os.path.isfile(path):
+            os.remove(path)
 
 
 def _section_filename(index: int, title: str) -> str:
@@ -945,6 +1018,7 @@ def export_markdown_to_latex_project(
         logger.info(f"LaTeX sidecar 编译跳过: {result['compile_reason']}")
     else:
         result["compile_attempted"] = True
+        _clear_stale_latex_build_files(latex_project_dir)
         if compiler == "latexmk":
             compile_cmd = [
                 "latexmk",

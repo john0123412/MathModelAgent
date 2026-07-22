@@ -4,10 +4,15 @@ import os
 import json
 import datetime
 import hashlib
+import re
+import zipfile
 from app.utils.log_util import logger
 
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "1.2"
 SOURCE_NAME = "MathModelAgent"
+SUPPORT_MANIFEST = "support_materials_manifest.json"
+SUPPORT_ARCHIVE = "support_materials.zip"
+SUPPORT_MAX_BYTES = 20 * 1024 * 1024
 
 # 图片扩展名（大小写不敏感）
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg")
@@ -30,6 +35,76 @@ _EXCLUDED_DIR_NAMES = {
     "review",
     "screenshots",
 }
+
+# Files which may contain credentials, runtime state or internal review data are
+# never support material, even when their extension otherwise looks useful.
+_SUPPORT_EXCLUDED_FILENAMES = {
+    "candidate_manifest.json", SUPPORT_MANIFEST, SUPPORT_ARCHIVE,
+    "checkpoint.json", "variable_snapshot.pkl", "variable_snapshot_meta.json",
+    "task_status.json", "export_status.json", "docx_export_status.json",
+    "modeler_plan.json", "modeler_plan.md", "modeling_decision.json",
+    "modeling_decision.md", "paper_preflight_report.json", "paper_preflight_report.md",
+    "paper_outline.json", "figure_usage.json", "claim_trace.json", "claim_trace.md",
+    "pdf_visual_check.json", "submission_audit_report.json", "submission_audit_report.md",
+    "final_acceptance_report.json", "final_acceptance_report.md", "tex_export_status.json",
+    "res.md", "res.json", "res.docx", "res.pdf", "paper_appendix_config.json",
+    "test_save.png",
+}
+_SUPPORT_EXCLUDED_DIR_NAMES = _EXCLUDED_DIR_NAMES | {
+    "internal", "review", "screenshots", "recovery_review_pages", "latex_project",
+}
+_SECRET_NAME_RE = re.compile(
+    r"(?:^|[_\-.])(secret|secrets|token|password|passwd|credential|credentials|api[_-]?key|apikey|key|keys|cookie|private|id[_-]?rsa)(?:$|[_\-.])",
+    re.IGNORECASE,
+)
+_SUPPORT_EXT_CATEGORY = {
+    ".py": "源程序代码", ".m": "源程序代码", ".r": "源程序代码",
+    ".jl": "源程序代码", ".sql": "源程序代码", ".do": "源程序代码",
+    ".ipynb": "源程序代码", ".png": "图片文件", ".jpg": "图片文件",
+    ".jpeg": "图片文件", ".gif": "图片文件", ".bmp": "图片文件",
+    ".webp": "图片文件", ".csv": "数据/结果文件", ".tsv": "数据/结果文件",
+    ".xlsx": "数据/结果文件", ".xls": "数据/结果文件", ".txt": "数据/结果文件",
+    ".json": "数据/结果文件",
+}
+
+
+def support_material_category(filename: str) -> str | None:
+    """Return the controlled Appendix-A category for a relative file name."""
+    base = os.path.basename(filename).lower()
+    if base in _SUPPORT_EXCLUDED_FILENAMES or _SECRET_NAME_RE.search(base):
+        return None
+    return _SUPPORT_EXT_CATEGORY.get(os.path.splitext(base)[1])
+
+
+def collect_support_material_paths(work_dir: str) -> list[tuple[str, str]]:
+    """Collect the exact paths eligible for Appendix A and support archive."""
+    if not os.path.isdir(work_dir):
+        return []
+    result: list[tuple[str, str]] = []
+    for root, dirs, files in os.walk(work_dir):
+        dirs[:] = [d for d in dirs if d not in _SUPPORT_EXCLUDED_DIR_NAMES]
+        for filename in sorted(files):
+            rel = os.path.relpath(os.path.join(root, filename), work_dir).replace(os.sep, "/")
+            category = support_material_category(rel)
+            if category:
+                result.append((rel, category))
+    return sorted(result, key=lambda item: (item[1], item[0]))
+
+
+def collect_bounded_support_material_paths(work_dir: str) -> list[tuple[str, str]]:
+    """Return the same <=20MB selection used by the support archive."""
+    selected: list[tuple[str, str]] = []
+    total = 0
+    for rel, category in collect_support_material_paths(work_dir):
+        try:
+            size = os.path.getsize(os.path.join(work_dir, rel.replace("/", os.sep)))
+        except OSError:
+            continue
+        if total + size > SUPPORT_MAX_BYTES:
+            continue
+        selected.append((rel, category))
+        total += size
+    return selected
 
 
 def _file_sha256(path: str) -> str | None:
@@ -114,21 +189,105 @@ def _load_claims(work_dir: str) -> list[dict]:
     claims = claim_trace.get("claims", [])
     if not isinstance(claims, list):
         return []
-    return [
-        {
+    result = []
+    for item in claims:
+        if not isinstance(item, dict) or not item.get("claim"):
+            continue
+        evidence = item.get("evidence_id_file", [])
+        if isinstance(evidence, str):
+            evidence = [evidence]
+        evidence = evidence if isinstance(evidence, list) else []
+        source_records = []
+        for source in evidence:
+            if not isinstance(source, str) or ":" in source and not os.path.exists(os.path.join(work_dir, source)):
+                source_records.append({"source": source, "verifiable": False, "status": "manual_review_required"})
+                continue
+            path = os.path.join(work_dir, source)
+            exists = os.path.isfile(path)
+            source_records.append({
+                "source": source,
+                "verifiable": exists,
+                "status": "verified_local" if exists else "manual_review_required",
+                "sha256": _file_sha256(path) if exists else None,
+            })
+        result.append({
             "claim": item.get("claim", ""),
             "paper_section": item.get("paper_section", ""),
             "evidence_type": item.get("evidence_type", ""),
             "evidence_id_file": item.get("evidence_id_file", []),
             "strength": item.get("strength", ""),
             "paper_wording_check": item.get("paper_wording_check", ""),
-        }
-        for item in claims
-        if isinstance(item, dict) and item.get("claim")
-    ]
+            "source_records": source_records,
+            "source_verification": item.get("source_verification", "manual_review_required"),
+        })
+    return result
 
 
-def write_candidate_manifest(work_dir: str, task_id: str) -> str:
+def _write_support_materials(work_dir: str) -> dict:
+    """Create a bounded, deterministic support archive and its manifest."""
+    entries = []
+    excluded = []
+    total = 0
+    for rel, category in collect_support_material_paths(work_dir):
+        path = os.path.join(work_dir, rel.replace("/", os.sep))
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            excluded.append({"path": rel, "reason": "unreadable"})
+            continue
+        if total + size > SUPPORT_MAX_BYTES:
+            excluded.append({"path": rel, "reason": "20MB total limit"})
+            continue
+        digest = _file_sha256(path)
+        if digest is None:
+            excluded.append({"path": rel, "reason": "unreadable"})
+            continue
+        entries.append({"path": rel, "category": category, "size": size, "sha256": digest})
+        total += size
+
+    archive_path = os.path.join(work_dir, SUPPORT_ARCHIVE)
+    archive_error = None
+    try:
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for item in entries:
+                archive.write(os.path.join(work_dir, item["path"].replace("/", os.sep)), item["path"])
+    except (OSError, zipfile.BadZipFile) as exc:
+        archive_error = f"archive_failed:{type(exc).__name__}"
+    archive_size = os.path.getsize(archive_path) if os.path.isfile(archive_path) else None
+    archive_hash = _file_sha256(archive_path)
+    if archive_size is not None and archive_size > SUPPORT_MAX_BYTES:
+        archive_error = archive_error or "archive_exceeds_20MB"
+        try:
+            os.remove(archive_path)
+            archive_size = None
+            archive_hash = None
+        except OSError:
+            pass
+    manifest = {
+        "schema_version": "1.0",
+        "generated_at": datetime.datetime.now().isoformat(),
+        "max_bytes": SUPPORT_MAX_BYTES,
+        "total_source_bytes": total,
+        "files": entries,
+        "excluded": excluded,
+        "archive": {"path": SUPPORT_ARCHIVE, "size": archive_size, "sha256": archive_hash},
+        "archive_error": archive_error,
+        "verification_note": "仅表示本地文件清单、大小和 SHA-256 可复核；不表示内容安全、原创性或正式查重通过。",
+    }
+    with open(os.path.join(work_dir, SUPPORT_MANIFEST), "w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, ensure_ascii=False, indent=2)
+    return manifest
+
+
+def write_support_materials_manifest(work_dir: str) -> str:
+    """Public helper for export-only callers; also refreshes the ZIP archive."""
+    _write_support_materials(work_dir)
+    return os.path.join(work_dir, SUPPORT_MANIFEST)
+
+
+def write_candidate_manifest(
+    work_dir: str, task_id: str, *, submission_file: str = "res.pdf"
+) -> str:
     """生成候选方案导出协议文件 candidate_manifest.json。
 
     扫描 work_dir 下已产出的文件（res.md/res.json/res.docx/res.pdf/notebook.ipynb/
@@ -147,6 +306,7 @@ def write_candidate_manifest(work_dir: str, task_id: str) -> str:
     Returns:
         生成的 candidate_manifest.json 文件的绝对/相对路径（与传入 work_dir 一致的路径风格）。
     """
+    support_manifest = _write_support_materials(work_dir)
     artifact_set_id, artifact_hashes = _artifact_hashes(work_dir)
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -155,6 +315,15 @@ def write_candidate_manifest(work_dir: str, task_id: str) -> str:
         "generated_at": datetime.datetime.now().isoformat(),
         "artifact_set_id": artifact_set_id,
         "artifact_hashes": artifact_hashes,
+        # Exactly one primary file is exported for external submission.  Keep
+        # this explicit even when the file is absent so an auditor can reject
+        # an incomplete candidate instead of guessing from directory contents.
+        "submission_file": submission_file,
+        "submission_file_sha256": _file_sha256(os.path.join(work_dir, submission_file))
+        if isinstance(submission_file, str) else None,
+        "support_materials_manifest": SUPPORT_MANIFEST,
+        "support_materials_archive": SUPPORT_ARCHIVE,
+        "support_materials": support_manifest,
         "files": {
             "res_md": _existing_or_none(work_dir, "res.md"),
             "res_json": _existing_or_none(work_dir, "res.json"),
@@ -203,6 +372,8 @@ def write_candidate_manifest(work_dir: str, task_id: str) -> str:
             "final_acceptance_report_md": _existing_or_none(
                 work_dir, "final_acceptance_report.md"
             ),
+            "support_materials_manifest": _existing_or_none(work_dir, SUPPORT_MANIFEST),
+            "support_materials_archive": _existing_or_none(work_dir, SUPPORT_ARCHIVE),
             "latex_main": _existing_or_none(work_dir, "latex_project/main.tex"),
             "latex_project": _existing_or_none(work_dir, "latex_project"),
             "tex_export_status": _existing_or_none(work_dir, "tex_export_status.json"),

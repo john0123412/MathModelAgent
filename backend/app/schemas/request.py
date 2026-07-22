@@ -19,6 +19,8 @@ class Problem(BaseModel):
     comp_template: CompTemplate = CompTemplate.CHINA
     format_output: FormatOutPut = FormatOutPut.Markdown
     export_profile: ExportProfile = DEFAULT_MODELING_EXPORT_PROFILE
+    # 单任务建模审阅暂停：供当前 Codex/人工在进入 Coder 前复核 ModelPlan。
+    require_model_review: bool = False
 
     def model_dump(self, **kwargs):
         data = super().model_dump(**kwargs)

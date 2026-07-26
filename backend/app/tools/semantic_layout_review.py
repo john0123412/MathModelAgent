@@ -22,6 +22,8 @@ _PAGE_BREAK_RE = re.compile(
     re.IGNORECASE,
 )
 _EMPTY_REFERENCE_RE = re.compile(r"(?<![A-Za-z0-9])\{\}(?![A-Za-z0-9])")
+_IMAGE_RE = re.compile(r"!\[(?P<caption>[^\]]*)\]\((?P<path>[^)]+)\)")
+_FILENAME_LIKE_CAPTION_RE = re.compile(r"^(?:fig(?:ure)?[\s_-]*\d*|image[\s_-]*\d*|图[\s_-]*\d*)$", re.I)
 
 
 def _without_fenced_code(markdown: str) -> list[tuple[int, str]]:
@@ -61,7 +63,11 @@ def _expected_level(title: str) -> tuple[int | None, str]:
     return None, "other"
 
 
-def review_markdown(markdown: str) -> dict[str, Any]:
+def review_markdown(
+    markdown: str,
+    *,
+    appendix_pagebreak_in_pdf: bool = False,
+) -> dict[str, Any]:
     """Review semantic layout conventions and return non-blocking findings."""
     lines = _without_fenced_code(markdown)
     headings: list[dict[str, Any]] = []
@@ -109,7 +115,7 @@ def review_markdown(markdown: str) -> dict[str, Any]:
                 "",
             )
             if not _PAGE_BREAK_RE.search(previous_nonempty):
-                if title == "附录":
+                if title == "附录" and not appendix_pagebreak_in_pdf:
                     issues.append(
                         {
                             "code": "appendix_page_break_hint",
@@ -155,11 +161,42 @@ def review_markdown(markdown: str) -> dict[str, Any]:
             }
         )
 
+    for line_number, line in lines:
+        for image in _IMAGE_RE.finditer(line):
+            caption = image.group("caption").strip()
+            path_stem = os.path.splitext(os.path.basename(image.group("path").strip()))[0]
+            normalized_caption = re.sub(r"[\s_-]+", "", caption).lower()
+            normalized_stem = re.sub(r"[\s_-]+", "", path_stem).lower()
+            is_ascii_machine_name = bool(re.search(r"[A-Za-z]", path_stem)) and (
+                "_" in path_stem
+                or "-" in path_stem
+                or bool(_FILENAME_LIKE_CAPTION_RE.match(path_stem))
+            )
+            if (
+                not caption
+                or _FILENAME_LIKE_CAPTION_RE.match(caption)
+                or (normalized_caption == normalized_stem and is_ascii_machine_name)
+            ):
+                issues.append(
+                    {
+                        "code": "filename_like_figure_caption",
+                        "line": line_number,
+                        "title": "图题",
+                        "severity": "warning",
+                        "blocking": False,
+                        "message": "图题看起来是原始文件名或无信息编号，人工应改为说明图意的自然语言标题。",
+                        "suggestion": "将图片替代文本改为能说明变量、场景或比较对象的中文图题。",
+                    }
+                )
+
     return {
         "status": "WARN" if issues else "PASS",
         "passed": not issues,
         "blocking": False,
         "scope": "Markdown semantic layout only; warnings do not replace PDF visual or human review.",
+        "pdf_layout_policy": {
+            "appendix_pagebreak_in_pdf": appendix_pagebreak_in_pdf,
+        },
         "generated_at": datetime.datetime.now().isoformat(),
         "heading_count": len(headings),
         "headings": headings,
@@ -197,9 +234,17 @@ def render_semantic_layout_review(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def write_semantic_layout_review(work_dir: str, markdown: str) -> dict[str, Any]:
+def write_semantic_layout_review(
+    work_dir: str,
+    markdown: str,
+    *,
+    appendix_pagebreak_in_pdf: bool = False,
+) -> dict[str, Any]:
     """Write JSON/Markdown reports beside paper_preflight_report."""
-    report = review_markdown(markdown)
+    report = review_markdown(
+        markdown,
+        appendix_pagebreak_in_pdf=appendix_pagebreak_in_pdf,
+    )
     try:
         with open(os.path.join(work_dir, "semantic_layout_review.json"), "w", encoding="utf-8") as handle:
             json.dump(report, handle, ensure_ascii=False, indent=2)

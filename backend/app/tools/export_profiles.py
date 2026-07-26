@@ -23,6 +23,9 @@ class ExportProfileConfig:
     latex_template_dir: str | None = None
     latex_template_key: str = "zh/cumcm-latex"
     docx_reference_doc: str | None = None
+    # PDF-only layout behavior.  Keep it on the selected export profile rather
+    # than hard-coding a competition convention into every modeling task.
+    pdf_appendix_pagebreak: bool = False
 
 
 PDF_HEADING_STYLE = (
@@ -166,6 +169,7 @@ CUMCM2026_PROFILE = ExportProfileConfig(
     pdf_extra_args=[],
     latex_template_key="zh/cumcm2026-ctexart",
     docx_reference_doc=CUMCM2025_DOCX_REFERENCE,
+    pdf_appendix_pagebreak=True,
 )
 
 HUASHUBEI_PROFILE = ExportProfileConfig(

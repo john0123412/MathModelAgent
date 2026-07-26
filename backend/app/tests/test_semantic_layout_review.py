@@ -46,6 +46,26 @@ class TestSemanticLayoutReview(unittest.TestCase):
         self.assertEqual(report["issue_count"], 0)
         self.assertTrue(all(item["kind"] != "other" for item in report["headings"]))
 
+    def test_profile_pdf_appendix_break_avoids_markdown_only_warning(self):
+        markdown = "# 一、问题重述\n\n正文。\n\n# 附录\n\n附录。"
+
+        report = review_markdown(markdown, appendix_pagebreak_in_pdf=True)
+
+        self.assertEqual(report["status"], "PASS")
+        self.assertTrue(report["pdf_layout_policy"]["appendix_pagebreak_in_pdf"])
+
+    def test_detects_filename_like_figure_caption(self):
+        report = review_markdown("![fig1_feasible_region](fig1_feasible_region.png)")
+
+        codes = {issue["code"] for issue in report["issues"]}
+        self.assertIn("filename_like_figure_caption", codes)
+
+    def test_accepts_descriptive_chinese_caption_that_matches_filename(self):
+        report = review_markdown("![灵敏度分析利润随机器时间变化](灵敏度分析_利润随机器时间变化.png)")
+
+        codes = {issue["code"] for issue in report["issues"]}
+        self.assertNotIn("filename_like_figure_caption", codes)
+
 
 if __name__ == "__main__":
     unittest.main()

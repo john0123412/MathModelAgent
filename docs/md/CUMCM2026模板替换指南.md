@@ -4,8 +4,8 @@
 
 - 当前 `cumcm2026` 是基于《全国大学生数学建模竞赛论文格式规范（2026年修订稿）》实现的暂定模板，不是官方最终 DOCX/LaTeX 模板包。
 - 主 PDF 按 2026 修订稿口径实现：电子版不生成目录，摘要页作为第一页；主 PDF 与 LaTeX sidecar 均禁 raw TeX，支持 `$...$` 和 `\(...\)` 数学公式，自动编译禁用 shell escape。
-- Writer 完稿后会生成非阻断的 `semantic_layout_review.json/md`，提示“一、”至“七、”及“附录”必须使用一级标题、1.1/5.1.1 等小标题层级应与 PDF 书签一致；该提示不替代实际 PDF 视觉和书签复核。
-- 主 PDF 会在摘要/关键词后做 PDF-only 分页，保证摘要页独占第一页、正文从第二页开始；该分页不写回 `res.md`，也不影响 DOCX 或 LaTeX sidecar。
+- Writer 完稿后会生成非阻断的、profile-aware `semantic_layout_review.json/md`：`cumcm2026` 提示“一、”至“七、”及“附录”必须使用一级标题、1.1/5.1.1 等小标题层级应与 PDF 书签一致，并提示空引用或疑似原始文件名图题；该提示不替代实际 PDF 视觉和书签复核。
+- 主 PDF 会在摘要/关键词后及附录前做 PDF-only 分页，保证摘要页独占第一页、正文从第二页开始且附录另起页；该分页不写回 `res.md`，也不影响 DOCX 或 LaTeX sidecar。
 - 当前 DOCX reference 暂时复用 2025：
   `backend/app/templates/export_profiles/cumcm2025_docx/format2025_reference.docx`
 - 当前 LaTeX sidecar 使用 `backend/app/tools/tex_project_exporter.py` 中的

@@ -143,7 +143,7 @@ PDF/sidecar 自动编译会显式禁用 XeLaTeX shell escape；模型或 Markdow
 - raw TeX 已在主 PDF 与 LaTeX sidecar 导出中关闭，正文不要依赖 `\begin{table}`、`\begin{align}`
   等 raw LaTeX 环境；标准 Markdown 表格与 `$...$`、`\(...\)` 数学公式仍可用。
 - `paper_preflight_report.json` 只说明格式门禁和基本证据链通过，不证明数学模型和论文论证正确。
-  `semantic_layout_review.json/md` 会额外给出非阻断的语义排版提示：主章节一级标题、小标题层级、标题空行、附录分页提示和 `{}` 空引用。该报告只提醒 Writer/人工复核，不把合理模板差异硬判为失败；PDF 书签和实际分页仍须人工抽查。
+  `semantic_layout_review.json/md` 会额外给出非阻断的、profile-aware 语义排版提示：CUMCM profile 的主章节层级、小标题层级、标题空行、空引用和疑似原始文件名图题。`cumcm2026` 会在临时 PDF 输入中自动将附录另起页，不改写 `res.md` 或 DOCX；该策略会记录在报告的 `pdf_layout_policy`。报告只提醒 Writer/人工复核，不把其它模板的合理差异硬判为失败；PDF 书签和实际分页仍须人工抽查。
   对冻结结果与正文不一致这类可明确定位到 `quesN`/摘要的硬失败，工作流只允许一次定向 Writer
   回修并重新预检；无法定位或回修后仍为 `FAIL` 时不会继续生成候选 PDF。该机制只修复可追溯的
   文本事实冲突，不能替代人工复算或把不完整的模型结论“润色”为通过。

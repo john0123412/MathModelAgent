@@ -1044,7 +1044,7 @@ class TestExecutionValidation(unittest.TestCase):
             check = next(item for item in report["checks"] if item["id"] == "ques3.relief_disturbance_evidence")
             self.assertFalse(check["passed"])
 
-    def test_gt_constraint_is_checked_and_100_mpa_contract_rejects_large_fluctuation(self):
+    def test_gt_constraint_is_checked_without_inventing_pressure_fluctuation_limit(self):
         with tempfile.TemporaryDirectory() as work_dir:
             _write_notebook(work_dir)
             _write_manifest(work_dir)
@@ -1078,12 +1078,9 @@ class TestExecutionValidation(unittest.TestCase):
                 if item["id"] == "ques3.constraint.mean_pressure_target"
             )
             self.assertTrue(gt_check["passed"])
-            stability = next(
-                item
-                for item in report["checks"]
-                if item["id"] == "pressure_stability.pressure_fluctuation"
+            self.assertFalse(
+                any(item["id"].startswith("pressure_stability.") for item in report["checks"])
             )
-            self.assertFalse(stability["passed"])
 
     def test_problem_one_contract_requires_all_valve_duration_metrics(self):
         with tempfile.TemporaryDirectory() as work_dir:

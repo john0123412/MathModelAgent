@@ -12,7 +12,18 @@
 `final_acceptance_report.json -> complete_source_appendix` 会检查附录是否实际包含完整源码。
 但自动报告仍不能替代人工运行源码、核对结果、阅读 PDF/DOCX 或确认最终提交规则。
 
-- [ ] 打开 `semantic_layout_review.json/md`：确认主章节为一级标题、1.1/5.1.1 等小标题层级一致、无 `{}` 空引用；若有附录分页提示，实际打开 PDF 检查附录是否按模板要求另起页，并抽查 PDF 书签层级。
+## Codex 代为执行的可机检复核
+
+当用户授权 Codex 处理可机器复核的“人工项”时，以下项目不应留给后续 agent 口头确认，而必须有实际命令或在线核验结果；每一项应在任务汇报中说明证据和结论。
+
+- [ ] 在隔离副本以新内核按顺序运行全部 notebook/脚本单元，不依赖历史输出；若发现语法错误、未定义变量、单元顺序依赖或输出与正文矛盾，修正后还要在正式任务目录重跑。
+- [ ] 对关键数值独立复算：至少核对可行性、约束残差、目标值和核心敏感性/比较结论；可用代数推导、顶点枚举、另一求解实现或结果 CSV 交叉验证。求解器返回 success 本身不能替代此项。
+- [ ] 发生源码或结果改动后，使用受控执行证据重新登记并重冻结果，重生成 Markdown、DOCX、LaTeX sidecar、PDF；再核对 `execution_validation`、preflight、semantic layout、PDF visual、submission audit 及 manifest 的主产物哈希。
+- [ ] 如有外部引用、方法/软件声明或数据来源，在线打开优先的官方页、原始论文或权威数据源，确认其真实可访问且支撑对应句子；若全文没有外部引用，明确记录“无外部引用可核验”，不要为了通过清单添加无关文献。
+
+以下项目不能由 Codex 自行替代提交人：最终文件命名和平台上传要求、竞赛规则/匿名与诚信确认，以及最终主观版式取舍。它们应在上述可机检复核完成后由队员确认。
+
+- [ ] 打开 `semantic_layout_review.json/md`：确认主章节为一级标题、1.1/5.1.1 等小标题层级一致、无 `{}` 空引用和原始文件名式图题。`cumcm2026` 的 `pdf_layout_policy.appendix_pagebreak_in_pdf=true` 时导出器会 PDF-only 地让附录另起页；仍须实际打开 PDF 检查分页和书签层级。
 
 当前 workflow 还会生成 `problem_contract.json`、`execution_validation.json`、
 `execution_validation_report.json` 与 `frozen_results.json`。这些文件只能证明题面参数、

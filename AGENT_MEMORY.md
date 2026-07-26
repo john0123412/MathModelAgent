@@ -2,6 +2,14 @@
 
 ## 当前稳定状态
 
+- [2026-07-24] 用户要求后续 Codex 不得遗漏可机检的人工复核。仓库 `AGENTS.md` 与最终复核清单现已固化四步：隔离新内核源码重跑、关键数学独立复算、外部引用/方法来源联网真实性核验、结果变动后的受控证据重登记/冻结/全导出及哈希复核。它们必须在用户要求论文验收或完整链路审计时实际执行并记录；平台文件命名、竞赛规则/匿名/诚信和最终主观排版仍由提交人确认。
+
+- [2026-07-24] 上述轻量线性规划任务的人工授权复跑发现 notebook 不是干净内核可复现：一处绘图代码引用未定义的 `FIG_DOUBLE`，问题二一处 f-string 缺少 `{`，敏感性附录还把 `M=120` 的可行边界点 `(60,0)`（利润 2400）错写为最优解，和正确的最优利润 2533.33 矛盾。已将前两处改为可执行代码，并将敏感性边界结论改为直接从 `sensitivity_df` 的实际求解结果读取；在隔离副本和正式任务目录均按顺序完整执行 30 个代码单元成功。随后通过受控 `record_execution_evidence` 重登记 ques1/ques2、重冻 `frozen_results.json`、重做 Markdown/DOCX/LaTeX/PDF。最终 `execution_validation`、preflight、semantic layout、PDF visual、submission audit 均为 PASS，`final_acceptance.technical_status=TECHNICAL_PASS`；仍须由提交人完成平台文件名与竞赛规则复核。
+
+- [2026-07-24] 用户授权复核并修复最新轻量线性规划任务 `20260722-104737-41d7194bc4d66569da5d3a053149f9a7`：正文已删除 7 个空引用占位、统一 CUMCM 标题层级和 10 张图的中文语义图题；将“线性规划多项式时间保证”“机器时间是唯一瓶颈”“影子价格证明模型稳定”等过度表述改为受题设参数、共同紧约束和当前最优基约束的局部结论。重做预检、DOCX、LaTeX sidecar 与本机正式字体 PDF 后，`execution_validation`、`execution_quality_review`、`paper_preflight`、`semantic_layout_review`、`pdf_visual_check`（72/72 页）、`submission_audit` 均为 PASS，sidecar 编译成功，`final_acceptance=TECHNICAL_PASS`，主产物及冻结结果哈希均与新 manifest 一致。自动验收仍不替代人工核对建模假设、代码运行、引用、平台规则和完整 PDF/DOCX。
+
+- [2026-07-24] 导出与验收规则改为 profile/任务契约优先：`ExportProfileConfig.pdf_appendix_pagebreak` 仅为 `cumcm2026` 启用 PDF-only 附录另起页，不写入 `res.md`/DOCX；语义审查把该 profile 行为计入报告，并新增“图题疑似原始文件名”非阻断提示。高压油管历史题遗留的“100 MPa 一律峰峰值 ≤15 MPa”提示和执行硬门禁已删除；`problem_contract` 现在从题面语义提取任意压力目标，实际通过/失败只依据题面或 ModelPlan 中有来源的阈值。没有明确数值阈值时必须记录实际偏差、峰峰值与时序，不能擅自宣称稳定或编造阈值。针对问题契约、执行验证、语义审查、PDF profile 和后处理的 158 项单测及 Ruff 已通过。
+
 - [2026-07-22] 冻结后数学质量复核门禁已补齐：`execution_validation_report=PASS` 只再证明代码/证据技术完整，工作流随后生成 `execution_quality_review.json/md`，保守识别 `quesN_results.csv` 中明确“不达标/失败”及 NaN/Inf。机器命中时一律在 Writer 前进入 `waiting_quality_review`；任务启用 `require_model_review=true` 时，即使机器未命中也必须由当前 Codex/人工逐题复核。新增 `POST /modeling/{task_id}/execution-review`：`approve` 必须提供理由且只绑定当前结果文件哈希形成的 `review_id`；`repair` 只使指定正式子题的 Coder 检查点失效、清除所有依赖旧冻结事实的 Writer 阶段并携审查意见续传，最多一次。旧审批不能跨结果变更复用，普通 `/resume` 不能绕过质量暂停。历史 2019 A 真实任务 `20260720-154617-ab751ff945c00761b3b64066f5eaff71` 用新筛查器只读回放为 `NEEDS_REVIEW`，ques1/ques2/ques3 均存在结果表明确“否”，证明旧链路会放行的质量失败现可被截断；该历史任务仍不可交付。定向28项回归与相关 Ruff 已通过；Docker 真实重跑待运行时恢复后执行。
 
 - [2026-07-22] 上述任务在重建 Docker 后真实续传，已确定停在 `waiting_quality_review`，随后当前 Codex 通过新 `execution-review action=repair` 将 ques1/2/3 连同守恒、量纲、可变容积符号和依赖顺序意见定向退回。Q1 真实执行中先发生一段 12446 字符仿真超过本地 120 秒看门狗，内核与 277 变量快照成功恢复；后续代码虽算出均压 78.7453MPa、峰峰值 68.0195MPa、质量残差 3.95%（仍不合格），但构造时序 DataFrame 时数组长度不一致，三次代码错误预算耗尽。终态 `failed`：`代码阶段 ques1 未提供成功执行证据`，Q2/Q3 未进入返修，Writer 未重新运行。当前处置：质量返修预算已消耗，不再调用同一 Coder 重试或直接改 CSV/manifest；需要补充本机可信的 Codex/人工代码候选执行与证据封装通道，随后才可由操作者确定性接管。

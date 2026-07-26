@@ -24,6 +24,7 @@ from app.tools.semantic_layout_review import (
     review_markdown,
     write_semantic_layout_review,
 )
+from app.tools.export_profiles import get_export_profile_config
 
 
 REFERENCE_HEADING_RE = re.compile(
@@ -3069,7 +3070,12 @@ def build_preflight_report(
     reference_sources_check = build_reference_source_trace(markdown, work_dir)
     similarity_ai_risk_check = scan_similarity_ai_risk(markdown, work_dir)
     problem_alignment_check = _check_problem_alignment(work_dir, markdown_without_code)
-    semantic_layout_check = review_markdown(markdown)
+    semantic_layout_check = review_markdown(
+        markdown,
+        appendix_pagebreak_in_pdf=get_export_profile_config(
+            export_profile
+        ).pdf_appendix_pagebreak,
+    )
 
     checks = {
         "export_profile": _with_severity(export_profile_check, "fail"),
@@ -3322,7 +3328,12 @@ def prepare_paper_markdown(
     markdown, inserted_figure_references = ensure_figure_references(markdown)
     markdown, escaped_table_math_pipes = escape_pipes_in_table_math_cells(markdown)
     markdown = ensure_table_captions(markdown)
-    write_semantic_layout_review(work_dir, markdown)
+    profile_config = get_export_profile_config(export_profile)
+    write_semantic_layout_review(
+        work_dir,
+        markdown,
+        appendix_pagebreak_in_pdf=profile_config.pdf_appendix_pagebreak,
+    )
     outline = build_paper_outline(markdown)
     figure_usage = build_figure_usage(work_dir, markdown)
     claim_trace = build_claim_trace(markdown, code_sources, work_dir)

@@ -37,6 +37,7 @@ PDF_CJK_BREAK_MARKER = "MMA_PDF_CJK_BREAK"
 CJK_BREAK_RUN_RE = re.compile(r"[\u4e00-\u9fff，。！？；：、（）《》“”]{24,}")
 FENCE_START_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 KEYWORDS_LINE_RE = re.compile(r"^\s*(?:\*\*)?\s*(?:关键词|关键字)\s*(?:\*\*)?\s*[：:]?")
+APPENDIX_HEADING_RE = re.compile(r"^#\s+附录\s*$")
 PDF_CJK_BREAK_INTERVAL = 18
 _FENCE_LINE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 _EXTERNAL_IMAGE_REF_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
@@ -247,6 +248,38 @@ def _insert_abstract_pagebreak(markdown: str) -> tuple[str, bool]:
     return "".join(lines), True
 
 
+def _insert_appendix_pagebreak(markdown: str, *, enabled: bool) -> tuple[str, bool]:
+    """Insert a PDF-only break before an appendix when the profile requires it.
+
+    The marker stays in a temporary Pandoc source, so DOCX and the auditable
+    Markdown never acquire raw layout text.  Profiles that do not opt in keep
+    their existing appendix flow.
+    """
+    if not enabled:
+        return markdown, False
+
+    lines = markdown.splitlines(keepends=True)
+    in_fence = False
+    fence_marker = ""
+    for index, line in enumerate(lines):
+        fence_match = FENCE_START_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not in_fence:
+                in_fence, fence_marker = True, marker[0]
+            elif marker.startswith(fence_marker):
+                in_fence, fence_marker = False, ""
+            continue
+        if in_fence or not APPENDIX_HEADING_RE.match(line.strip()):
+            continue
+        previous = "".join(lines[max(0, index - 3) : index])
+        if PDF_PAGEBREAK_MARKER in previous:
+            return markdown, False
+        lines.insert(index, f"\n{PDF_PAGEBREAK_MARKER}\n\n")
+        return "".join(lines), True
+    return markdown, False
+
+
 def _insert_cjk_pdf_break_opportunities(markdown: str) -> tuple[str, bool]:
     """Add PDF-only break opportunities to long CJK runs without touching code blocks."""
     changed = False
@@ -293,15 +326,23 @@ def _insert_cjk_pdf_break_opportunities(markdown: str) -> tuple[str, bool]:
     return "".join(lines), changed
 
 
-def _prepare_pdf_markdown_source(md_path: str, work_dir: str) -> tuple[str, bool]:
+def _prepare_pdf_markdown_source(
+    md_path: str,
+    work_dir: str,
+    *,
+    appendix_pagebreak: bool = False,
+) -> tuple[str, bool]:
     """Create a temporary PDF input when layout-only Markdown tweaks are needed."""
     with open(md_path, encoding="utf-8") as f:
         markdown = f.read()
     prepared_markdown, inserted_pagebreak = _insert_abstract_pagebreak(markdown)
+    prepared_markdown, inserted_appendix_pagebreak = _insert_appendix_pagebreak(
+        prepared_markdown, enabled=appendix_pagebreak
+    )
     prepared_markdown, inserted_cjk_breaks = _insert_cjk_pdf_break_opportunities(
         prepared_markdown
     )
-    if not inserted_pagebreak and not inserted_cjk_breaks:
+    if not inserted_pagebreak and not inserted_appendix_pagebreak and not inserted_cjk_breaks:
         return md_path, False
 
     os.makedirs(work_dir, exist_ok=True)
@@ -521,7 +562,9 @@ def export_markdown_to_pdf(
         ) = _prepare_pdf_image_assets(md_path, work_dir)
         result["staged_assets"] = staged_assets
         pdf_md_path, cleanup_pdf_md = _prepare_pdf_markdown_source(
-            image_source_path, work_dir
+            image_source_path,
+            work_dir,
+            appendix_pagebreak=profile_config.pdf_appendix_pagebreak,
         )
     except ValueError as exc:
         result["reason"] = str(exc)

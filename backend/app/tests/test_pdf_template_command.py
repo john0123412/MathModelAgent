@@ -201,6 +201,36 @@ class TestPdfTemplateCommand(unittest.TestCase):
                 captured["pdf_markdown"].index("# 一、问题重述"),
             )
 
+    def test_cumcm2026_pdf_inserts_appendix_break_without_changing_markdown(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            md_path = os.path.join(work_dir, "res.md")
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            original_markdown = "# 题目\n\n## 摘要\n\n摘要。\n\n关键词：测试\n\n# 一、正文\n\n正文。\n\n# 附录\n\n附录。\n"
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write(original_markdown)
+
+            captured = {}
+
+            def fake_run(command, **kwargs):
+                with open(command[1], encoding="utf-8") as f:
+                    captured["pdf_markdown"] = f.read()
+                return mock.Mock(returncode=1, stderr="expected test failure")
+
+            with (
+                mock.patch("shutil.which", return_value="tool"),
+                mock.patch("subprocess.run", side_effect=fake_run),
+                mock.patch("app.utils.font_utils.check_font_installed", return_value=True),
+            ):
+                export_markdown_to_pdf(
+                    md_path, pdf_path, work_dir, export_profile=ExportProfile.CUMCM2026
+                )
+
+            with open(md_path, encoding="utf-8") as f:
+                self.assertEqual(f.read(), original_markdown)
+            self.assertGreaterEqual(captured["pdf_markdown"].count("MMA_PDF_PAGEBREAK"), 2)
+            appendix_marker = captured["pdf_markdown"].rindex("MMA_PDF_PAGEBREAK")
+            self.assertLess(appendix_marker, captured["pdf_markdown"].index("# 附录"))
+
     def test_pdf_command_huashubei_profile_uses_confirmed_margin_baseline(self):
         """huashubei profile 先按国赛基线 2.5cm 接入，等待官方规范发布后复核。"""
         with tempfile.TemporaryDirectory() as work_dir:

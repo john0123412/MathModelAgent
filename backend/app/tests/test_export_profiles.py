@@ -25,6 +25,7 @@ class TestExportProfiles(unittest.TestCase):
         )
         self.assertNotIn("--toc", config.pdf_extra_args)
         self.assertNotIn("--number-sections", config.pdf_extra_args)
+        self.assertTrue(config.pdf_appendix_pagebreak)
 
         profile_keys = {item["key"] for item in list_export_profiles()}
         self.assertIn("cumcm2026", profile_keys)
@@ -39,6 +40,7 @@ class TestExportProfiles(unittest.TestCase):
 
         profile_keys = {item["key"] for item in list_export_profiles()}
         self.assertIn("huashubei", profile_keys)
+        self.assertFalse(config.pdf_appendix_pagebreak)
 
 
 if __name__ == "__main__":

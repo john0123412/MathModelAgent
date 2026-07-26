@@ -1417,42 +1417,6 @@ def _subtask_requires_balance_residual(work_dir: Path, subtask_id: str) -> bool:
     )
 
 
-def _pressure_stability_issues(work_dir: Path, manifest: dict[str, Any]) -> list[dict[str, Any]]:
-    """Reject visibly unstable controls for contracts that explicitly target 100 MPa."""
-    contract = _read_json(work_dir / "problem_contract.json")
-    requirements = contract.get("required_requirements", []) if contract else []
-    if not any(
-        isinstance(item, dict) and item.get("key") == "target_pressure_100_mpa"
-        for item in requirements
-    ):
-        return []
-    max_peak_to_peak = 15.0
-    metrics = manifest.get("metrics", [])
-    if not isinstance(metrics, list):
-        return []
-    issues: list[dict[str, Any]] = []
-    for metric in metrics:
-        if not isinstance(metric, dict):
-            continue
-        label = metric.get("label")
-        value = _as_number(metric.get("value"))
-        if not isinstance(label, str) or "压力波动" not in label or metric.get("unit") != "MPa":
-            continue
-        metric_id = metric.get("id", "unknown")
-        passed = value is not None and value <= max_peak_to_peak
-        issues.append(_issue(
-            f"pressure_stability.{metric_id}",
-            passed,
-            (
-                f"{label} {value} MPa 未超过 100 MPa 目标下的 15 MPa 稳定性上限。"
-                if passed
-                else f"{label} 为 {value} MPa，超过 100 MPa 目标下的 15 MPa 稳定性上限。"
-            ),
-            {"target_pressure_mpa": 100.0, "max_peak_to_peak_mpa": max_peak_to_peak, "actual": value},
-        ))
-    return issues
-
-
 def _subtask_evidence_issues(
     subtask_id: str,
     item: dict[str, Any],
@@ -1755,7 +1719,6 @@ def _manifest_issues(
             {"metric_count": len(metrics) if isinstance(metrics, list) else 0},
         )
     )
-    issues.extend(_pressure_stability_issues(work_dir, manifest))
     return issues
 
 

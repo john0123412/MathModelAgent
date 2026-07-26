@@ -235,6 +235,14 @@ class TestProblemContract(unittest.TestCase):
         self.assertIn("流量系数（C） = 0.85", prompts["ques1"]["coder_prompt"])
         self.assertIn("禁止称为最优解", prompts["ques1"]["coder_prompt"])
 
+    def test_extracts_non_default_pressure_target_without_assuming_a_fluctuation_limit(self):
+        contract = build_problem_contract("请使油管压力稳定在 120 MPa，并报告实际波动。")
+
+        requirement = next(
+            item for item in contract.required_requirements if item.key == "target_pressure_120_mpa"
+        )
+        self.assertEqual(requirement.evidence_terms, ["120MPa"])
+
     def test_extracts_fixed_pipe_conditions_and_rejects_wrong_frequency(self):
         contract = build_problem_contract(HIGH_PRESSURE_PIPE_FIXED_CONDITIONS)
         values = {item.key: item.value for item in contract.immutable_parameters}

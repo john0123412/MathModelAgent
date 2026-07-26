@@ -82,6 +82,12 @@ _INJECTION_FREQUENCY = re.compile(
     r"(?:喷油器)?(?:每秒工作|工作频率|喷油频率)[:：为是]*\s*(\d+(?:\.\d+)?)\s*(?:次/秒|次每秒|Hz)",
     re.IGNORECASE,
 )
+_PRESSURE_TARGET = re.compile(
+    r"(?:压力|油管压力|高压油管压力)[^。；;\n]{0,24}?"
+    r"(?:稳定在|保持在|维持在|目标(?:为|是)?|达到)\s*"
+    r"(\d+(?:\.\d+)?)\s*(?:MPa|兆帕)",
+    re.IGNORECASE,
+)
 
 _ATTACHMENT_ANGLE_SAMPLE_PAIR = re.compile(
     r"附件(\d+)(?:\.xlsx)?(?:和|与|、|及)附件(\d+)(?:\.xlsx)?"
@@ -313,13 +319,17 @@ def build_problem_contract(problem_text: str) -> ProblemContract:
                 source="题面原文的问题一控制量与 150 MPa 过渡要求",
             )
         )
-    if re.search(r"100\s*(?:MPa|兆帕)", normalized, re.IGNORECASE):
-        contract.required_requirements.append(
+    for match in _PRESSURE_TARGET.finditer(normalized):
+        target_pressure = float(match.group(1))
+        target_key = f"{target_pressure:g}".replace(".", "_")
+        _append_requirement_once(
+            contract,
             ContractRequirement(
-                key="target_pressure_100_mpa",
-                label="方案须检验压力目标为 100 MPa 的约束是否满足",
+                key=f"target_pressure_{target_key}_mpa",
+                label=f"方案须检验压力目标为 {target_pressure:g} MPa 的约束是否满足",
+                evidence_terms=[f"{target_pressure:g}MPa"],
                 source="题面原文的压力目标",
-            )
+            ),
         )
     if re.search(r"(?:第二个|两个|双)喷油嘴", normalized):
         contract.required_requirements.append(
@@ -737,8 +747,8 @@ def validate_modeler_plan(
                 and bool(re.search(r"150\s*(?:MPa|兆帕)", normalized, re.IGNORECASE))
                 and all(re.search(rf"{second}(?:秒|s)", normalized, re.IGNORECASE) for second in (2, 5, 10))
             )
-        elif requirement.key == "target_pressure_100_mpa":
-            covered = bool(re.search(r"100\s*(?:MPa|兆帕)", normalized, re.IGNORECASE))
+        elif requirement.key.startswith("target_pressure_"):
+            covered = all(term in normalized for term in requirement.evidence_terms)
         elif requirement.key == "two_injectors":
             covered = bool(re.search(r"(?:第二个|两个|双)喷油嘴", normalized))
         elif requirement.key == "fixed_geometry_and_timing":

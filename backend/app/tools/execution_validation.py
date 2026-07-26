@@ -1416,14 +1416,24 @@ def _contract_pressure_targets(work_dir: Path) -> list[float]:
     return targets
 
 
-def _planned_pressure_bound(root: Path, subtask_id: str) -> tuple[float | None, str | None]:
+def _planned_pressure_bound(
+    root: Path, subtask_id: str, targets: list[float]
+) -> tuple[float | None, str | None]:
     """Return a pressure deviation bound the ModelPlan declared for this subtask.
 
     Only an explicit upper-bound comparator carries a number we may enforce.  A
     plan that merely records a flag (``eq 1.0``) declares no threshold, so the
     caller must fall back to requiring recorded evidence instead of inventing
     a limit of its own.
+
+    Real plans also mix in absolute pressure ceilings — ``最大压力超调 le 150 MPa``,
+    ``柱塞腔峰值压力 le 200 MPa`` — whose wording matches the deviation vocabulary
+    but whose magnitude is an operating limit, not a fluctuation budget.  Judging
+    a 68 MPa peak-to-peak against a 150 MPa ceiling can never fail, which would
+    quietly disable the gate, so a bound at or above the declared target pressure
+    is rejected and the caller falls back to human review.
     """
+    ceiling = min(targets) if targets else None
     for metric in _planned_acceptance_metrics(root, subtask_id):
         if not isinstance(metric, dict):
             continue
@@ -1437,8 +1447,12 @@ def _planned_pressure_bound(root: Path, subtask_id: str) -> tuple[float | None, 
         if str(metric.get("comparator", "")).lower() not in {"le", "lt", "within"}:
             continue
         target = _as_number(metric.get("target"))
-        if target is not None:
-            return target, str(metric.get("label") or metric.get("key") or "")
+        if target is None:
+            continue
+        if ceiling is not None and target >= ceiling:
+            # Absolute operating limit, not a deviation budget — see docstring.
+            continue
+        return target, str(metric.get("label") or metric.get("key") or "")
     return None, None
 
 
@@ -1485,7 +1499,7 @@ def _pressure_target_issues(
             {"contract_targets_mpa": targets},
         )]
 
-    bound, bound_label = _planned_pressure_bound(work_dir, subtask_id)
+    bound, bound_label = _planned_pressure_bound(work_dir, subtask_id, targets)
     worst = max(abs(float(metric["value"])) for metric in deviation_metrics)
     recorded = {
         str(metric.get("id") or metric.get("label")): float(metric["value"])

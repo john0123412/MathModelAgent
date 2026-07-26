@@ -1538,6 +1538,67 @@ class PressureTargetEvidenceTest(unittest.TestCase):
             self.assertFalse(check["passed"], check)
             self.assertEqual(check["evidence"].get("declared_target"), 15.0)
 
+    def test_absolute_pressure_ceiling_is_not_used_as_a_deviation_bound(self):
+        """绝对压力上限不是波动上限，不能拿来判峰峰值。
+
+        真实任务里出现过 `最大压力超调 le 150 MPa`、`柱塞腔峰值压力 le 200 MPa`
+        这类**绝对压力天花板**。把它们当作波动上限，等于用 150 MPa 的尺子量
+        68 MPa 的峰峰值——永远不会失败，门禁被悄悄架空。这类量级不匹配的阈值
+        必须落回“已记录、待人工判定”，而不是伪装成已达标。
+        """
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_notebook(work_dir)
+            _write_manifest(work_dir)
+            self._write_pressure_contract(work_dir)
+            self._set_metrics(
+                work_dir,
+                [
+                    {
+                        "id": "pressure_peak_to_peak",
+                        "label": "稳态压力峰峰值",
+                        "value": 68.02,
+                        "unit": "MPa",
+                        "explanation": "由本题压力时序数组直接计算。",
+                    }
+                ],
+            )
+            with open(
+                os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(
+                    {
+                        "model_plan": {
+                            "subtasks": {
+                                "ques3": {
+                                    "acceptance_metrics": [
+                                        {
+                                            "key": "max_pressure_violation",
+                                            "label": "最大压力超调",
+                                            "comparator": "le",
+                                            "target": 150.0,
+                                            "unit": "MPa",
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    handle,
+                )
+
+            report = validate_execution_artifacts(work_dir, required_subtasks=["ques3"])
+
+            check = next(
+                item
+                for item in report["checks"]
+                if item["id"] == "ques3.pressure_target_evidence"
+            )
+            self.assertIsNone(check["evidence"].get("declared_target"), check)
+            self.assertTrue(
+                check["evidence"].get("requires_human_review"),
+                check,
+            )
+
     def test_task_without_pressure_target_is_not_affected(self):
         """没有压力目标的题（如线性规划）不应被这条门禁波及。"""
         with tempfile.TemporaryDirectory() as work_dir:

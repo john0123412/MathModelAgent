@@ -421,6 +421,57 @@ class TestExecutionValidation(unittest.TestCase):
                 "ques2_fit_results.json",
             )
 
+    def test_unsupported_comparison_error_names_the_value_and_the_allowed_set(self):
+        """A rejected comparison must tell the caller what to submit instead.
+
+        Real task 20260726-151904 died here: the ModelPlan declares ``le``/``ge``
+        while the evidence protocol expects ``lte``/``gte``, so the Coder copied
+        the plan's spelling.  The message said only "constraints[0].comparison
+        不受支持。" — naming neither the rejected value nor the legal set — and the
+        model resubmitted the identical payload until the three-attempt breaker
+        stopped the subtask.
+        """
+        with tempfile.TemporaryDirectory() as work_dir:
+            result_path = os.path.join(work_dir, "ques1_results.csv")
+            with open(result_path, "w", encoding="utf-8") as handle:
+                handle.write("metric,value\nmax_constraint_violation,0.0\n")
+
+            recorded = record_execution_evidence(
+                work_dir,
+                subtask_id="ques1",
+                constraints=[
+                    {
+                        "id": "max_constraint_violation",
+                        "actual": 0.0,
+                        # ModelPlan spelling, not the evidence-protocol spelling.
+                        "comparison": "le",
+                        "target": 0.0,
+                        "source_path": "ques1_results.csv",
+                    }
+                ],
+                metrics=[
+                    {
+                        "id": "max_constraint_violation",
+                        "label": "最大约束违反量",
+                        "value": 0.0,
+                        "unit": "小时",
+                        "explanation": "最优解代入约束后的最大越界量。",
+                        "source_path": "ques1_results.csv",
+                    }
+                ],
+                figures=[],
+            )
+
+            self.assertFalse(recorded["ok"])
+            message = " ".join(recorded["errors"])
+            # The rejected value, so the model can see what it actually sent.
+            self.assertIn("le", message)
+            # The corrective mapping for the plan comparator it copied.
+            self.assertIn("lte", message)
+            # The full legal set, so a blind retry is not the only option.
+            for allowed in ("abs_diff_lte", "gte", "gt", "lt", "between"):
+                self.assertIn(allowed, message)
+
     def test_recorder_binds_plan_constraints_to_exact_acceptance_table_values(self):
         with tempfile.TemporaryDirectory() as work_dir:
             with open(os.path.join(work_dir, "ques1_results.json"), "w", encoding="utf-8") as handle:

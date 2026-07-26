@@ -45,6 +45,26 @@ _PLAN_COMPARISONS = {
     "eq": "abs_diff_lte",
     "within": "lte",
 }
+
+
+def _unsupported_comparison_hint(comparison: object) -> str:
+    """Explain a rejected comparison so the next attempt can differ.
+
+    The recorder gets three attempts per subtask.  A message that names neither
+    the rejected value nor the legal set gives the model nothing to change, so
+    it resubmits the same payload until the breaker fires.  The common cause is
+    copying the ModelPlan comparator (``le``/``ge``) into the evidence call,
+    which expects (``lte``/``gte``) — so name that translation explicitly.
+    """
+    allowed = "、".join(sorted(_EVIDENCE_COMPARISONS))
+    received = comparison if isinstance(comparison, str) else type(comparison).__name__
+    mapped = _PLAN_COMPARISONS.get(received) if isinstance(comparison, str) else None
+    if mapped is not None:
+        return (
+            f"收到 ModelPlan 比较符 '{received}'，证据协议应改写为 '{mapped}'；"
+            f"允许值为 {allowed}。"
+        )
+    return f"收到 '{received}'；允许值为 {allowed}。"
 _SOURCE_NUMBER = re.compile(r"(?<![\w.])[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
 _BALANCE_REQUIREMENT_KEYS = (
     "mass_balance",
@@ -1040,7 +1060,10 @@ def _normalise_constraint_records(
         if actual is None:
             errors.append(f"constraints[{index}].actual 必须是有限数值。")
         if comparison not in _EVIDENCE_COMPARISONS:
-            errors.append(f"constraints[{index}].comparison 不受支持。")
+            errors.append(
+                f"constraints[{index}].comparison 不受支持："
+                f"{_unsupported_comparison_hint(comparison)}"
+            )
         source_path, source_error = _task_relative_file(
             root, constraint.get("source_path"), field=f"constraints[{index}].source_path"
         )

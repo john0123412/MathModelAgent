@@ -1395,5 +1395,205 @@ class TestExecutionValidation(unittest.TestCase):
             self.assertTrue(recorded["ok"], recorded)
 
 
+class PressureTargetEvidenceTest(unittest.TestCase):
+    """题面给出压力目标时，必须留下可复核的实际压力偏差证据。
+
+    这些用例替代早期写死的“100 MPa 一律峰峰值 ≤15 MPa”门禁：阈值只能来自
+    题面或 ModelPlan，但“是否记录了实际偏差”本身是硬要求，否则删除硬阈值
+    会让大幅振荡的控制方案无声通过。
+    """
+
+    def _write_pressure_contract(self, work_dir: str, *, target: float = 100.0) -> None:
+        key = f"{target:g}".replace(".", "_")
+        with open(
+            os.path.join(work_dir, "problem_contract.json"), "w", encoding="utf-8"
+        ) as handle:
+            json.dump(
+                {
+                    "required_requirements": [
+                        {
+                            "key": f"target_pressure_{key}_mpa",
+                            "label": f"方案须检验压力目标为 {target:g} MPa 的约束是否满足",
+                            "evidence_terms": [f"{target:g}MPa"],
+                        }
+                    ]
+                },
+                handle,
+            )
+
+    def _set_metrics(self, work_dir: str, metrics: list[dict]) -> None:
+        manifest_path = os.path.join(work_dir, MANIFEST_NAME)
+        with open(manifest_path, encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        manifest["subtasks"][0]["metrics"] = metrics
+        with open(manifest_path, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, ensure_ascii=False)
+
+    def test_pressure_target_without_deviation_metric_is_rejected(self):
+        """只登记“仿真完成=1”这类标志位，不构成压力目标的验收证据。"""
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_notebook(work_dir)
+            _write_manifest(work_dir)
+            self._write_pressure_contract(work_dir)
+            self._set_metrics(
+                work_dir,
+                [
+                    {
+                        "id": "ode_solved",
+                        "label": "ODE求解完成",
+                        "value": 1.0,
+                        "unit": "标志",
+                        "explanation": "已生成可复核的压力时序与求解器状态。",
+                    }
+                ],
+            )
+
+            report = validate_execution_artifacts(work_dir, required_subtasks=["ques3"])
+
+            self.assertEqual(report["status"], "FAIL")
+            check = next(
+                item
+                for item in report["checks"]
+                if item["id"] == "ques3.pressure_target_evidence"
+            )
+            self.assertFalse(check["passed"])
+
+    def test_recorded_pressure_deviation_satisfies_the_gate(self):
+        """记录了实际峰峰值/偏差即可通过；门禁不自行编造合格阈值。"""
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_notebook(work_dir)
+            _write_manifest(work_dir)
+            self._write_pressure_contract(work_dir)
+            self._set_metrics(
+                work_dir,
+                [
+                    {
+                        "id": "q1_pressure_peak_to_peak",
+                        "label": "稳态压力峰峰值",
+                        "value": 68.02,
+                        "unit": "MPa",
+                        "explanation": "由本题压力时序数组直接计算。",
+                    }
+                ],
+            )
+
+            report = validate_execution_artifacts(work_dir, required_subtasks=["ques3"])
+
+            check = next(
+                item
+                for item in report["checks"]
+                if item["id"] == "ques3.pressure_target_evidence"
+            )
+            self.assertTrue(check["passed"], check)
+
+    def test_plan_declared_pressure_bound_is_enforced_by_its_own_number(self):
+        """ModelPlan 自己声明了数值上限时，超限必须判失败。"""
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_notebook(work_dir)
+            _write_manifest(work_dir)
+            self._write_pressure_contract(work_dir)
+            self._set_metrics(
+                work_dir,
+                [
+                    {
+                        "id": "pressure_peak_to_peak",
+                        "label": "稳态压力峰峰值",
+                        "value": 68.02,
+                        "unit": "MPa",
+                        "explanation": "由本题压力时序数组直接计算。",
+                    }
+                ],
+            )
+            with open(
+                os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(
+                    {
+                        "model_plan": {
+                            "subtasks": {
+                                "ques3": {
+                                    "acceptance_metrics": [
+                                        {
+                                            "key": "pressure_peak_to_peak",
+                                            "label": "稳态压力峰峰值",
+                                            "comparator": "le",
+                                            "target": 15.0,
+                                            "unit": "MPa",
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    handle,
+                )
+
+            report = validate_execution_artifacts(work_dir, required_subtasks=["ques3"])
+
+            check = next(
+                item
+                for item in report["checks"]
+                if item["id"] == "ques3.pressure_target_evidence"
+            )
+            self.assertFalse(check["passed"], check)
+            self.assertEqual(check["evidence"].get("declared_target"), 15.0)
+
+    def test_task_without_pressure_target_is_not_affected(self):
+        """没有压力目标的题（如线性规划）不应被这条门禁波及。"""
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_notebook(work_dir)
+            _write_manifest(work_dir)
+            with open(
+                os.path.join(work_dir, "problem_contract.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(
+                    {"required_requirements": [{"key": "data_analysis_evidence"}]},
+                    handle,
+                )
+
+            report = validate_execution_artifacts(work_dir, required_subtasks=["ques3"])
+
+            self.assertFalse(
+                any(
+                    item["id"] == "ques3.pressure_target_evidence"
+                    for item in report["checks"]
+                )
+            )
+
+    def test_solver_convergence_delta_is_not_accepted_as_pressure_deviation(self):
+        """步长收敛差不是解本身的压力波动，不能顶替峰峰值证据。
+
+        真实 2019A 任务里 ques2/ques3 只登记了 ``dt_convergence_pp_delta_MPa``
+        （两种步长解之间的峰峰值差，0.05 MPa 量级），而解本身的压力峰峰值曾达到
+        68 MPa。把收敛量当作波动证据，等于用数值精度冒充物理达标。
+        """
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_notebook(work_dir)
+            _write_manifest(work_dir)
+            self._write_pressure_contract(work_dir)
+            self._set_metrics(
+                work_dir,
+                [
+                    {
+                        "id": "dt_convergence_pp_delta_MPa",
+                        "label": "步长收敛峰峰值差",
+                        "value": 0.0455,
+                        "unit": "MPa",
+                        "explanation": "dt 减半后两解的峰峰值之差，用于确认数值收敛。",
+                    }
+                ],
+            )
+
+            report = validate_execution_artifacts(work_dir, required_subtasks=["ques3"])
+
+            self.assertEqual(report["status"], "FAIL")
+            check = next(
+                item
+                for item in report["checks"]
+                if item["id"] == "ques3.pressure_target_evidence"
+            )
+            self.assertFalse(check["passed"])
+
+
 if __name__ == "__main__":
     unittest.main()

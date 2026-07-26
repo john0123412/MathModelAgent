@@ -96,6 +96,43 @@ class TestFlows(unittest.TestCase):
         self.assertIn("每条资源约束", prompt)
         self.assertIn("不要求质量/流量守恒残差", prompt)
 
+    def test_pressure_target_prompt_names_the_metric_the_gate_requires(self):
+        """题面给出压力目标时，必须显式索要门禁认可的峰峰值指标。
+
+        `execution_validation` 要求单位为 MPa 的实际压力偏差/峰峰值指标，且不接受
+        步长收敛差。提示词若不点名这个指标，Coder 只会记录“仿真完成”标志位或收敛量，
+        任务会卡在门禁上而不是给出可复核结论。
+        """
+        flows = Flows(
+            {"ques_count": 1, "ques1": "使高压油管内压力尽可能稳定在 100 MPa。"},
+            ProblemContract(
+                required_requirements=[
+                    ContractRequirement(
+                        key="target_pressure_100_mpa",
+                        label="压力目标 100 MPa",
+                        source="test",
+                        evidence_terms=["100MPa"],
+                    )
+                ]
+            ),
+        )
+        prompt = flows.get_solution_flows(
+            flows.questions, ModelerToCoder(questions_solution={})
+        )["ques1"]["coder_prompt"]
+
+        self.assertIn("ques1_pressure_peak_to_peak", prompt)
+        self.assertIn("MPa", prompt)
+        self.assertIn("步长收敛差", prompt)
+
+    def test_prompt_without_pressure_target_omits_the_peak_to_peak_requirement(self):
+        """无压力目标的题不应被塞入无关的峰峰值指标要求。"""
+        flows = Flows({"ques_count": 1, "ques1": "求最优生产方案。"})
+        prompt = flows.get_solution_flows(
+            flows.questions, ModelerToCoder(questions_solution={})
+        )["ques1"]["coder_prompt"]
+
+        self.assertNotIn("pressure_peak_to_peak", prompt)
+
     def test_writer_prompt_uses_persisted_response_when_resume_cache_is_missing(self):
         class MissingOutputCacheInterpreter(FakeCodeInterpreter):
             def get_code_output(self, section: str) -> str:

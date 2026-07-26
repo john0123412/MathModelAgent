@@ -77,6 +77,16 @@ class Flows:
                 for item in self.problem_contract.required_requirements
             )
         )
+        # 题面自带压力目标时，execution_validation 会要求单位为 MPa 的实际压力偏差
+        # 指标，并且不接受步长收敛差。这里点名指标 id，避免 Coder 只登记“仿真完成”
+        # 标志位而卡在门禁上。
+        pressure_target_required = bool(
+            self.problem_contract
+            and any(
+                item.key.startswith("target_pressure_")
+                for item in self.problem_contract.required_requirements
+            )
+        )
         formal_evidence_requirement = (
             "必须从真实数组/CSV计算并输出：目标值、实际最优决策变量，以及每条资源约束的代入值、"
             "松弛量或违反量。线性规划题不要求质量/流量守恒残差；不得把未求解的估计值伪装为最优解。"
@@ -94,6 +104,19 @@ class Flows:
                     + subtask_plan.to_coder_summary()
                 )
             return "参考建模手给出的解决方案：" + solutions.get(key, "")
+
+        def pressure_metric_requirement(key: str) -> str:
+            """返回本题压力偏差指标的硬性要求文本，无压力目标时为空串。"""
+            if not pressure_target_required:
+                return ""
+            return (
+                f"本题题面给出了压力目标，调用 `record_execution_evidence(subtask_id=\"{key}\", ...)` 时，"
+                f"`metrics` 必须包含 id 为 `{key}_pressure_peak_to_peak`、单位为 `MPa` 的指标，"
+                "数值由本题实际压力时序数组按 `max(P)-min(P)` 计算并同时写入结果 CSV；"
+                "如另有稳态波动或目标偏差，也用 MPa 单位一并登记。"
+                "步长收敛差、dt 加密差等数值精度量只说明求解收敛，不能顶替这个指标；"
+                "峰峰值偏大时如实登记真实数值，由人工判定是否达标，不得改小或略去。"
+            )
 
         ques_flow = {
             key: {
@@ -114,6 +137,7 @@ class Flows:
                         对题面或 ModelPlan 明确给出的压力目标、波动上限或稳定判据，必须逐项按其来源数值验收；
                         若题面只说“稳定”“约为”等而未给出可依据的数值上限，记录实际压力偏差、峰峰值和时序数据，
                         不得擅自编造阈值，也不得把未核验的振荡称为稳定。
+                        {pressure_metric_requirement(key)}
                         本题完成时必须有可复算的数值结论和可追溯数据文件，不能只保存 PNG、
                         不能只给定性控制方案，也不能只输出中间扫描。
                         `feasible=false` 是一次求解失败而不是正式交付：若首次仿真不满足目标，必须在本子任务内检查单位、质量守恒、控制变量边界和数值步长，修正后重新求解；只有确实证明题面可行域为空时才能报告不可行，并给出可复算的矛盾证据。

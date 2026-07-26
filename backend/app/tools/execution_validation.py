@@ -57,6 +57,20 @@ _BALANCE_REQUIREMENT_PATTERN = re.compile(
     r"(?:质量|物料|流量|能量).{0,8}(?:守恒|平衡)|(?:守恒|平衡).{0,8}(?:质量|物料|流量|能量)"
 )
 _ANGLE_VALUE_RE = re.compile(r"(?<!\d)(\d+(?:\.\d+)?)\s*(?:°|度)")
+_PRESSURE_TARGET_REQUIREMENT_RE = re.compile(r"^target_pressure_[\d_]+_mpa$")
+_PRESSURE_DEVIATION_LABEL_RE = re.compile(
+    r"(?:峰峰值|峰-峰值|波动|偏差|超调|残差|振幅|方均根|均方根|RMS|最大\s*偏离)",
+    re.IGNORECASE,
+)
+# Numerical-convergence quantities (difference between two step sizes, mesh
+# refinement deltas, solver tolerances) describe how well the ODE was solved,
+# not how much the solution's pressure actually swings.  Accepting them as
+# deviation evidence lets a 0.05 MPa convergence delta stand in for a 68 MPa
+# peak-to-peak oscillation, so they are excluded by name.
+_PRESSURE_CONVERGENCE_LABEL_RE = re.compile(
+    r"(?:收敛|convergence|dt[_\s-]|步长|网格|加密|细化|refine|tolerance|容差|离散化误差)",
+    re.IGNORECASE,
+)
 _INCIDENT_ANGLE_PAIR_RE = re.compile(
     r"入射角(?:分别)?(?:为|是)?\s*(\d+(?:\.\d+)?)\s*(?:°|度)"
     r"\s*(?:和|与|、|及)\s*(\d+(?:\.\d+)?)\s*(?:°|度)",
@@ -1379,6 +1393,140 @@ def _contract_requires_linear_programming_evidence(work_dir: Path) -> bool:
     )
 
 
+def _contract_pressure_targets(work_dir: Path) -> list[float]:
+    """Return pressure targets the problem statement itself declared, in MPa."""
+    contract = _read_json(work_dir / "problem_contract.json")
+    requirements = contract.get("required_requirements", []) if contract else []
+    if not isinstance(requirements, list):
+        return []
+    targets: list[float] = []
+    for item in requirements:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key", ""))
+        if not _PRESSURE_TARGET_REQUIREMENT_RE.match(key):
+            continue
+        raw = key[len("target_pressure_") : -len("_mpa")].replace("_", ".")
+        try:
+            value = float(raw)
+        except ValueError:
+            continue
+        if math.isfinite(value):
+            targets.append(value)
+    return targets
+
+
+def _planned_pressure_bound(root: Path, subtask_id: str) -> tuple[float | None, str | None]:
+    """Return a pressure deviation bound the ModelPlan declared for this subtask.
+
+    Only an explicit upper-bound comparator carries a number we may enforce.  A
+    plan that merely records a flag (``eq 1.0``) declares no threshold, so the
+    caller must fall back to requiring recorded evidence instead of inventing
+    a limit of its own.
+    """
+    for metric in _planned_acceptance_metrics(root, subtask_id):
+        if not isinstance(metric, dict):
+            continue
+        label = " ".join(
+            str(metric.get(field, "")) for field in ("key", "label", "description")
+        )
+        if not _PRESSURE_DEVIATION_LABEL_RE.search(label):
+            continue
+        if str(metric.get("unit", "")).strip().lower() not in {"mpa", "兆帕"}:
+            continue
+        if str(metric.get("comparator", "")).lower() not in {"le", "lt", "within"}:
+            continue
+        target = _as_number(metric.get("target"))
+        if target is not None:
+            return target, str(metric.get("label") or metric.get("key") or "")
+    return None, None
+
+
+def _pressure_target_issues(
+    work_dir: Path,
+    subtask_id: str,
+    metrics: object,
+    targets: list[float],
+) -> list[dict[str, Any]]:
+    """Require auditable pressure-deviation evidence whenever the problem sets a target.
+
+    The previous implementation hard-coded "100 MPa implies peak-to-peak <= 15
+    MPa", which silently mis-judged every other problem.  Thresholds now come
+    only from the problem statement or the ModelPlan, but recording the actual
+    deviation stays mandatory: without it, an openly oscillating control scheme
+    would pass on a bare "simulation completed" flag.
+    """
+    if not targets or not isinstance(metrics, list):
+        return []
+
+    deviation_metrics = [
+        metric
+        for metric in metrics
+        if isinstance(metric, dict)
+        and str(metric.get("unit", "")).strip().lower() in {"mpa", "兆帕"}
+        and _PRESSURE_DEVIATION_LABEL_RE.search(
+            " ".join(str(metric.get(field, "")) for field in ("id", "label", "explanation"))
+        )
+        and not _PRESSURE_CONVERGENCE_LABEL_RE.search(
+            " ".join(str(metric.get(field, "")) for field in ("id", "label", "explanation"))
+        )
+        and _as_number(metric.get("value")) is not None
+    ]
+    target_text = "、".join(f"{target:g} MPa" for target in targets)
+    if not deviation_metrics:
+        return [_issue(
+            f"{subtask_id}.pressure_target_evidence",
+            False,
+            (
+                f"{subtask_id} 的题面压力目标（{target_text}）缺少实际压力偏差证据："
+                "必须记录由本题时序数组计算的峰峰值、波动或偏差指标（单位 MPa），"
+                "不能只登记“仿真完成”之类的标志位，也不能用步长收敛差之类的数值精度量顶替。"
+            ),
+            {"contract_targets_mpa": targets},
+        )]
+
+    bound, bound_label = _planned_pressure_bound(work_dir, subtask_id)
+    worst = max(abs(float(metric["value"])) for metric in deviation_metrics)
+    recorded = {
+        str(metric.get("id") or metric.get("label")): float(metric["value"])
+        for metric in deviation_metrics
+    }
+    if bound is None:
+        # No auditable threshold exists.  Recording the real number is the gate;
+        # judging whether it is acceptable stays with human review.
+        return [_issue(
+            f"{subtask_id}.pressure_target_evidence",
+            True,
+            (
+                f"{subtask_id} 已记录压力偏差实测值（最大 {worst:g} MPa）。"
+                "题面与 ModelPlan 未给出数值上限，是否达标须人工判定。"
+            ),
+            {
+                "contract_targets_mpa": targets,
+                "recorded_metrics": recorded,
+                "declared_target": None,
+                "requires_human_review": True,
+            },
+        )]
+
+    passed = worst <= bound
+    return [_issue(
+        f"{subtask_id}.pressure_target_evidence",
+        passed,
+        (
+            f"{subtask_id} 的压力偏差实测最大 {worst:g} MPa，未超过 ModelPlan 声明的 {bound:g} MPa 上限。"
+            if passed
+            else f"{subtask_id} 的压力偏差实测最大 {worst:g} MPa，超过 ModelPlan 声明的 {bound:g} MPa 上限。"
+        ),
+        {
+            "contract_targets_mpa": targets,
+            "recorded_metrics": recorded,
+            "declared_target": bound,
+            "declared_target_label": bound_label,
+        },
+    )]
+
+
 def _declares_balance_requirement(value: object) -> bool:
     """Return whether a structured acceptance item explicitly requires conservation.
 
@@ -1608,6 +1756,7 @@ def _manifest_issues(
     relief_validation_required = _contract_requires_relief_validation(work_dir)
     q1_valve_duration_outputs_required = _contract_requires_q1_valve_duration_outputs(work_dir)
     linear_programming_evidence_required = _contract_requires_linear_programming_evidence(work_dir)
+    pressure_targets = _contract_pressure_targets(work_dir)
     strict_value_sources = manifest.get("schema_version") == MANIFEST_SCHEMA_V2
     for subtask in required_subtasks:
         item = by_id.get(subtask)
@@ -1657,6 +1806,9 @@ def _manifest_issues(
         issues.extend(_expected_artifact_issues(work_dir, subtask))
         issues.extend(_identifiability_issues(work_dir, subtask, item.get("metrics")))
         issues.extend(_diagnostic_profile_issues(work_dir, subtask, item.get("metrics")))
+        issues.extend(
+            _pressure_target_issues(work_dir, subtask, item.get("metrics"), pressure_targets)
+        )
 
         if strict_value_sources:
             subtask_metrics = item.get("metrics", [])

@@ -2558,18 +2558,28 @@ def _shared_alias_metric_values(metric: dict, metrics: list[dict]) -> list[float
     """Return frozen values of other metrics sharing a prose alias with ``metric``.
 
     Baseline and adjusted variants of the same fact share surface names in
-    prose (both “最优利润” and “新最优利润” may be written as “最大利润”), so a
+    prose (both ``最优利润`` and ``新最优利润`` may be written as ``最大利润``), so a
     sentence stating one variant is inevitably scanned by the other.  A number
     matching ANY alias-sharing sibling is consistent with the freeze and must
     not be reported as a conflict of the sibling it was not about.
+
+    Coder-generated freezes sometimes omit explicit ``aliases``, relying solely
+    on the label (``最大利润`` vs ``新最大利润``).  These labels differ by exactly
+    the variant prefix, so plain alias-set intersection finds no overlap.  To
+    close that gap, variant siblings are always considered to share aliases.
     """
     own_aliases = set(metric_aliases(metric))
     own_id = str(metric.get("id"))
+    own_is_variant = _is_new_variant_metric(metric)
     values: list[float] = []
     for other in metrics:
         if str(other.get("id")) == own_id:
             continue
-        if not own_aliases & set(metric_aliases(other)):
+        # Plain intersection, as before.
+        aliases_overlap = bool(own_aliases & set(metric_aliases(other)))
+        # Variant siblings (baseline ↔ adjusted) always share prose aliases
+        # even when the label contains a 新/adjusted prefix.
+        if not aliases_overlap and not (own_is_variant != _is_new_variant_metric(other)):
             continue
         value = other.get("value")
         if isinstance(value, (int, float)) and not isinstance(value, bool):

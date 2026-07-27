@@ -1497,6 +1497,131 @@ class TestPreparePaperMarkdown(unittest.TestCase):
         )
 
 
+    def test_variant_sibling_exemption_works_without_explicit_aliases(self):
+        """真实 Coder 生成的冻结结果只有 label，不设 aliases 字段。
+
+        基线 label=最大利润 / 新变体 label=新最大利润 → _metric_aliases 无交集
+        → sibling exemption 失效 → 正文"最大利润提升至2266.67元"被误报。
+
+        真实任务 20260726-155823 的 preflight 结果。
+        """
+        metrics = [
+            {
+                "id": "objective_value",
+                "subtask_id": "ques1",
+                "label": "最大利润",
+                "value": 2200.0,
+                "unit": "元",
+                "explanation": "原始方案的目标函数最优值。",
+            },
+            {
+                "id": "new_objective_value",
+                "subtask_id": "ques2",
+                "label": "新最大利润",
+                "value": 2266.6667,
+                "unit": "元",
+                "explanation": "机器时间增加后的目标函数最优值。",
+            },
+        ]
+        # 句子明确说调整后场景，不带"新方案下"前缀
+        markdown = (
+            "当机器时间增加至90小时时，新最优解调整为产品A 36.67件、"
+            "产品B 26.67件，最大利润提升至2266.67元。"
+        )
+        with tempfile.TemporaryDirectory() as work_dir:
+            source_path = os.path.join(work_dir, "result.csv")
+            with open(source_path, "w", encoding="utf-8") as handle:
+                handle.write("evidence\n")
+            with open(source_path, "rb") as handle:
+                source_sha256 = hashlib.sha256(handle.read()).hexdigest()
+            with open(
+                os.path.join(work_dir, "frozen_results.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(
+                    {
+                        "schema": "mathmodel.result-freeze",
+                        "version": 1,
+                        "metrics": metrics,
+                        "sources": [
+                            {
+                                "relative_path": "result.csv",
+                                "sha256": source_sha256,
+                                "role": "evidence",
+                            }
+                        ],
+                    },
+                    handle,
+                    ensure_ascii=False,
+                )
+
+            report = build_preflight_report(work_dir, markdown, code_sources=[])
+
+        rc = report["checks"]["result_consistency"]
+        self.assertTrue(rc["passed"], rc.get("conflicts"))
+        self.assertEqual(rc["conflicts"], [])
+
+    def test_variant_sibling_exemption_still_blocks_wrong_baseline_value(self):
+        """sibling exemption 豁免的是正确的新变体值，不是任意错误数字。"""
+        metrics = [
+            {
+                "id": "objective_value",
+                "subtask_id": "ques1",
+                "label": "最大利润",
+                "value": 2200.0,
+                "unit": "元",
+                "explanation": "原始方案的目标函数最优值。",
+            },
+            {
+                "id": "new_objective_value",
+                "subtask_id": "ques2",
+                "label": "新最大利润",
+                "value": 2266.6667,
+                "unit": "元",
+                "explanation": "机器时间增加后的目标函数最优值。",
+            },
+        ]
+        # 故意把新变体的值写错
+        markdown = (
+            "当机器时间增加至90小时时，新最优解调整为产品A 36.67件、"
+            "产品B 26.67件，最大利润提升至2500.0元。"
+        )
+        with tempfile.TemporaryDirectory() as work_dir:
+            source_path = os.path.join(work_dir, "result.csv")
+            with open(source_path, "w", encoding="utf-8") as handle:
+                handle.write("evidence\n")
+            with open(source_path, "rb") as handle:
+                source_sha256 = hashlib.sha256(handle.read()).hexdigest()
+            with open(
+                os.path.join(work_dir, "frozen_results.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(
+                    {
+                        "schema": "mathmodel.result-freeze",
+                        "version": 1,
+                        "metrics": metrics,
+                        "sources": [
+                            {
+                                "relative_path": "result.csv",
+                                "sha256": source_sha256,
+                                "role": "evidence",
+                            }
+                        ],
+                    },
+                    handle,
+                    ensure_ascii=False,
+                )
+
+            report = build_preflight_report(work_dir, markdown, code_sources=[])
+
+        rc = report["checks"]["result_consistency"]
+        self.assertFalse(rc["passed"])
+        conflicts = rc["conflicts"]
+        self.assertGreaterEqual(len(conflicts), 1)
+        self.assertTrue(
+            any(2500.0 in item.get("paper_numbers", []) for item in conflicts),
+            conflicts,
+        )
+
     def test_preflight_ignores_symbol_subscripts_in_result_consistency(self):
         with tempfile.TemporaryDirectory() as work_dir:
             with open(

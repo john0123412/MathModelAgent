@@ -18,7 +18,10 @@ from app.utils.log_util import logger
 import json
 import re
 
-MAX_JSON_REPAIR_ATTEMPTS = 4
+# Keep one bounded format-correction turn after the initial response.  A
+# second invalid response is terminal so a malformed ModelPlan cannot consume
+# an unbounded provider budget before the Codex/manual recovery gate.
+MAX_JSON_REPAIR_ATTEMPTS = 2
 
 _ARTIFACT_KINDS = get_args(ExpectedArtifact.model_fields["kind"].annotation)
 _METRIC_COMPARATORS = get_args(

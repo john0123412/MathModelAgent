@@ -28,11 +28,35 @@ class _Flows:
         return f"write {key}"
 
 
+class _EdaOnlyFlows:
+    def get_solution_flows(self, _questions, _modeler_response):
+        return {"eda": {"coder_prompt": "verify input constants"}}
+
+    def get_writer_prompt(self, key, _response, _interpreter, _template):
+        return f"write {key}"
+
+
 class _Coder:
     def __init__(self, events):
         self.events = events
 
     async def run(self, prompt, subtask_title):
+        self.events.append(("code", subtask_title, prompt))
+        return CoderToWriter(
+            code_response=f"response {subtask_title}",
+            created_images=[],
+            execution_attempted=True,
+            execution_succeeded=True,
+        )
+
+
+class _QualityRepairCoder(_Coder):
+    def __init__(self, events):
+        super().__init__(events)
+        self.quality_repair_flags = []
+
+    async def run(self, prompt, subtask_title, **kwargs):
+        self.quality_repair_flags.append(kwargs.get("quality_repair", False))
         self.events.append(("code", subtask_title, prompt))
         return CoderToWriter(
             code_response=f"response {subtask_title}",
@@ -149,6 +173,74 @@ class WorkflowExecutionGateTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(saved.workflow_state, "waiting_quality_review")
             self.assertEqual(saved.quality_review_id, "review-1")
 
+    async def test_quality_repair_flag_is_sent_only_to_fresh_coder_turns(self):
+        with tempfile.TemporaryDirectory() as raw_work_dir:
+            work_dir = Path(raw_work_dir)
+            checkpoint_manager = CheckpointManager(str(work_dir))
+            checkpoint_manager.save(
+                TaskCheckpoint(
+                    task_id="task",
+                    ques_all="test",
+                    comp_template="cumcm",
+                    format_output="markdown",
+                    questions={"ques_count": 2, "ques1": "q1", "ques2": "q2"},
+                    ques_count=2,
+                    modeler_response={"questions_solution": {}},
+                    updated_at="now",
+                )
+            )
+            saved_response = CoderToWriter(
+                code_response="existing q1",
+                created_images=[],
+                execution_attempted=True,
+                execution_succeeded=True,
+            )
+            checkpoint_manager.mark_solution_coder_completed(
+                "ques1", saved_response.model_dump()
+            )
+            events = []
+            workflow = MathModelWorkFlow()
+            workflow.task_id = "task"
+            workflow.work_dir = str(work_dir)
+            coder = _QualityRepairCoder(events)
+
+            def freeze(directory):
+                Path(directory, "frozen_results.json").write_text(
+                    "{}", encoding="utf-8"
+                )
+
+            with (
+                patch("app.core.workflow.redis_manager.publish_message", AsyncMock()),
+                patch(
+                    "app.core.workflow.write_execution_validation_report",
+                    return_value={"status": "PASS"},
+                ),
+                patch(
+                    "app.core.workflow.write_frozen_results_from_execution_validation",
+                    side_effect=freeze,
+                ),
+                patch(
+                    "app.core.workflow.write_execution_quality_review",
+                    return_value={"status": "PASS"},
+                ),
+            ):
+                await workflow._run_solution_flows(
+                    _Flows(),
+                    ModelerToCoder(questions_solution={}),
+                    coder,
+                    _Writer(events),
+                    _Interpreter(str(work_dir)),
+                    _Output(),
+                    checkpoint_manager,
+                    {},
+                    quality_repair=True,
+                )
+
+            self.assertEqual(coder.quality_repair_flags, [True])
+            self.assertEqual(
+                [event[1] for event in events if event[0] == "code"], ["ques2"]
+            )
+
     async def test_early_coder_failure_does_not_label_diagnostic_pass_as_validation(self):
         with tempfile.TemporaryDirectory() as raw_work_dir:
             work_dir = Path(raw_work_dir)
@@ -191,6 +283,46 @@ class WorkflowExecutionGateTest(unittest.IsolatedAsyncioTestCase):
                     )
 
             self.assertNotIn("诊断报告状态: PASS", str(raised.exception))
+
+    async def test_eda_failure_does_not_create_formal_validation_report(self):
+        with tempfile.TemporaryDirectory() as raw_work_dir:
+            work_dir = Path(raw_work_dir)
+            checkpoint_manager = CheckpointManager(str(work_dir))
+            checkpoint_manager.save(
+                TaskCheckpoint(
+                    task_id="task",
+                    ques_all="test",
+                    comp_template="cumcm",
+                    format_output="markdown",
+                    questions={"ques_count": 1, "ques1": "q1"},
+                    ques_count=1,
+                    modeler_response={"questions_solution": {}},
+                    updated_at="now",
+                )
+            )
+            workflow = MathModelWorkFlow()
+            workflow.task_id = "task"
+            workflow.work_dir = str(work_dir)
+
+            with (
+                patch("app.core.workflow.redis_manager.publish_message", AsyncMock()),
+                patch("app.core.workflow.write_execution_validation_report") as report_writer,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "非正式代码阶段 eda 未成功执行"
+                ):
+                    await workflow._run_solution_flows(
+                        _EdaOnlyFlows(),
+                        ModelerToCoder(questions_solution={}),
+                        _FailedCoder(),
+                        _Writer([]),
+                        _Interpreter(str(work_dir)),
+                        _Output(),
+                        checkpoint_manager,
+                        {},
+                    )
+
+            report_writer.assert_not_called()
 
     async def test_all_code_and_freeze_finish_before_any_solution_writer_runs(self):
         with tempfile.TemporaryDirectory() as raw_work_dir:

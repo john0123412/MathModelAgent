@@ -23,20 +23,34 @@ ARG UV_VERSION=0.11.14
 #     texlive-lang-chinese（AR PL KaitiM GB）。这些中文 Windows 字体没有
 #     可合法分发的安装包，INSTALL_MS_FONTS 对中文字体没有作用。
 # lmodern：pandoc 默认 LaTeX 模板依赖 lmodern.sty，texlive-latex-recommended
-# 未包含该包，缺失会导致直接 PDF 导出（pdf_exporter.py）编译失败
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+# 未包含该包，缺失会导致直接 PDF 导出（pdf_exporter.py）编译失败。
+# Docker Desktop 的 HTTP 下载路径会在大 CJK/TeX 包上断连；同时安装全部
+# 依赖会导致内存受限的构建器被 OOM 终止。因此使用官方 HTTPS 源并分批安装，
+# 使每一步可独立重试和缓存。
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get -o Acquire::Retries=5 -o Acquire::https::Timeout=120 update && \
+    apt-get -o Acquire::Retries=5 -o Acquire::https::Timeout=120 upgrade -y && \
+    apt-get -o Acquire::Retries=5 -o Acquire::https::Timeout=120 install -y --no-install-recommends \
     fonts-noto-cjk \
     fontconfig \
     fonts-liberation \
+    lmodern \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get -o Acquire::Retries=5 -o Acquire::https::Timeout=120 update && \
+    apt-get -o Acquire::Retries=5 -o Acquire::https::Timeout=120 install -y --no-install-recommends \
     pandoc \
     latexmk \
     texlive-xetex \
     texlive-latex-recommended \
-    texlive-latex-extra \
     texlive-fonts-recommended \
-    texlive-lang-chinese \
     texlive-plain-generic \
-    lmodern \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get -o Acquire::Retries=5 -o Acquire::https::Timeout=120 update && \
+    apt-get -o Acquire::Retries=5 -o Acquire::https::Timeout=120 install -y --no-install-recommends \
+    texlive-latex-extra \
+    texlive-lang-chinese \
     && rm -rf /var/lib/apt/lists/*
 
 # 可选：安装 Microsoft Core Fonts（仅 Times New Roman/Courier New/Arial 等

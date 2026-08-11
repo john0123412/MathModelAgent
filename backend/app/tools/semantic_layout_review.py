@@ -21,7 +21,9 @@ _PAGE_BREAK_RE = re.compile(
     r"(?:<!--\s*pagebreak\s*-->|\\(?:clearpage|newpage|pagebreak)\b|\f)",
     re.IGNORECASE,
 )
-_EMPTY_REFERENCE_RE = re.compile(r"(?<![A-Za-z0-9])\{\}(?![A-Za-z0-9])")
+# Empty braces are emitted by some providers when an intended citation has no
+# usable entry.  Do not treat escaped LaTeX braces as a reference marker.
+_EMPTY_REFERENCE_RE = re.compile(r"(?<![A-Za-z0-9\\])(?:\{\s*\})+(?![A-Za-z0-9])")
 _IMAGE_RE = re.compile(r"!\[(?P<caption>[^\]]*)\]\((?P<path>[^)]+)\)")
 _FILENAME_LIKE_CAPTION_RE = re.compile(r"^(?:fig(?:ure)?[\s_-]*\d*|image[\s_-]*\d*|图[\s_-]*\d*)$", re.I)
 
@@ -61,6 +63,64 @@ def _expected_level(title: str) -> tuple[int | None, str]:
     ):
         return 2, "subsection"
     return None, "other"
+
+
+def normalize_markdown_semantics(markdown: str) -> tuple[str, dict[str, int]]:
+    """Repair unambiguous CUMCM semantic-layout slips outside code fences.
+
+    Writer prompts ask for the required hierarchy, but a provider can still
+    emit a top-level Chinese section as H2 or leave an empty citation marker.
+    These two forms have deterministic, low-risk repairs.  Keep source code,
+    inline/Display math and all other wording untouched so this does not turn
+    the postprocessor into an unchecked prose rewriter.
+    """
+    output: list[str] = []
+    in_fence = False
+    fence: str | None = None
+    normalised_main_section_headings = 0
+    removed_empty_reference_markers = 0
+
+    for line in markdown.splitlines(keepends=True):
+        marker = _FENCE_RE.match(line)
+        if marker:
+            token = marker.group(1)[0]
+            if not in_fence:
+                in_fence = True
+                fence = token
+            elif fence == token:
+                in_fence = False
+                fence = None
+            output.append(line)
+            continue
+
+        updated = line
+        if not in_fence:
+            raw_line = line.rstrip("\r\n")
+            heading = _HEADING_RE.match(raw_line)
+            if heading:
+                title = heading.group("title").strip()
+                expected_level, kind = _expected_level(title)
+                if kind == "top_level_section" and expected_level == 1:
+                    level = len(heading.group("marks"))
+                    if level != expected_level:
+                        leading = raw_line[: len(raw_line) - len(raw_line.lstrip())]
+                        line_ending = line[len(raw_line) :]
+                        updated = f"{leading}# {title}{line_ending}"
+                        normalised_main_section_headings += 1
+
+            # A plain ``{}`` in Chinese prose is an empty citation marker in
+            # the Writer protocol.  Skip math lines, whose brace syntax must
+            # be preserved for Pandoc/LaTeX.
+            if "$" not in updated and re.search(r"[\u4e00-\u9fff]", updated):
+                updated, removed = _EMPTY_REFERENCE_RE.subn("", updated)
+                removed_empty_reference_markers += removed
+
+        output.append(updated)
+
+    return "".join(output), {
+        "normalised_main_section_headings": normalised_main_section_headings,
+        "removed_empty_reference_markers": removed_empty_reference_markers,
+    }
 
 
 def review_markdown(

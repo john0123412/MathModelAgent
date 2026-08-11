@@ -23,7 +23,50 @@
 
 以下项目不能由 Codex 自行替代提交人：最终文件命名和平台上传要求、竞赛规则/匿名与诚信确认，以及最终主观版式取舍。它们应在上述可机检复核完成后由队员确认。
 
-- [ ] 打开 `semantic_layout_review.json/md`：确认主章节为一级标题、1.1/5.1.1 等小标题层级一致、无 `{}` 空引用和原始文件名式图题。`cumcm2026` 的 `pdf_layout_policy.appendix_pagebreak_in_pdf=true` 时导出器会 PDF-only 地让附录另起页；仍须实际打开 PDF 检查分页和书签层级。
+## 使用任务级模板覆盖时的额外门禁
+
+若任务导入过竞赛包或队伍指定的中文格式，必须逐项确认：
+
+- [ ] `export_template_override.json` 存在且 `template show --task-id <task_id> --profile <profile>`
+  成功；显示的 DOCX 与版式合同 SHA-256 与任务目录当前文件一致。
+- [ ] 导入使用的是安全 `.docx`；没有把 `.doc`、任意 TeX、脚本或未列入合同 allowlist 的
+  Pandoc 参数写入任务目录。合同 schema 为 `mma.export-format-contract.v1`。
+- [ ] 导入后确实运行了（且记录退出结果）
+  `python -m app.tools.export_cli task-refresh --task-id <task_id> --profile <profile>`；该命令
+  不调用 Provider、不重跑数值，但必须重建当前 Markdown、DOCX、PDF、LaTeX sidecar、审计和
+  candidate manifest。不能只跑一次 PDF 就宣称模板已生效。
+- [ ] `task-refresh` 后重新核对 `res.docx`、`res.pdf`、`latex_project/`、
+  `paper_preflight_report.json`、`pdf_visual_check.json`、`submission_audit_report.json`、
+  `candidate_manifest.json` 和 `final_acceptance_report.json` 的主产物哈希，旧 PDF/DOCX 不得
+  冒充当前模板结果。
+- [ ] 审计明确显示 `source=user_supplied_unverified`、`official_rule=false`；不因文件名、
+  `label` 或“官方包”来源描述而把系统状态写成官方认证。
+- [ ] 对当前用户指定的中文基线，DOCX 与 PDF 中的摘要正文和正文 prose 均为宋体小四（12pt）
+  与单倍行距；摘要至少两段，关键词后“问题重述”另起页；内部正文页数为 10--20 页。该项是
+  当前内部检查，不是对 CUMCM 官方格式的自动认证。
+- [ ] `submission_audit_report.json -> template_override_integrity` 为通过，且
+  `docx_export_status.json`、`export_status.json`（含 PDF）、预检、PDF 视觉检查和候选清单的
+  profile、模板清单 SHA-256、合同 SHA-256、DOCX SHA-256 均一致；任一项不一致必须重新执行
+  `task-refresh`。
+- [ ] 队员已打开赛事最新官方包、官方公告和提交系统，人工核对字体、字号、行距、页边距、
+  A4/页数、匿名字段、文件命名和大小限制。仓库中文竞赛格式是用户指定基线，`huashubei`
+  仅作华数杯参考，不能作为 CUMCM 高教社杯官方规则依据。
+
+可复制的导入—校验—刷新命令如下（在 `backend/` 目录运行；Docker 时把输入文件放到容器
+可见路径）：
+
+```powershell
+uv run python -m app.tools.export_cli template install `
+  --task-id <task_id> --profile cumcm2026 `
+  --docx-template "D:\format-package\official.docx" `
+  --format-contract "D:\format-package\format.json"
+uv run python -m app.tools.export_cli template show `
+  --task-id <task_id> --profile cumcm2026
+uv run python -m app.tools.export_cli task-refresh `
+  --task-id <task_id> --profile cumcm2026 --local
+```
+
+- [ ] 打开 `semantic_layout_review.json/md`：确认主章节为一级标题、1.1/5.1.1 等小标题层级一致、无 `{}` 空引用和原始文件名式图题。后处理会自动修正代码围栏/数学行之外的明确主章节层级错误与空 `{}` 标记，修复次数见 `paper_preflight_report.json.fixups`；其余 WARN 仍须人工处理。`cumcm2026` 的 `pdf_layout_policy.appendix_pagebreak_in_pdf=true` 时导出器会 PDF-only 地让附录另起页；仍须实际打开 PDF 检查分页和书签层级。
 
 当前 workflow 还会生成 `problem_contract.json`、`execution_validation.json`、
 `execution_validation_report.json` 与 `frozen_results.json`。这些文件只能证明题面参数、
@@ -92,6 +135,9 @@
   控制数值、对应的压力核验值，以及过渡结束后切回/维持的稳态策略；不得只给正向仿真曲线。
 - `execution_validation_report.json` 是否为 `PASS`；每个正式问题是否存在 `executed=true`、
   `feasible=true` 和能复核 SHA-256 的约束来源。
+- 线性规划、整数规划或资源情景重求解是否在 ModelPlan 中使用 `diagnostic_profile=optimization`，且受控执行证据的 `metrics` 明确包含求解器状态、可行性和计划要求的松弛量或独立复算；这些信息不能只留在诊断 CSV 中。
+- 对以题图/附件作为数据来源的题目，正文和计划是否明确说明实际读取/使用的来源；只出现“图2”或“附件2”字样、或写明“不采用/未使用”均不构成来源锁定。高压喷油类题目中，Q1 应正向绑定图2 的流量数据，Q2/Q3 应正向绑定附件2 的针阀升程/有效面积数据，Q3 如继承 Q2 来源应明确写出继承关系。
+- 若 Q3 比较同步与错相/错峰策略，是否在同一可复核结果源中分别给出同步基线（相位偏移为 0）、非零备选相位，以及两个策略各自的目标/压力等评分；不能用一条同时含有“错相、备选、评分”字样的指标替代比较和选择依据。
 - [ ] 如存在 `quesN_acceptance_metrics.csv` / `quesN_constraint_check.csv`，是否逐行复核了数值、比较符、目标和“达标/状态”一致；不得把不满足约束的行标为通过，也不得用工具调用中的四舍五入数值替代表内精确来源。
 - 每个约束来源和图表数据源是否由当前求解/定向回修回合实际新建或更新；不得把 checkpoint
   中未更新的旧结果文件重新登记为本次计算证据。
@@ -184,6 +230,7 @@
   `severity=conditional` 的检查，正式提交前优先修正为 `PASS`，无法修正时需人工接受风险。
 - `execution_validation_report.json = PASS`，`frozen_results.json` 的来源哈希仍有效；旧任务若缺少这些产物，不能按当前数学验收标准通过。
 - `execution_quality_review.json` 的 `review_id` 与 checkpoint 中已批准编号一致；若状态曾为 `NEEDS_REVIEW`，逐项核对 `failed_subtasks/findings` 的修复结果或书面放行依据。机器筛查 `PASS` 只表示未发现明确失败标记/NaN/Inf，不能替代模型、量纲、守恒、推导和关键数值的逐题复核。
+- 启用建模方案人工门禁时，`modeling_decision.json`、`modeler_plan.json` 和 `checkpoint.json` 的规范化计划 SHA-256 必须一致；续传重建计划后，旧批准应已失效且任务重新处于 `waiting_review`，不得以旧批准继续执行。
 - 若使用过 Codex/人工受控候选，核对 `repair_candidate_manifest.json` 与 `repair_candidate_audit.jsonl`：候选必须绑定当前 `review_id`/`quesN`，`status=evidence_passed`，脚本和 evidence 哈希可复核；同时确认后续全量 execution validation、重新冻结和新的质量审批均已完成。单个候选 `evidence_passed` 不等于整题或论文验收通过。
 - 质量复核返修后确认对应 `quesN_results.csv`、execution manifest、`frozen_results.json` 和论文章节均来自同一轮结果；不得用直接编辑 CSV/manifest/论文数字代替 Coder 重算和重新冻结。
 - `paper_preflight_report.json` 中 `freeze_integrity`、`result_consistency`、
@@ -227,17 +274,35 @@
 - [ ] `export_status.json` 的 PDF 源/输出哈希与当前文件一致；失败重导后目录中不存在冒充当前结果的旧 PDF。
 - [ ] `candidate_manifest.json.schema_version=1.2`，`submission_file`、`artifact_set_id` 与主产物哈希已生成且一致。
 - [ ] 如生成支撑材料，`support_materials_manifest.json` / ZIP 已通过成员、大小和 SHA-256 审核，且明确不作为主论文上传文件。
+- [ ] 若使用 `cumcm2026`，`AI工具使用详情.pdf` 可由 PDF 解析器打开且至少有一页；仅有 `%PDF-` 文件头的伪文件不能通过预检。
 - [ ] `task_status.json` 为权威状态；`finalizing` / `failed` 不因旧 `res.md` 或 `res.docx` 存在而显示为 completed。
 
 ### P1：结构与逐页视觉
 
 - [ ] `pdf_visual_check.json.scan_scope=all_pages` 且 `pages_checked=page_count`。
+- [ ] 对 `cumcm2025`/`cumcm2026`，`paper_preflight_report.json -> checks.editorial_quality` 为
+  `passed=true`、`quality_passed=true`、`enforced=true`，并明确 `official_rule=false`；不要把内部
+  5000 字符、逐题图表覆盖等质量阈值当作官方竞赛条款。
+- [ ] 对 `cumcm2025`/`cumcm2026`，`pdf_visual_check.json -> checks.editorial_quality` 为严格策略
+  `cumcm2026_strict` 的 `passed=true`/`blocking=true`：摘要密度、首页留白和正文 10--20 页（当前用户指定的内部基线）均通过；再人工翻阅
+  摘要页与正文过渡页，确认不是通过无意义填充凑页数。
+- [ ] `pdf_visual_check.json -> checks.literal_markdown_headings.passed=true`，且
+  `submission_audit_report.json` 中 `docx_markdown_heading_leakage.passed=true`；两者共同确认 Markdown 标题没有
+  在 PDF 或 DOCX 正文中以字面 `###` 泄漏。附录 B 的代码字面量不属于此检查范围。
 - [ ] 正文没有 Markdown 表格源码泄漏、重复参考文献章节、孤立文献编号或内部审查图片。
 - [ ] 人工逐页确认图题没有跨页误配、最后一页没有仅剩极少量代码、附录代码可读。
 
 ### P2：内容语义与复现
 
 - [ ] 每张正文图都有“图N”正文引用，并与图题和分析结论对应。
+- [ ] 每个正式 `quesN` 都有至少一幅结果图和一张结果表；它们并非重复的装饰图或空模板。打开
+  `paper_assets_manifest.json`，确认每条相关 `figures`/`tables` 记录都绑定正确的 `quesN`、任务内数值
+  `source_paths` 与当前 `source_sha256`，源数据变动后已重新制图和导出。
+- [ ] `final_acceptance_report.json -> editorial_quality_gate` 已通过；若是历史报告或该门禁 inactive，
+  不把它作为新版正式范文/正式技术验收的依据。
+- [ ] 如使用过 `presentation_reflow_pending_export`，确认 `presentation_reflow_manifest.json` 存在，且它只记录
+  确定性版式重排；随后已重新生成 DOCX、PDF、LaTeX、预检、视觉检查、提交审计和 candidate manifest。不得把该
+  路径用于重写数值、结论或冻结证据。
 - [ ] 连续型模型的小数解写为“连续生产当量”；若业务要求整件，单独求解整数规划，不直接四舍五入。
 - [ ] 影子价格写明有效区间/最优基条件，不能把局部边际价值无限外推。
 - [ ] 坐标轴顶点由哪条约束决定的解释，与实际等式和可行性计算一致。

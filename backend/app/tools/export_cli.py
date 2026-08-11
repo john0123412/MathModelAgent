@@ -40,10 +40,24 @@ from app.schemas.enums import ExportProfile
 from app.services.task_status import write_task_status_to_dir
 from app.tools.candidate_exporter import write_candidate_manifest
 from app.tools.pdf_exporter import export_markdown_to_pdf
-from app.tools.pdf_visual_checker import check_pdf_visual
+from app.tools.pdf_visual_checker import (
+    CUMCM2026_STRICT_EDITORIAL_QUALITY_POLICY,
+    DEFAULT_EDITORIAL_QUALITY_POLICY,
+    check_pdf_visual,
+)
 from app.tools.submission_audit import write_submission_audit_report
 from app.tools.final_acceptance import write_final_acceptance_report
+from app.tools.ai_usage_exporter import ensure_ai_usage_details
+from app.tools.paper_postprocessor import prepare_paper_markdown
 from app.tools.tex_project_exporter import export_markdown_to_latex_project
+from app.tools.export_template_override import (
+    TemplateOverrideError,
+    get_editorial_policy_override,
+    get_pdf_visual_constraints,
+    install_export_template_override,
+    load_export_template_override,
+)
+from app.utils.common_utils import ensure_safe_task_id, get_work_dir, md_2_docx
 from app.utils.font_utils import check_font_installed
 
 # CLI 参数名 -> pandoc/fontspec 变量名
@@ -65,6 +79,15 @@ _WINDOWS_PREFERRED_FONTS = [
     "SimHei",
     "KaiTi",
 ]
+
+
+def _pdf_editorial_quality_policy(profile: str) -> str:
+    """Keep manual formal re-export aligned with the workflow's quality gate."""
+    return (
+        CUMCM2026_STRICT_EDITORIAL_QUALITY_POLICY
+        if profile in {ExportProfile.CUMCM2025.value, ExportProfile.CUMCM2026.value}
+        else DEFAULT_EDITORIAL_QUALITY_POLICY
+    )
 
 
 def _load_font_config(path: str) -> dict[str, str]:
@@ -130,12 +153,27 @@ def _refresh_task_status(
     pdf_result: dict,
 ) -> None:
     """Refresh task reports after a manual/formal PDF re-export."""
-    visual_result = check_pdf_visual(pdf_path, work_dir) if pdf_result["success"] else None
+    template_audit = pdf_result.get("template_override")
+    if not isinstance(template_audit, dict):
+        template_audit = {"active": False}
+    visual_result = (
+        check_pdf_visual(
+            pdf_path,
+            work_dir,
+            quality_policy=_pdf_editorial_quality_policy(profile),
+            export_profile=profile,
+            template_override_audit=template_audit,
+            **get_pdf_visual_constraints(work_dir, profile),
+        )
+        if pdf_result["success"]
+        else None
+    )
     export_status_path = os.path.join(work_dir, "export_status.json")
     export_status = _load_existing_json(export_status_path)
     export_status.update(
         {
             "export_profile": profile,
+            "template_override": template_audit,
             "pdf": pdf_result,
             "pdf_visual_check": visual_result,
         }
@@ -143,13 +181,14 @@ def _refresh_task_status(
     with open(export_status_path, "w", encoding="utf-8") as f:
         json.dump(export_status, f, ensure_ascii=False, indent=2)
 
-    write_submission_audit_report(work_dir)
     manifest_path = os.path.join(work_dir, "candidate_manifest.json")
     if os.path.exists(manifest_path):
         manifest = _load_existing_json(manifest_path)
         task_id = manifest.get("task_id") or os.path.basename(os.path.abspath(work_dir))
         write_candidate_manifest(work_dir, str(task_id))
+        write_submission_audit_report(work_dir)
         final_report = write_final_acceptance_report(work_dir)
+        write_candidate_manifest(work_dir, str(task_id))
         if final_report.get("technical_status") == "TECHNICAL_PASS":
             write_task_status_to_dir(work_dir, str(task_id), "completed", "任务处理完成")
         else:
@@ -159,6 +198,8 @@ def _refresh_task_status(
                 "failed",
                 "最终技术验收未通过，请查看 final_acceptance_report.json",
             )
+    else:
+        write_submission_audit_report(work_dir)
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -222,6 +263,19 @@ def cmd_pdf(args: argparse.Namespace) -> int:
 
     overrides = _collect_font_overrides(args)
     work_dir = args.work_dir or os.path.dirname(os.path.abspath(args.input)) or "."
+    if args.update_status:
+        canonical_md = os.path.normcase(os.path.abspath(os.path.join(work_dir, "res.md")))
+        canonical_pdf = os.path.normcase(os.path.abspath(os.path.join(work_dir, "res.pdf")))
+        if (
+            os.path.normcase(os.path.abspath(args.input)) != canonical_md
+            or os.path.normcase(os.path.abspath(args.output)) != canonical_pdf
+        ):
+            print(
+                "[错误] --update-status 只能用于任务目录中的 res.md -> res.pdf，"
+                "避免外部文件覆盖当前任务的验收状态。",
+                file=sys.stderr,
+            )
+            return 2
 
     result = export_markdown_to_pdf(
         args.input,
@@ -282,6 +336,135 @@ def cmd_latex(args: argparse.Namespace) -> int:
     print("  xelatex -no-shell-escape -interaction=nonstopmode main.tex   # 再跑一次以生成正确的目录/交叉引用")
     print("\n（该模板未使用 bibtex/biber，无需额外的参考文献编译步骤）")
     return 0
+
+
+def cmd_template_install(args: argparse.Namespace) -> int:
+    """Import a task-local official-package candidate without mutating profiles."""
+    try:
+        task_id = ensure_safe_task_id(args.task_id)
+        work_dir = get_work_dir(task_id)
+        result = install_export_template_override(
+            work_dir,
+            args.profile,
+            docx_template_path=args.docx_template,
+            format_contract_path=args.format_contract,
+            label=args.label,
+        )
+    except (OSError, ValueError, TemplateOverrideError) as exc:
+        print(f"[错误] 导入任务级模板覆盖失败: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(
+        "模板已复制进任务目录并记录哈希。请执行 task-refresh 重建 Markdown、"
+        "DOCX、PDF、LaTeX 和全部审核报告。"
+    )
+    return 0
+
+
+def cmd_template_show(args: argparse.Namespace) -> int:
+    try:
+        task_id = ensure_safe_task_id(args.task_id)
+        result = load_export_template_override(get_work_dir(task_id), args.profile)
+    except (OSError, ValueError, TemplateOverrideError) as exc:
+        print(f"[错误] 读取任务级模板覆盖失败: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_task_refresh(args: argparse.Namespace) -> int:
+    """Rebuild one completed task after a task-local template import.
+
+    This intentionally does not call a provider or rerun any numerical code.
+    It only re-applies deterministic paper post-processing and rebuilds every
+    delivery artifact whose hash depends on the manuscript or template.
+    """
+    try:
+        task_id = ensure_safe_task_id(args.task_id)
+        work_dir = get_work_dir(task_id)
+        checkpoint = _load_existing_json(os.path.join(work_dir, "checkpoint.json"))
+        checkpoint_profile = str(checkpoint.get("export_profile") or "")
+        if checkpoint_profile and checkpoint_profile != args.profile:
+            raise ValueError(
+                f"任务检查点 export_profile={checkpoint_profile}，与 --profile={args.profile} 不一致"
+            )
+        declared_count = checkpoint.get("ques_count")
+        if isinstance(declared_count, bool) or not isinstance(declared_count, int):
+            declared_count = None
+        template_override = load_export_template_override(work_dir, args.profile)
+        editorial_policy = get_editorial_policy_override(work_dir, args.profile)
+        visual_constraints = get_pdf_visual_constraints(work_dir, args.profile)
+        ai_usage = ensure_ai_usage_details(work_dir, export_profile=args.profile)
+        if ai_usage.get("enabled") and not ai_usage.get("success"):
+            raise RuntimeError("AI工具使用详情导出失败，拒绝刷新正式交付物")
+        preflight = prepare_paper_markdown(
+            work_dir,
+            "res.md",
+            export_profile=args.profile,
+            declared_problem_count=declared_count,
+            editorial_policy=editorial_policy,
+            template_override_audit=template_override["audit"],
+        )
+        if preflight.get("status") != "PASS":
+            print(json.dumps({"ok": False, "preflight": preflight}, ensure_ascii=False, indent=2))
+            return 2
+        docx_result = md_2_docx(task_id, export_profile=args.profile)
+        pdf_result = export_markdown_to_pdf(
+            os.path.join(work_dir, "res.md"),
+            os.path.join(work_dir, "res.pdf"),
+            work_dir,
+            export_profile=args.profile,
+            local_fonts=args.local,
+        )
+        if not pdf_result.get("success"):
+            print(json.dumps({"ok": False, "pdf": pdf_result}, ensure_ascii=False, indent=2))
+            return 1
+        visual_result = check_pdf_visual(
+            os.path.join(work_dir, "res.pdf"),
+            work_dir,
+            quality_policy=_pdf_editorial_quality_policy(args.profile),
+            export_profile=args.profile,
+            template_override_audit=template_override["audit"],
+            **visual_constraints,
+        )
+        tex_result = export_markdown_to_latex_project(
+            os.path.join(work_dir, "res.md"), work_dir, export_profile=args.profile
+        )
+        export_status = {
+            "export_profile": args.profile,
+            "reason": "task_local_template_refresh",
+            "template_override": template_override["audit"],
+            "docx": docx_result,
+            "pdf": pdf_result,
+            "pdf_visual_check": visual_result,
+            "latex": tex_result,
+        }
+        with open(os.path.join(work_dir, "export_status.json"), "w", encoding="utf-8") as handle:
+            json.dump(export_status, handle, ensure_ascii=False, indent=2)
+        write_candidate_manifest(work_dir, task_id)
+        audit = write_submission_audit_report(work_dir)
+        final_report = write_final_acceptance_report(work_dir)
+        write_candidate_manifest(work_dir, task_id)
+        technical_pass = final_report.get("technical_status") == "TECHNICAL_PASS"
+        write_task_status_to_dir(
+            work_dir,
+            task_id,
+            "completed" if technical_pass else "failed",
+            "任务处理完成" if technical_pass else "最终技术验收未通过，请查看 final_acceptance_report.json",
+        )
+        result = {
+            "ok": technical_pass,
+            "task_id": task_id,
+            "preflight": preflight.get("status"),
+            "pdf_visual": visual_result.get("status"),
+            "submission_audit": audit.get("status"),
+            "technical_status": final_report.get("technical_status"),
+        }
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if technical_pass else 2
+    except (OSError, RuntimeError, ValueError, TemplateOverrideError) as exc:
+        print(f"[错误] 模板刷新交付物失败: {exc}", file=sys.stderr)
+        return 2
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -358,6 +541,60 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     latex_parser.set_defaults(func=cmd_latex)
+
+    template_parser = subparsers.add_parser(
+        "template",
+        help="导入或检查任务级 DOCX 模板与受限 PDF/版式合同；不改公共 profile",
+    )
+    template_subparsers = template_parser.add_subparsers(dest="template_command", required=True)
+    template_install = template_subparsers.add_parser(
+        "install", help="复制用户提供的 DOCX 模板/版式合同并记录 SHA-256"
+    )
+    template_install.add_argument("--task-id", required=True)
+    template_install.add_argument(
+        "--profile",
+        required=True,
+        choices=[ExportProfile.CUMCM2025.value, ExportProfile.CUMCM2026.value],
+    )
+    template_install.add_argument(
+        "--docx-template",
+        help="用户从竞赛官方包取得的 .docx 参考模板；会复制进任务目录",
+    )
+    template_install.add_argument(
+        "--format-contract",
+        help="受限版式合同 JSON；只允许字体、行距、分页、页数和安全 PDF 变量",
+    )
+    template_install.add_argument(
+        "--label", help="人工记录的模板版本/来源标签；应用不会将其宣称为官方已验证"
+    )
+    template_install.set_defaults(func=cmd_template_install)
+    template_show = template_subparsers.add_parser(
+        "show", help="校验当前任务的模板哈希并显示解析后的覆盖合同"
+    )
+    template_show.add_argument("--task-id", required=True)
+    template_show.add_argument(
+        "--profile",
+        required=True,
+        choices=[ExportProfile.CUMCM2025.value, ExportProfile.CUMCM2026.value],
+    )
+    template_show.set_defaults(func=cmd_template_show)
+
+    refresh_parser = subparsers.add_parser(
+        "task-refresh",
+        help="导入任务级模板后，无 Provider 重建 Markdown/DOCX/PDF/LaTeX 与全部交付审计",
+    )
+    refresh_parser.add_argument("--task-id", required=True)
+    refresh_parser.add_argument(
+        "--profile",
+        required=True,
+        choices=[ExportProfile.CUMCM2025.value, ExportProfile.CUMCM2026.value],
+    )
+    refresh_parser.add_argument(
+        "--local",
+        action="store_true",
+        help="本机字体优先；与 pdf 子命令相同，只影响字体检测/提示策略",
+    )
+    refresh_parser.set_defaults(func=cmd_task_refresh)
 
     return parser
 

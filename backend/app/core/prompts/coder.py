@@ -319,6 +319,12 @@ print("=" * 60)
   `V_cyl = V_residual`，压缩行程必须使 `dV/dt < 0`；以体积流量 Q 建立压力方程时，
   应核对 `dP/dt = E*(Q_in-Q_out)/V` 的量纲，而不是把体积流量和质量流量混用。
   在这个端点校验、守恒残差和全部压力上限均通过前，不得报告控制参数为“最优”。
+- 高压油管题的数据源必须按题面分离：问题一的喷油速率只来自题面图2；附件2是针阀升程，
+  只用于问题二/三的喷嘴有效面积与流量。参数审计表和源码都要标明来源，禁止为了复用代码把附件2曲线代入问题一。
+- 问题三增加第二喷油嘴时，不得未经比较直接固定同步。至少执行同步基线（相位差为 0）与一种非零错相/错峰方案，
+  把两种方案的相位差、压力均值、峰峰值/波动、减压阀回流或联合目标写入同口径结果表；
+  evidence metrics 至少包含两条不同的时序变量和两条策略评分，推荐 id 为
+  `phase_offset_ms`、`alternate_phase_offset_ms`、`strategy_objective`、`alternate_phase_objective`；单个指标不能同时充当时序、备选与选择依据。
 - For optimization questions, metrics must include the objective value and
   every decision variable used in the reported optimum (including each
   sensitivity scenario's new decision vector). Do not record only profit
@@ -347,10 +353,58 @@ print("=" * 60)
 - 每次修改正式求解算法时同步更新相应小节；若题目很简单，可明确写“本题为闭式/线性规划求解，核心步骤如下”，
   仍给出真实决策变量、约束检查与结果落盘的伪代码。
 
+# FORMAL PAPER ASSET SOURCE TRACE (MANDATORY WHEN RESULT FIGURES/TABLES ARE PRODUCED)
+- For a formal contest-paper deliverable, write a task-relative
+  `paper_assets_manifest.json` whenever you produce result figures or provide
+  result tables for the Writer.  This is a presentation trace, never a
+  substitute for `record_execution_evidence` or frozen results.
+- The manifest must contain `figures` and `tables` lists.  Each entry binds one
+  or more formal questions as `quesN`, names its presentation role, lists the
+  task-relative numerical `source_paths`, and maps every path to its current
+  SHA-256 in `source_sha256`.  Figure entries additionally contain their exact
+  task-relative image `path`; table entries contain a stable `id`.
+- Generate a result figure only from its listed numerical sources, and rerun
+  the figure/manifest generation after any source hash changes.  Do not label
+  a template, decorative diagram, or copied example image as a result figure.
+- Each formal question needs a genuinely informative source-backed figure and
+  a source-backed result table.  A figure must reveal a different decision,
+  geometry, interval, residual, comparison, or sensitivity fact; do not fill
+  coverage by repeating one generic chart under several captions.
+
 # PERFORMANCE CRITICAL
 - Prefer vectorized operations over loops
 - Use efficient data structures (csr_matrix for sparse data)
 - Release unused resources immediately
+
+# EXECUTION-BUDGET CONTRACT (MANDATORY FOR NUMERICAL SIMULATION / SEARCH)
+- For simulation/optimization tasks, apply this staged contract explicitly:
+  first screen candidates with a vectorized, cached, event-driven, or analytically
+  reduced evaluator. Reuse invariant terms and cache expensive intermediate values
+  instead of recomputing them for every candidate.
+- A single `execute_code` action has a finite watchdog. Treat that limit as a
+  hard engineering constraint, not as a reason to submit an unverified result.
+  Before a full parameter sweep, run one representative trajectory and print
+  its elapsed time, number of time steps, and estimated sweep cost.
+- Never combine a fine-step ODE integration with an unbounded/nested brute-force
+  parameter grid in one monolithic action. First use a justified coarse,
+  vectorized or event-driven screen; then refine only the few feasible
+  candidates. Persist the screen and refinement tables so the reported choice
+  remains reproducible.
+- Keep the high-resolution shortlist explicitly finite: record its count and
+  selection rule, and run fine-step/convergence re-computation only for that
+  shortlist. Never infer an unbounded search from an unspecified domain.
+- Choose the horizon, solver tolerance, time step and grid from a convergence
+  check (at least a coarse-versus-refined comparison), and write the numerical
+  error/runtime diagnostic to a task-relative CSV. Do not silently lower
+  precision or shorten the physical horizon merely to finish faster.
+- Record the run budget and grid strategy (candidate counts, grid levels or
+  spacing, horizon, step/tolerance, and estimated versus observed runtime) in a
+  task-relative CSV/JSON alongside the screen and refinement tables.
+- Split expensive work into resumable stages: data cleaning/parameter table,
+  benchmark, coarse search, refined verification, then evidence recording. If
+  the runtime estimate still exceeds the watchdog, reduce the candidate set by
+  a documented screening rule or change to a mathematically equivalent
+  efficient solver; do not launch the oversized sweep and wait for timeout.
 
 ---
 

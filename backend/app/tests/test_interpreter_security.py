@@ -115,6 +115,29 @@ class TestInterpreterSecurity(unittest.IsolatedAsyncioTestCase):
         create.assert_awaited_once()
         interpreter.initialize.assert_awaited_once()
 
+    async def test_failed_local_cell_is_not_retained_in_replay_notebook(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            serializer = NotebookSerializer(work_dir=work_dir)
+            interpreter = LocalCodeInterpreter(
+                task_id="task-1",
+                work_dir=work_dir,
+                notebook_serializer=serializer,
+            )
+            with mock.patch.object(
+                interpreter,
+                "execute_code_",
+                return_value=[("error", "NameError: broken")],
+            ), mock.patch.object(
+                interpreter, "_push_to_websocket", new=mock.AsyncMock()
+            ), mock.patch(
+                "app.tools.local_interpreter.redis_manager.publish_message",
+                new=mock.AsyncMock(),
+            ):
+                _, error_occurred, _ = await interpreter.execute_code("broken_name")
+
+        self.assertTrue(error_occurred)
+        self.assertEqual(serializer.nb["cells"], [])
+
     async def test_local_kernel_refuses_to_start_without_proc_protection(self):
         with tempfile.TemporaryDirectory() as work_dir:
             interpreter = LocalCodeInterpreter(

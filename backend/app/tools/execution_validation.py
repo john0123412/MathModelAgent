@@ -36,6 +36,22 @@ _Q1_REQUIRED_CONTROL_METRICS = {
     "q1_transition_5s_open_duration": "5 秒过渡开启时长",
     "q1_transition_10s_open_duration": "10 秒过渡开启时长",
 }
+_Q3_TIMING_METRIC_RE = re.compile(
+    r"(?:phase|timing|offset|相位|错峰|错相|同步|时序|时间差)", re.IGNORECASE
+)
+_Q3_ALTERNATIVE_METRIC_RE = re.compile(
+    r"(?:alternate|alternative|offset[_ -]?50|另一相位|备选|错峰|错相)", re.IGNORECASE
+)
+_Q3_SELECTION_METRIC_RE = re.compile(
+    r"(?:objective|score|selection|strategy|目标|评分|策略|权衡)", re.IGNORECASE
+)
+_Q3_SELECTED_METRIC_RE = re.compile(
+    r"(?:selected|chosen|primary|主策略|选定|最终)", re.IGNORECASE
+)
+_Q3_ALTERNATE_METRIC_RE = re.compile(
+    r"(?:alternate|alternative|offset[_ -]?50|另一相位|备选|错峰|错相)",
+    re.IGNORECASE,
+)
 _EVIDENCE_COMPARISONS = {"abs_diff_lte", "lte", "gte", "gt", "lt", "between"}
 _PLAN_COMPARISONS = {
     "le": "lte",
@@ -45,6 +61,17 @@ _PLAN_COMPARISONS = {
     "eq": "abs_diff_lte",
     "within": "lte",
 }
+
+
+def _canonical_evidence_comparison(comparison: object) -> object:
+    """Map the ModelPlan-only exact comparator to the evidence protocol.
+
+    ``AcceptanceMetric`` uses ``eq`` while execution evidence deliberately
+    uses the more explicit ``abs_diff_lte`` form.  Keep the persisted evidence
+    on the latter vocabulary, so a direct ``eq`` tool payload cannot bypass
+    the normal source/hash checks or create a second comparison dialect.
+    """
+    return "abs_diff_lte" if comparison == "eq" else comparison
 
 
 def _unsupported_comparison_hint(comparison: object) -> str:
@@ -516,6 +543,7 @@ def _bind_plan_constraints_from_acceptance_table(
             displayed = _parse_table_comparison(row.get("目标值"))
             if displayed is not None:
                 displayed_comparison, displayed_target = displayed
+                displayed_comparison = _canonical_evidence_comparison(displayed_comparison)
                 if displayed_comparison != comparison or not math.isclose(
                     displayed_target, target, rel_tol=1e-12, abs_tol=1e-12
                 ):
@@ -817,6 +845,8 @@ _DIAGNOSTIC_TOKENS: dict[str, tuple[str, ...]] = {
 # groups apply only when the ModelPlan explicitly asks for the corresponding
 # diagnostic.
 _DIAGNOSTIC_REQUIREMENT_GROUPS = (
+    (("求解器", "solver", "状态", "status"), ("求解器", "solver", "状态", "status")),
+    (("松弛", "slack"), ("松弛", "slack")),
     (("质量", "守恒", "balance", "residual"), ("质量", "守恒", "balance", "residual")),
     (("双喷嘴", "双喷油器", "injector"), ("双喷嘴", "双喷油器", "injector")),
     (("减压阀", "溢流阀", "relief"), ("减压阀", "溢流阀", "relief")),
@@ -927,7 +957,8 @@ def _plan_constraint_errors(
             continue
         plan_comparator = expected.get("comparator")
         evidence_comparator = _PLAN_COMPARISONS.get(str(plan_comparator))
-        if actual.get("comparison") != evidence_comparator:
+        actual_comparison = _canonical_evidence_comparison(actual.get("comparison"))
+        if actual_comparison != evidence_comparator:
             errors.append(
                 f"约束 {metric_id} 的 comparison 必须保持 ModelPlan 的 {plan_comparator} "
                 f"语义（应为 {evidence_comparator}），不得改为 {actual.get('comparison')}。"
@@ -943,7 +974,10 @@ def _plan_constraint_errors(
                 f"约束 {metric_id} 的 target 必须保持 ModelPlan 值 {expected_target}，"
                 f"不得改为 {actual.get('target')}。"
             )
-        if plan_comparator == "eq" and _as_number(actual.get("tolerance")) != 0.0:
+        actual_tolerance = _as_number(actual.get("tolerance"))
+        if actual.get("comparison") == "eq" and actual_tolerance is None:
+            actual_tolerance = 0.0
+        if plan_comparator == "eq" and (actual_tolerance is None or actual_tolerance != 0.0):
             errors.append(f"等值约束 {metric_id} 必须使用 tolerance=0。")
     return errors
 
@@ -1050,7 +1084,16 @@ def _normalise_constraint_records(
             continue
         constraint_id = constraint.get("id")
         actual = _as_number(constraint.get("actual"))
-        comparison = constraint.get("comparison")
+        # ``eq`` is the ModelPlan spelling.  Canonicalise it before the
+        # evidence protocol enum check and make exactness explicit with a zero
+        # tolerance when the caller omitted one.
+        comparison = _canonical_evidence_comparison(constraint.get("comparison"))
+        constraint_payload = constraint
+        if comparison != constraint.get("comparison"):
+            constraint_payload = dict(constraint)
+            constraint_payload["comparison"] = comparison
+            if constraint_payload.get("tolerance") is None:
+                constraint_payload["tolerance"] = 0.0
         if not isinstance(constraint_id, str) or not constraint_id.strip():
             errors.append(f"constraints[{index}].id 必须是非空字符串。")
         elif constraint_id in seen_ids:
@@ -1065,7 +1108,7 @@ def _normalise_constraint_records(
                 f"{_unsupported_comparison_hint(comparison)}"
             )
         source_path, source_error = _task_relative_file(
-            root, constraint.get("source_path"), field=f"constraints[{index}].source_path"
+            root, constraint_payload.get("source_path"), field=f"constraints[{index}].source_path"
         )
         if source_error:
             errors.append(source_error)
@@ -1087,17 +1130,17 @@ def _normalise_constraint_records(
             ),
         }
         for key in ("target", "tolerance", "lower", "upper"):
-            if key in constraint and constraint.get(key) is not None:
-                numeric = _as_number(constraint[key])
+            if key in constraint_payload and constraint_payload.get(key) is not None:
+                numeric = _as_number(constraint_payload[key])
                 if numeric is None:
                     errors.append(f"constraints[{index}].{key} 必须是有限数值。")
                 else:
                     result[key] = numeric
-        if "unit" in constraint and constraint.get("unit") is not None:
-            if not isinstance(constraint["unit"], str):
+        if "unit" in constraint_payload and constraint_payload.get("unit") is not None:
+            if not isinstance(constraint_payload["unit"], str):
                 errors.append(f"constraints[{index}].unit 必须是字符串。")
             else:
-                result["unit"] = constraint["unit"]
+                result["unit"] = constraint_payload["unit"]
         normalised.append(result)
     return (normalised if not errors else None), errors
 
@@ -1289,7 +1332,7 @@ def _check_constraint(
 
     constraint_id = constraint.get("id")
     actual = _as_number(constraint.get("actual"))
-    comparison = constraint.get("comparison")
+    comparison = _canonical_evidence_comparison(constraint.get("comparison"))
     source = constraint.get("source")
     evidence: dict[str, Any] = {"id": constraint_id, "comparison": comparison}
     if not isinstance(constraint_id, str) or not constraint_id.strip():
@@ -1311,6 +1354,8 @@ def _check_constraint(
 
     target = _as_number(constraint.get("target"))
     tolerance = _as_number(constraint.get("tolerance"))
+    if constraint.get("comparison") == "eq" and tolerance is None:
+        tolerance = 0.0
     lower = _as_number(constraint.get("lower"))
     upper = _as_number(constraint.get("upper"))
     if comparison == "abs_diff_lte":
@@ -1404,6 +1449,16 @@ def _contract_requires_q1_valve_duration_outputs(work_dir: Path) -> bool:
         return False
     return any(
         isinstance(item, dict) and item.get("key") == "problem1_valve_duration_outputs"
+        for item in contract.get("required_requirements", [])
+    )
+
+
+def _contract_requires_q3_timing_comparison(work_dir: Path) -> bool:
+    contract = _read_json(work_dir / "problem_contract.json")
+    if contract is None:
+        return False
+    return any(
+        isinstance(item, dict) and item.get("key") == "q3_injector_timing_comparison"
         for item in contract.get("required_requirements", [])
     )
 
@@ -1608,6 +1663,7 @@ def _subtask_evidence_issues(
     *,
     relief_validation_required: bool,
     q1_valve_duration_outputs_required: bool,
+    q3_timing_comparison_required: bool,
     linear_programming_evidence_required: bool,
     balance_residual_required: bool,
 ) -> list[dict[str, Any]]:
@@ -1702,6 +1758,96 @@ def _subtask_evidence_issues(
             {"missing": missing, "required_metric_ids": sorted(_Q1_REQUIRED_CONTROL_METRICS)},
         ))
 
+    if q3_timing_comparison_required and subtask_id == "ques3":
+        metric_records = [
+            {
+                "id": str(metric.get("id", "")),
+                "text": " ".join(
+                    [
+                        str(metric.get("id", "")),
+                        str(metric.get("label", "")),
+                        str(metric.get("explanation", "")),
+                        " ".join(str(alias) for alias in metric.get("aliases", [])),
+                    ]
+                ),
+                "value": _as_number(metric.get("value")),
+            }
+            for metric in metrics
+        ]
+        # A single metric such as ``alternate_phase_strategy_objective`` can
+        # match all three old regular expressions.  It does not prove that two
+        # strategies were simulated.  Require separate selected/alternative
+        # phase records plus separate selected/alternative objective records;
+        # the two phase values must actually differ.
+        selected_phase = [
+            item
+            for item in metric_records
+            if _Q3_TIMING_METRIC_RE.search(item["text"])
+            and not _Q3_SELECTION_METRIC_RE.search(item["text"])
+            and not _Q3_ALTERNATE_METRIC_RE.search(item["text"])
+        ]
+        alternate_phase = [
+            item
+            for item in metric_records
+            if _Q3_TIMING_METRIC_RE.search(item["text"])
+            and not _Q3_SELECTION_METRIC_RE.search(item["text"])
+            and _Q3_ALTERNATE_METRIC_RE.search(item["text"])
+        ]
+        selected_objective = [
+            item
+            for item in metric_records
+            if _Q3_SELECTION_METRIC_RE.search(item["text"])
+            and _Q3_SELECTED_METRIC_RE.search(item["text"])
+            and not _Q3_ALTERNATE_METRIC_RE.search(item["text"])
+        ]
+        alternate_objective = [
+            item
+            for item in metric_records
+            if _Q3_SELECTION_METRIC_RE.search(item["text"])
+            and _Q3_ALTERNATE_METRIC_RE.search(item["text"])
+        ]
+        timing_pairs = [
+            (selected, alternate)
+            for selected in selected_phase
+            for alternate in alternate_phase
+            if selected["id"] != alternate["id"]
+            and selected["value"] is not None
+            and alternate["value"] is not None
+            and not math.isclose(
+                float(selected["value"]), float(alternate["value"]), abs_tol=1e-12
+            )
+            and (
+                math.isclose(float(selected["value"]), 0.0, abs_tol=1e-12)
+                or math.isclose(float(alternate["value"]), 0.0, abs_tol=1e-12)
+            )
+        ]
+        objective_pairs = [
+            (selected, alternate)
+            for selected in selected_objective
+            for alternate in alternate_objective
+            if selected["id"] != alternate["id"]
+        ]
+        passed = bool(timing_pairs and objective_pairs)
+        issues.append(
+            _issue(
+                "ques3.injector_timing_comparison",
+                passed,
+                (
+                    "问题三已记录两种不同双喷嘴时序及各自的策略选择依据。"
+                    if passed
+                    else "问题三必须用不同的数值指标记录同步基线（相位为 0）和非零备选双喷嘴相位，并分别记录选定/备选策略的目标或评分；单个万能指标、同相位伪备选均不通过。"
+                ),
+                {
+                    "selected_phase_metric_ids": [item["id"] for item in selected_phase],
+                    "alternate_phase_metric_ids": [item["id"] for item in alternate_phase],
+                    "selected_objective_metric_ids": [item["id"] for item in selected_objective],
+                    "alternate_objective_metric_ids": [item["id"] for item in alternate_objective],
+                    "distinct_timing_pair_count": len(timing_pairs),
+                    "objective_pair_count": len(objective_pairs),
+                },
+            )
+        )
+
     if relief_validation_required and subtask_id == "ques3":
         opening_metrics = [
             metric for metric in metrics
@@ -1792,6 +1938,7 @@ def _manifest_issues(
     )
     relief_validation_required = _contract_requires_relief_validation(work_dir)
     q1_valve_duration_outputs_required = _contract_requires_q1_valve_duration_outputs(work_dir)
+    q3_timing_comparison_required = _contract_requires_q3_timing_comparison(work_dir)
     linear_programming_evidence_required = _contract_requires_linear_programming_evidence(work_dir)
     pressure_targets = _contract_pressure_targets(work_dir)
     strict_value_sources = manifest.get("schema_version") == MANIFEST_SCHEMA_V2
@@ -1833,6 +1980,7 @@ def _manifest_issues(
             item,
             relief_validation_required=relief_validation_required,
             q1_valve_duration_outputs_required=q1_valve_duration_outputs_required,
+            q3_timing_comparison_required=q3_timing_comparison_required,
             linear_programming_evidence_required=linear_programming_evidence_required,
             balance_residual_required=_subtask_requires_balance_residual(work_dir, subtask),
         ))
@@ -2081,6 +2229,14 @@ def write_frozen_results_from_execution_validation(
         "runtime": {
             "python_version": sys.version.split()[0],
             "platform": platform.platform(),
+        },
+        "byte_reproducibility": {
+            "status": "NOT_RUN",
+            "evidence": None,
+        },
+        "numerical_reproducibility": {
+            "status": "NOT_RUN",
+            "evidence": None,
         },
         "replay_status": "not_independently_reexecuted",
         "replay_command_hint": (

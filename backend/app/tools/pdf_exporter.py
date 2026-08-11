@@ -15,6 +15,12 @@ from app.utils.log_util import logger
 from app.utils import font_utils
 from app.schemas.enums import ExportProfile
 from app.tools.export_profiles import get_export_profile_config
+from app.tools.export_template_override import (
+    TemplateOverrideError,
+    load_export_template_override,
+    merge_pdf_variables,
+    validate_pdf_font_overrides,
+)
 
 # pdf_variables 中需要做字体可用性检测/fallback 的 pandoc 变量名
 # （对应 fontspec 的 mainfont/CJKmainfont 等，值缺失时无法通过 apt 补装
@@ -522,9 +528,36 @@ def export_markdown_to_pdf(
         "source_sha256": _file_sha256(md_path),
         "output_sha256": None,
         "staged_assets": [],
+        "template_override": {"active": False},
+        "effective_pdf_variables_sha256": None,
     }
 
-    # A failed re-export must never leave an older PDF looking current.
+    try:
+        checked_font_overrides = validate_pdf_font_overrides(font_overrides)
+    except TemplateOverrideError as exc:
+        result["reason"] = f"PDF 字体覆盖无效: {exc}"
+        return result
+
+    profile_config = get_export_profile_config(export_profile)
+    try:
+        template_override = load_export_template_override(
+            work_dir, profile_config.key.value
+        )
+    except TemplateOverrideError as exc:
+        result["reason"] = f"任务级模板覆盖无效: {exc}"
+        logger.error("PDF 导出拒绝使用无效任务级模板覆盖")
+        return result
+    result["template_override"] = template_override["audit"]
+    if template_override.get("active") and checked_font_overrides:
+        result["reason"] = (
+            "任务已启用版式合同；不能再用临时 PDF 字体覆盖。"
+            "请将字体写入受限版式合同后执行 task-refresh。"
+        )
+        return result
+
+    # A failed re-export must never leave an older PDF looking current.  Do
+    # this only after input/contract validation so an invalid local override
+    # cannot erase a previously accepted artifact.
     try:
         if os.path.exists(pdf_path):
             os.remove(pdf_path)
@@ -548,7 +581,12 @@ def export_markdown_to_pdf(
         logger.warning(f"PDF 导出跳过: {result['reason']}")
         return result
 
-    profile_config = get_export_profile_config(export_profile)
+    override_pdf_variables = template_override.get("format_contract", {}).get(
+        "pdf", {}
+    ).get("variables", {})
+    effective_pdf_variables = merge_pdf_variables(
+        profile_config.pdf_variables, override_pdf_variables
+    )
     staged_md_path: str | None = None
     staged_assets_dir: str | None = None
     pdf_md_path = md_path
@@ -606,10 +644,13 @@ def export_markdown_to_pdf(
     if os.path.exists(PDF_PAGEBREAK_FILTER):
         command.extend(["--lua-filter", PDF_PAGEBREAK_FILTER])
     resolved_variables, font_warnings, font_resolution = _resolve_pdf_variables(
-        profile_config.pdf_variables, font_overrides, local_fonts
+        effective_pdf_variables, checked_font_overrides, local_fonts
     )
     result["font_warnings"] = font_warnings
     result["font_resolution"] = font_resolution
+    result["effective_pdf_variables_sha256"] = hashlib.sha256(
+        "\n".join(resolved_variables).encode("utf-8")
+    ).hexdigest()
     for variable in resolved_variables:
         command.extend(["-V", variable])
     command.extend(profile_config.pdf_extra_args)

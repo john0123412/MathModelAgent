@@ -4,6 +4,7 @@ import os
 import re
 from app.utils.data_recorder import DataRecorder
 from app.schemas.A2A import WriterResponse
+from app.tools.export_profiles import normalize_export_profile
 import json
 import uuid
 
@@ -13,12 +14,22 @@ EMBEDDED_REFERENCE_HEADING_RE = re.compile(
 TRAILING_REFERENCE_BLOCK_RE = re.compile(
     r"(?ms)\n{2,}(?:\[\d+\]\s+[^\n]+(?:\n|$))+\s*$"
 )
+AI_USAGE_DECLARATION_RE = re.compile(r"(?mi)^#{1,6}\s*AI\s*工具使用声明\s*$")
+AI_USAGE_DECLARATION = (
+    "## AI工具使用声明\n\n"
+    "本参赛队在竞赛过程中使用了AI工具，主要用于建模方案审阅、代码调试、"
+    "论文语言与版式整理，详细使用情况见附录。"
+)
 
 
 class UserOutput:
     """管理建模任务的输出结果，处理引用编号、脚注和最终论文拼接。"""
     def __init__(
-        self, work_dir: str, ques_count: int, data_recorder: DataRecorder | None = None
+        self,
+        work_dir: str,
+        ques_count: int,
+        data_recorder: DataRecorder | None = None,
+        export_profile: str | None = None,
     ):
         self.work_dir = work_dir
         self.res: dict[str, dict] = {
@@ -35,6 +46,7 @@ class UserOutput:
         self.cost_time = 0.0
         self.initialized = True
         self.ques_count: int = ques_count
+        self.export_profile = normalize_export_profile(export_profile).value
         self.footnotes = {}
         self._init_seq()
 
@@ -195,11 +207,17 @@ class UserOutput:
         )
         for _, footnote in sorted_footnotes:
             content = footnote["content"]
-            # 确保引用格式以句号结尾
-            if content and not content.rstrip().endswith("."):
-                content = content.rstrip() + "."
+            # 保留中文参考文献的全角句号；英文条目仍沿用半角句号。
+            if content and not content.rstrip().endswith((".", "。")):
+                content = content.rstrip() + "。"
             text += f"\n\n[{footnote['number']}] {content}"
         return text
+
+    def append_ai_usage_declaration(self, text: str) -> str:
+        """Insert the CUMCM 2026 AI declaration immediately before references."""
+        if self.export_profile != "cumcm2026" or AI_USAGE_DECLARATION_RE.search(text):
+            return text
+        return text.rstrip() + "\n\n" + AI_USAGE_DECLARATION
 
     def get_result_to_save(self) -> str:
         """获取最终拼接的论文全文，包含引用处理和参考文献。"""
@@ -218,6 +236,7 @@ class UserOutput:
             [sort_res[key]["response_content"] for key in self.seq]
         )
 
+        full_res_1 = self.append_ai_usage_declaration(full_res_1)
         full_res = self.append_footnotes_to_text(full_res_1)
         return full_res
 

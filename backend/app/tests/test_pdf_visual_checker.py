@@ -6,7 +6,10 @@ import tempfile
 import unittest
 from unittest import mock
 
-from app.tools.pdf_visual_checker import check_pdf_visual
+from app.tools.pdf_visual_checker import (
+    CUMCM2026_STRICT_EDITORIAL_QUALITY_POLICY,
+    check_pdf_visual,
+)
 
 
 class _FakePage:
@@ -157,6 +160,56 @@ class _ForbiddenSubmissionTermDocument(_FakeDocument):
         return _FakePage("承诺书\n参赛队号：12345")
 
 
+class _EditorialQualityDocument(_FakeDocument):
+    page_count = 12
+
+    def __getitem__(self, index):
+        if index == 0:
+            return _FakePage("论文标题\n摘要\n过短摘要\n关键词：优化")
+        if index == 11:
+            return _FakePage("附录A")
+        return _FakePage(f"正文第 {index} 页")
+
+
+class _LowCoverageAbstractDocument(_EditorialQualityDocument):
+    def __getitem__(self, index):
+        if index == 0:
+            abstract = "A" * 500
+            return _FakePage(
+                f"论文标题\n摘要\n{abstract}\n关键词：优化",
+                [
+                    {
+                        "bbox": (100.0, 100.0, 200.0, 110.0),
+                        "spans": [{"text": abstract}],
+                    }
+                ],
+            )
+        return super().__getitem__(index)
+
+
+class _HighDensityAbstractDocument(_EditorialQualityDocument):
+    def __getitem__(self, index):
+        if index == 0:
+            abstract = "A" * 500
+            return _FakePage(
+                f"论文标题\n摘要\n{abstract}\n关键词：优化",
+                [
+                    {
+                        "bbox": (80.0, 80.0, 510.0, 500.0),
+                        "spans": [{"text": abstract}],
+                    }
+                ],
+            )
+        return super().__getitem__(index)
+
+
+class _LiteralMarkdownHeadingDocument(_FakeDocument):
+    def __getitem__(self, index):
+        if index == 0:
+            return _FakePage("论文标题\n摘要\n摘要正文\n关键词：优化")
+        return _FakePage("上一段正文\n### 6.1.2 未渲染标题\n后续正文")
+
+
 class TestPdfVisualChecker(unittest.TestCase):
     """Verify PDF visual check writes structured status without blocking exports."""
 
@@ -261,7 +314,7 @@ class TestPdfVisualChecker(unittest.TestCase):
         self.assertEqual(report["status"], "FAIL")
         self.assertFalse(report["checks"]["abstract_first_page"]["has_title_before_abstract"])
 
-    def test_body_pages_after_abstract_are_limited_to_30(self):
+    def test_body_pages_after_abstract_are_limited_by_the_project_baseline(self):
         with tempfile.TemporaryDirectory() as work_dir:
             pdf_path = os.path.join(work_dir, "res.pdf")
             with open(pdf_path, "wb") as f:
@@ -275,6 +328,31 @@ class TestPdfVisualChecker(unittest.TestCase):
         self.assertEqual(
             report["checks"]["body_page_limit"]["body_pages_after_abstract"], 32
         )
+
+    def test_task_contract_can_tighten_body_page_range(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(b"%PDF-1.4 fake")
+
+            with mock.patch("fitz.open", return_value=_HighDensityAbstractDocument()):
+                report = check_pdf_visual(
+                    pdf_path,
+                    work_dir,
+                    quality_policy=CUMCM2026_STRICT_EDITORIAL_QUALITY_POLICY,
+                    body_min_pages=8,
+                    body_max_pages=9,
+                    min_content_margin_cm=2.0,
+                )
+
+        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(report["checks"]["body_page_limit"]["max_body_pages"], 9)
+        self.assertEqual(
+            report["checks"]["editorial_quality"]["checkpoints"]["body_page_range"]
+            ["recommended_range_pages"],
+            [8, 9],
+        )
+        self.assertAlmostEqual(report["checks"]["content_margin"]["min_margin_pt"], 56.69, places=2)
 
     def test_a4_size_is_checked_for_all_pages(self):
         with tempfile.TemporaryDirectory() as work_dir:
@@ -304,6 +382,114 @@ class TestPdfVisualChecker(unittest.TestCase):
         self.assertEqual(
             report["checks"]["submission_anonymity"]["occurrences"][0]["page"], 2
         )
+
+    def test_default_editorial_policy_warns_without_breaking_legacy_export(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(b"%PDF-1.4 fake")
+
+            with mock.patch("fitz.open", return_value=_EditorialQualityDocument()):
+                report = check_pdf_visual(pdf_path, work_dir)
+
+        quality = report["checks"]["editorial_quality"]
+        self.assertEqual(report["status"], "PASS")
+        self.assertFalse(quality["blocking"])
+        self.assertFalse(quality["official_rule"])
+        self.assertEqual(quality["scope"], "internal_editorial_non_official")
+        self.assertTrue(quality["warnings"])
+        self.assertFalse(quality["checkpoints"]["abstract_page_density"]["passed"])
+        self.assertTrue(quality["checkpoints"]["body_page_range"]["passed"])
+
+    def test_strict_editorial_policy_blocks_content_quality_risks(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(b"%PDF-1.4 fake")
+
+            with mock.patch("fitz.open", return_value=_EditorialQualityDocument()):
+                report = check_pdf_visual(
+                    pdf_path,
+                    work_dir,
+                    quality_policy=CUMCM2026_STRICT_EDITORIAL_QUALITY_POLICY,
+                )
+
+        quality = report["checks"]["editorial_quality"]
+        self.assertEqual(report["status"], "FAIL")
+        self.assertTrue(quality["blocking"])
+        self.assertFalse(quality["passed"])
+        self.assertFalse(quality["official_rule"])
+
+    def test_strict_editorial_policy_detects_sparse_abstract_page_geometry(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(b"%PDF-1.4 fake")
+
+            with mock.patch("fitz.open", return_value=_LowCoverageAbstractDocument()):
+                report = check_pdf_visual(
+                    pdf_path,
+                    work_dir,
+                    quality_policy=CUMCM2026_STRICT_EDITORIAL_QUALITY_POLICY,
+                )
+
+        density = report["checks"]["editorial_quality"]["checkpoints"][
+            "abstract_page_density"
+        ]
+        self.assertEqual(report["status"], "FAIL")
+        self.assertGreaterEqual(density["abstract_characters"], 450)
+        self.assertTrue(density["geometry_assessed"])
+        self.assertLess(density["text_coverage_ratio"], density["min_text_coverage_ratio"])
+
+    def test_strict_editorial_policy_allows_dense_abstract_and_ten_body_pages(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(b"%PDF-1.4 fake")
+
+            with mock.patch("fitz.open", return_value=_HighDensityAbstractDocument()):
+                report = check_pdf_visual(
+                    pdf_path,
+                    work_dir,
+                    quality_policy=CUMCM2026_STRICT_EDITORIAL_QUALITY_POLICY,
+                )
+
+        quality = report["checks"]["editorial_quality"]
+        density = quality["checkpoints"]["abstract_page_density"]
+        body_range = quality["checkpoints"]["body_page_range"]
+        self.assertEqual(report["status"], "PASS")
+        self.assertTrue(quality["passed"])
+        self.assertTrue(density["passed"])
+        self.assertTrue(body_range["passed"])
+        self.assertEqual(body_range["body_pages_after_abstract"], 10)
+
+    def test_unknown_editorial_policy_fails_instead_of_claiming_pass(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(b"%PDF-1.4 fake")
+
+            with mock.patch("fitz.open", return_value=_FakeDocument()):
+                report = check_pdf_visual(
+                    pdf_path, work_dir, quality_policy="not-a-policy"
+                )
+
+        self.assertEqual(report["status"], "FAIL")
+        self.assertIn("未知", report["checks"]["editorial_quality"]["error"])
+
+    def test_literal_markdown_heading_in_body_fails_visual_check(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(b"%PDF-1.4 fake")
+
+            with mock.patch("fitz.open", return_value=_LiteralMarkdownHeadingDocument()):
+                report = check_pdf_visual(pdf_path, work_dir)
+
+        self.assertEqual(report["status"], "FAIL")
+        leakage = report["checks"]["literal_markdown_headings"]
+        self.assertFalse(leakage["passed"])
+        self.assertEqual(leakage["issues"][0]["page"], 2)
 
 
 if __name__ == "__main__":

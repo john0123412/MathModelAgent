@@ -55,6 +55,28 @@ class TestUserOutputReferences(unittest.TestCase):
         self.assertIn("[1] Example reference.", result)
         self.assertNotIn("{[^1]", result)
 
+    def test_chinese_reference_keeps_single_full_width_terminal_mark(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            output = UserOutput(work_dir=work_dir, ques_count=1)
+            for key in output.seq:
+                output.set_res(
+                    key,
+                    WriterResponse(
+                        response_content=(
+                            "实现说明{[^1] NumPy Developers，NumPy documentation，"
+                            "https://numpy.org/doc/stable/，访问时间（2026年08月11日）。}"
+                            if key == "eda"
+                            else f"{key} content"
+                        ),
+                        footnotes=[],
+                    ),
+                )
+
+            result = output.get_result_to_save()
+
+        self.assertIn("访问时间（2026年08月11日）。", result)
+        self.assertNotIn("访问时间（2026年08月11日）。.", result)
+
     def test_embedded_reference_section_does_not_swallow_later_sections(self):
         with tempfile.TemporaryDirectory() as work_dir:
             output = UserOutput(work_dir=work_dir, ques_count=1)
@@ -86,6 +108,68 @@ class TestUserOutputReferences(unittest.TestCase):
         self.assertNotIn("Writer 不应在分段中生成的局部参考文献", result)
         self.assertNotIn("Writer 也不应在分段末尾生成裸编号参考文献", result)
         self.assertIn("[1] Example reference.", result)
+
+    def test_cumcm_ai_declaration_is_inserted_once_before_references(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            output = UserOutput(
+                work_dir=work_dir,
+                ques_count=1,
+                export_profile="cumcm2026",
+            )
+            for key in (
+                "firstPage",
+                "RepeatQues",
+                "analysisQues",
+                "modelAssumption",
+                "symbol",
+                "eda",
+                "ques1",
+                "sensitivity_analysis",
+                "judge",
+            ):
+                output.set_res(
+                    key,
+                    WriterResponse(response_content=f"{key} content", footnotes=[]),
+                )
+
+            result = output.get_result_to_save()
+
+        self.assertEqual(result.count("## AI工具使用声明"), 1)
+        self.assertLess(
+            result.index("## AI工具使用声明"), result.index("## 参考文献")
+        )
+        self.assertIn("主要用于建模方案审阅、代码调试、论文语言与版式整理，详细使用情况见附录", result)
+
+    def test_existing_ai_declaration_is_not_duplicated(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            output = UserOutput(
+                work_dir=work_dir,
+                ques_count=1,
+                export_profile="cumcm2026",
+            )
+            for key in (
+                "firstPage",
+                "RepeatQues",
+                "analysisQues",
+                "modelAssumption",
+                "symbol",
+                "eda",
+                "ques1",
+                "sensitivity_analysis",
+                "judge",
+            ):
+                content = (
+                    "## AI工具使用声明\n\n已有真实声明。"
+                    if key == "judge"
+                    else f"{key} content"
+                )
+                output.set_res(
+                    key, WriterResponse(response_content=content, footnotes=[])
+                )
+
+            result = output.get_result_to_save()
+
+        self.assertEqual(result.count("## AI工具使用声明"), 1)
 
 
 class TestReferenceNumberingDeterminism(unittest.TestCase):
@@ -205,6 +289,40 @@ class TestTaskListStatus(unittest.TestCase):
         self.assertEqual(tasks[0]["status"], "failed")
         self.assertFalse(tasks[0]["has_result"])
         self.assertFalse(tasks[0]["files"]["res_md"])
+
+    def test_waiting_quality_review_status_is_not_downgraded_to_interrupted(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            work_root = os.path.join(temp_dir, "work_dir")
+            task_id = "task-1"
+            task_dir = os.path.join(work_root, task_id)
+            os.makedirs(task_dir, exist_ok=True)
+            with open(os.path.join(task_dir, "checkpoint.json"), "w", encoding="utf-8") as f:
+                f.write("{}")
+            with open(os.path.join(task_dir, "task_status.json"), "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "status": "waiting_quality_review",
+                        "message": "冻结结果等待 Codex/人工质量复核",
+                    },
+                    f,
+                )
+            message_dir = os.path.join(temp_dir, "logs", "messages")
+            os.makedirs(message_dir, exist_ok=True)
+            with open(
+                os.path.join(message_dir, f"{task_id}.json"), "w", encoding="utf-8"
+            ) as f:
+                json.dump([{"msg_type": "system", "content": "等待质量复核"}], f)
+
+            previous_cwd = os.getcwd()
+            try:
+                os.chdir(temp_dir)
+                with mock.patch.object(common_router, "WORK_DIR_ROOT", work_root):
+                    tasks = self._run_async(common_router.list_tasks())
+            finally:
+                os.chdir(previous_cwd)
+
+        self.assertEqual(tasks[0]["status"], "waiting_quality_review")
+        self.assertTrue(tasks[0]["has_checkpoint"])
 
     @staticmethod
     def _run_async(coro):

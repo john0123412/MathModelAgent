@@ -170,12 +170,18 @@ dependencies = [
     { name = "scipy" },
     { name = "seaborn" },
     { name = "semanticscholar" },
-    { name = "sentence-transformers" },
     { name = "shap" },
     { name = "statsmodels" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "websocket" },
+]
+
+[package.optional-dependencies]
+modeling-extensions = [
     { name = "xgboost" },
+]
+semantic-search = [
+    { name = "sentence-transformers" },
 ]
 
 [package.dev-dependencies]
@@ -216,13 +222,14 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.15.2" },
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "semanticscholar", specifier = ">=0.10.0" },
-    { name = "sentence-transformers", specifier = ">=2.2.0" },
+    { name = "sentence-transformers", marker = "extra == 'semantic-search'", specifier = ">=2.2.0" },
     { name = "shap", specifier = ">=0.51.0" },
     { name = "statsmodels", specifier = ">=0.14.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34.0" },
     { name = "websocket", specifier = ">=0.2.1" },
-    { name = "xgboost", specifier = ">=3.0.0" },
+    { name = "xgboost", marker = "extra == 'modeling-extensions'", specifier = ">=3.0.0" },
 ]
+provides-extras = ["modeling-extensions", "semantic-search"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "ruff", specifier = ">=0.9.10" }]

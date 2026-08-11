@@ -9,10 +9,17 @@ import json
 import os
 import re
 import zipfile
+import xml.etree.ElementTree as ET
 from typing import Any
 
 from app.utils.log_util import logger
 from app.tools.candidate_exporter import SUPPORT_ARCHIVE, SUPPORT_MANIFEST
+from app.tools.export_template_override import (
+    MANIFEST_FILENAME as TEMPLATE_OVERRIDE_MANIFEST,
+    TemplateOverrideError,
+    load_export_template_override,
+    template_override_audit_matches,
+)
 from app.tools.paper_postprocessor import scan_similarity_ai_risk
 
 REPORT_JSON = "submission_audit_report.json"
@@ -26,6 +33,7 @@ _REPORT_FILES = [
     "export_status.json",
 ]
 _SUBMISSION_NAME_RE = re.compile(r"^[^/\\]+\.(?:pdf|docx)$", re.IGNORECASE)
+_DOCX_CODE_APPENDIX_RE = re.compile(r"附录\s*[A-Z]\s*源程序代码", re.IGNORECASE)
 
 
 def _read_json(path: str) -> dict[str, Any] | None:
@@ -323,6 +331,289 @@ def _audit_docx_identity(work_dir: str, filename: str) -> dict[str, Any]:
     )
 
 
+def _audit_docx_markdown_heading_leakage(work_dir: str, filename: str = "res.docx") -> dict[str, Any]:
+    """Reject literal Markdown headings in the generated Word deliverable.
+
+    This is intentionally a structural DOCX guard, not a claim of full Word
+    visual approval.  It complements the PDF visual check so an ATX heading
+    cannot be silently rendered as normal text in either primary deliverable.
+    """
+    paragraphs: list[str] = []
+    try:
+        with zipfile.ZipFile(os.path.join(work_dir, filename)) as archive:
+            root = ET.fromstring(archive.read("word/document.xml"))
+        namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+        for paragraph in root.findall(".//w:p", namespace):
+            text = "".join(
+                node.text or "" for node in paragraph.findall(".//w:t", namespace)
+            ).strip()
+            if text:
+                # A source-code appendix may legitimately contain literals
+                # such as ``# Cell``.  The guard is intentionally confined to
+                # rendered manuscript prose, consistent with PDF checking.
+                if _DOCX_CODE_APPENDIX_RE.search(text):
+                    break
+                paragraphs.append(text)
+    except (OSError, KeyError, zipfile.BadZipFile, ET.ParseError) as exc:
+        return _issue(
+            "docx_markdown_heading_leakage",
+            False,
+            "error",
+            "无法读取 DOCX 段落以检查 Markdown 标题泄漏。",
+            {"error": type(exc).__name__},
+        )
+
+    leaked = [
+        text[:200]
+        for text in paragraphs
+        if re.match(r"^\s*#{1,6}\s+\S", text)
+    ]
+    return _issue(
+        "docx_markdown_heading_leakage",
+        not leaked,
+        "error",
+        "DOCX 未发现字面 Markdown 标题。" if not leaked else "DOCX 出现未渲染的 Markdown 标题。",
+        {"paragraphs_checked": len(paragraphs), "issues": leaked},
+    )
+
+
+def _audit_template_override(work_dir: str) -> dict[str, Any]:
+    """Cross-bind every formal export report to one checked template identity."""
+    docx_status = _read_json(os.path.join(work_dir, "docx_export_status.json")) or {}
+    export_status = _read_json(os.path.join(work_dir, "export_status.json")) or {}
+    preflight = _read_json(os.path.join(work_dir, "paper_preflight_report.json")) or {}
+    visual = _read_json(os.path.join(work_dir, "pdf_visual_check.json")) or {}
+    candidate = _read_json(os.path.join(work_dir, "candidate_manifest.json"))
+    profile = str(
+        docx_status.get("export_profile") or export_status.get("export_profile") or ""
+    )
+    manifest_path = os.path.join(work_dir, TEMPLATE_OVERRIDE_MANIFEST)
+    if not os.path.lexists(manifest_path):
+        return _issue(
+            "template_override_integrity",
+            True,
+            "info",
+            "当前任务未安装用户提供的模板覆盖。",
+            {"active": False, "export_profile": profile},
+        )
+    if not profile:
+        return _issue(
+            "template_override_integrity",
+            False,
+            "error",
+            "任务级模板覆盖存在，但当前 DOCX/PDF 导出状态未声明 profile。",
+            {"active": True, "export_profile": profile},
+        )
+    try:
+        override = load_export_template_override(work_dir, profile)
+    except (TemplateOverrideError, ValueError) as exc:
+        return _issue(
+            "template_override_integrity",
+            False,
+            "error",
+            "任务级模板覆盖无效或哈希不匹配。",
+            {"active": True, "error": str(exc)},
+        )
+    audit = override["audit"]
+    if not override.get("active"):
+        return _issue(
+            "template_override_integrity",
+            True,
+            "info",
+            "任务保存了其他 profile 的模板覆盖；当前导出 profile 未启用该覆盖。",
+            {"active": False, "export_profile": profile, "installed_profiles_ignored": True},
+        )
+
+    records: dict[str, object] = {
+        "docx_export_status": docx_status.get("template_override"),
+        "export_status": export_status.get("template_override"),
+        "pdf_export": (
+            export_status.get("pdf", {}).get("template_override")
+            if isinstance(export_status.get("pdf"), dict)
+            else None
+        ),
+        "paper_preflight": preflight.get("template_override"),
+        "pdf_visual_check": visual.get("template_override"),
+    }
+    if candidate is not None:
+        records["candidate_manifest"] = candidate.get("template_override")
+    mismatched_records = [
+        name
+        for name, record in records.items()
+        if not template_override_audit_matches(audit, record)
+    ]
+
+    profile_records = {
+        "docx_export_status": docx_status.get("export_profile"),
+        "export_status": export_status.get("export_profile"),
+        "paper_preflight": preflight.get("export_profile"),
+        "pdf_visual_check": visual.get("export_profile"),
+    }
+    profile_mismatches = [
+        name for name, value in profile_records.items() if value != audit["profile"]
+    ]
+    rendered_contract = docx_status.get("format_contract")
+    expected_docx_contract = override.get("format_contract", {}).get("docx", {})
+    contract_bound = bool(
+        isinstance(rendered_contract, dict)
+        and rendered_contract.get("template_override_format_contract_sha256")
+        == audit["format_contract_sha256"]
+        and rendered_contract.get("template_override_docx_contract_sha256")
+        == audit["docx_contract_sha256"]
+        and all(rendered_contract.get(name) == value for name, value in expected_docx_contract.items())
+    )
+    docx_output_matches = docx_status.get("output_sha256") == _file_sha256(
+        os.path.join(work_dir, "res.docx")
+    )
+    bound = (
+        not mismatched_records
+        and not profile_mismatches
+        and contract_bound
+        and docx_output_matches
+    )
+    return _issue(
+        "template_override_integrity",
+        bound,
+        "error",
+        "用户提供的模板覆盖已与 Markdown、DOCX、PDF、视觉检查和候选清单交叉绑定。"
+        if bound
+        else "模板覆盖与至少一个当前交付物或审核报告不一致，请执行 task-refresh。",
+        {
+            "active": True,
+            "bound": bound,
+            "mismatched_records": mismatched_records,
+            "profile_mismatches": profile_mismatches,
+            "contract_bound": contract_bound,
+            "docx_output_matches": docx_output_matches,
+            **audit,
+        },
+    )
+
+
+def _audit_docx_format_contract(work_dir: str, filename: str = "res.docx") -> dict[str, Any]:
+    """Verify the rendered DOCX against its recorded task format contract."""
+    status = _read_json(os.path.join(work_dir, "docx_export_status.json")) or {}
+    profile = str(status.get("export_profile") or "")
+    contract = status.get("format_contract")
+    if not isinstance(contract, dict) or not contract.get("active"):
+        return _issue(
+            "docx_format_contract",
+            True,
+            "info",
+            "当前 DOCX 未记录可机检的正文版式合同。",
+            {"active": False, "export_profile": profile},
+        )
+
+    namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+
+    def qn(name: str) -> str:
+        return f"{{{namespace['w']}}}{name}"
+
+    expected_fonts = {
+        "eastAsia": str(contract.get("body_font_east_asia", "")),
+        "ascii": str(contract.get("body_font_ascii", "")),
+        "hAnsi": str(contract.get("body_font_hansi", "")),
+        "cs": str(contract.get("body_font_cs", "")),
+    }
+    expected_size = str(contract.get("body_font_size_half_points", ""))
+    expected_line = str(contract.get("body_line_spacing_twips", ""))
+    expected_rule = str(contract.get("body_line_rule", ""))
+    expect_page_break = bool(contract.get("body_start_page_break"))
+    mismatches: list[dict[str, str]] = []
+    checked = 0
+    body_start_page_break = False
+    try:
+        with zipfile.ZipFile(os.path.join(work_dir, filename)) as archive:
+            root = ET.fromstring(archive.read("word/document.xml"))
+        body = root.find("w:body", namespace)
+        if body is None:
+            raise ET.ParseError("missing body")
+        code_appendix_started = False
+        for paragraph in body.findall("w:p", namespace):
+            text = "".join(node.text or "" for node in paragraph.findall(".//w:t", namespace)).strip()
+            if not text:
+                continue
+            if _DOCX_CODE_APPENDIX_RE.fullmatch(text):
+                code_appendix_started = True
+                continue
+            properties = paragraph.find("w:pPr", namespace)
+            style = ""
+            if properties is not None:
+                style_node = properties.find("w:pStyle", namespace)
+                if style_node is not None:
+                    style = style_node.get(qn("val"), "")
+            if re.fullmatch(r"(?:一、)?问题重述", text):
+                body_start_page_break = bool(
+                    properties is not None and properties.find("w:pageBreakBefore", namespace) is not None
+                )
+            if code_appendix_started or style.lower().startswith("heading") or re.match(
+                r"^(?:[一二三四五六七八九十]+、|\d+(?:\.\d+){0,3}\s|摘要$|关键词|参考文献$|附录)", text
+            ):
+                continue
+            runs = [run for run in paragraph.findall("w:r", namespace) if run.findall(".//w:t", namespace)]
+            if not runs:
+                continue
+            checked += 1
+            spacing = properties.find("w:spacing", namespace) if properties is not None else None
+            spacing_ok = bool(
+                spacing is not None
+                and spacing.get(qn("line")) == expected_line
+                and spacing.get(qn("lineRule")) == expected_rule
+            )
+            font_ok = True
+            for run in runs:
+                run_properties = run.find("w:rPr", namespace)
+                fonts = run_properties.find("w:rFonts", namespace) if run_properties is not None else None
+                size = run_properties.find("w:sz", namespace) if run_properties is not None else None
+                size_cs = run_properties.find("w:szCs", namespace) if run_properties is not None else None
+                if (
+                    fonts is None
+                    or any(fonts.get(qn(name)) != value for name, value in expected_fonts.items())
+                    or size is None
+                    or size.get(qn("val")) != expected_size
+                    or size_cs is None
+                    or size_cs.get(qn("val")) != expected_size
+                ):
+                    font_ok = False
+                    break
+            if not spacing_ok or not font_ok:
+                mismatches.append(
+                    {
+                        "text": text[:120],
+                        "font_ok": str(font_ok),
+                        "single_spacing_ok": str(spacing_ok),
+                    }
+                )
+    except (OSError, KeyError, zipfile.BadZipFile, ET.ParseError) as exc:
+        return _issue(
+            "docx_format_contract",
+            False,
+            "error",
+            "无法读取 DOCX 以核验宋体小四单倍行距与摘要后正文分页。",
+            {"error": type(exc).__name__},
+        )
+
+    page_break_ok = body_start_page_break or not expect_page_break
+    passed = bool(checked) and page_break_ok and not mismatches
+    return _issue(
+        "docx_format_contract",
+        passed,
+        "error",
+        "DOCX 已核验为记录的正文版式，且满足摘要后正文分页设置。"
+        if passed
+        else "DOCX 未满足记录的字体、行距或摘要后正文分页合同。",
+        {
+            "active": True,
+            "export_profile": profile,
+            "format_contract": contract,
+            "checked_body_paragraphs": checked,
+            "body_start_page_break": body_start_page_break,
+            "expected_page_break": expect_page_break,
+            "mismatches": mismatches[:20],
+        },
+    )
+
+
 def _audit_support_materials(work_dir: str) -> list[dict[str, Any]]:
     manifest_path = os.path.join(work_dir, SUPPORT_MANIFEST)
     archive_path = os.path.join(work_dir, SUPPORT_ARCHIVE)
@@ -390,6 +681,10 @@ def audit_submission(
     issues.extend(_audit_required_files(work_dir))
     issues.extend(_audit_reports(work_dir))
     issues.extend(_audit_candidate_manifest(work_dir))
+    if os.path.isfile(os.path.join(work_dir, "res.docx")):
+        issues.append(_audit_docx_markdown_heading_leakage(work_dir))
+        issues.append(_audit_template_override(work_dir))
+        issues.append(_audit_docx_format_contract(work_dir))
     issues.extend(_audit_support_materials(work_dir))
     issues.append(_audit_similarity_ai_risk(work_dir))
     font_issues, font_summary = _audit_pdf_fonts(work_dir, require_official_fonts)

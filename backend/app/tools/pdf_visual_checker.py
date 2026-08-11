@@ -20,8 +20,15 @@ MAX_TEXT_MARGIN_OVERFLOWS = 20
 CUMCM_MIN_CONTENT_MARGIN_PT = 2.5 / 2.54 * 72
 CUMCM_CONTENT_MARGIN_TOLERANCE_PT = 3.0
 MAX_CUMCM_PDF_SIZE_BYTES = 20 * 1024 * 1024
-MAX_CUMCM_BODY_PAGES = 30
+MAX_CUMCM_BODY_PAGES = 20
 MAX_CONTENT_MARGIN_ISSUES = 20
+DEFAULT_EDITORIAL_QUALITY_POLICY = "internal_editorial_warn"
+CUMCM2026_STRICT_EDITORIAL_QUALITY_POLICY = "cumcm2026_strict"
+EDITORIAL_QUALITY_POLICY_SCOPE = "internal_editorial_non_official"
+MIN_ABSTRACT_CHARACTERS = 450
+MIN_ABSTRACT_TEXT_COVERAGE_RATIO = 0.12
+MIN_EDITORIAL_BODY_PAGES = 10
+MAX_EDITORIAL_BODY_PAGES = 20
 BODY_START_TERMS = ("问题重述", "问题分析", "模型假设", "符号说明", "模型的建立")
 FORBIDDEN_SUBMISSION_TERMS = (
     "承诺书",
@@ -32,6 +39,17 @@ FORBIDDEN_SUBMISSION_TERMS = (
     "所在学校",
     "学校名称",
 )
+
+EDITORIAL_QUALITY_POLICIES = {
+    DEFAULT_EDITORIAL_QUALITY_POLICY: {
+        "blocking": False,
+        "description": "仅记录内部编辑质量风险，不阻断历史或轻量任务导出。",
+    },
+    CUMCM2026_STRICT_EDITORIAL_QUALITY_POLICY: {
+        "blocking": True,
+        "description": "将内部编辑质量风险作为正式 CUMCM 候选的阻断条件。",
+    },
+}
 
 
 def _file_sha256(path: str) -> str | None:
@@ -201,7 +219,9 @@ def _check_forbidden_submission_terms(page_texts: list[str]) -> dict:
     return {"passed": not occurrences, "occurrences": occurrences}
 
 
-def _check_body_page_limit(page_texts: list[str]) -> dict:
+def _check_body_page_limit(
+    page_texts: list[str], *, max_body_pages: int = MAX_CUMCM_BODY_PAGES
+) -> dict:
     appendix_start_page = None
     for index, text in enumerate(page_texts, 1):
         if "附录" in text:
@@ -210,10 +230,125 @@ def _check_body_page_limit(page_texts: list[str]) -> dict:
     body_end_page = appendix_start_page - 1 if appendix_start_page else len(page_texts)
     body_pages_after_abstract = max(0, body_end_page - 1)
     return {
-        "passed": body_pages_after_abstract <= MAX_CUMCM_BODY_PAGES,
+        "passed": body_pages_after_abstract <= max_body_pages,
         "body_pages_after_abstract": body_pages_after_abstract,
-        "max_body_pages": MAX_CUMCM_BODY_PAGES,
+        "max_body_pages": max_body_pages,
         "appendix_start_page": appendix_start_page,
+    }
+
+
+def _extract_abstract_text(first_page_text: str) -> str:
+    """Return text between the abstract label and the keyword label."""
+    abstract_match = re.search(r"摘要\s*[:：]?", first_page_text)
+    if not abstract_match:
+        return ""
+    keyword_match = re.search(
+        r"(?:关键词|关键字)\s*[:：]?", first_page_text[abstract_match.end() :]
+    )
+    abstract_end = (
+        abstract_match.end() + keyword_match.start()
+        if keyword_match
+        else len(first_page_text)
+    )
+    return re.sub(r"\s+", "", first_page_text[abstract_match.end() : abstract_end])
+
+
+def _text_coverage_ratio(page, lines: list[dict]) -> float | None:
+    """Estimate text bounding-box coverage; ``None`` means geometry unavailable."""
+    boxes: list[tuple[float, float, float, float]] = []
+    for line in lines:
+        if _is_page_number_line(line["text"]):
+            continue
+        try:
+            x0, y0, x1, y1 = (float(value) for value in line["bbox"])
+        except (TypeError, ValueError):
+            continue
+        if x1 > x0 and y1 > y0:
+            boxes.append((x0, y0, x1, y1))
+    if not boxes:
+        return None
+
+    page_area = float(page.rect.width) * float(page.rect.height)
+    if page_area <= 0:
+        return None
+    min_x = min(box[0] for box in boxes)
+    min_y = min(box[1] for box in boxes)
+    max_x = max(box[2] for box in boxes)
+    max_y = max(box[3] for box in boxes)
+    return (max_x - min_x) * (max_y - min_y) / page_area
+
+
+def _check_editorial_quality(
+    page_texts: list[str],
+    first_page_coverage_ratio: float | None,
+    quality_policy: str,
+    *,
+    body_min_pages: int | None = None,
+    body_max_pages: int | None = None,
+) -> dict:
+    """Check explicitly non-official content-density and body-length targets."""
+    policy = EDITORIAL_QUALITY_POLICIES.get(quality_policy)
+    if policy is None:
+        return {
+            "passed": False,
+            "policy": quality_policy,
+            "scope": EDITORIAL_QUALITY_POLICY_SCOPE,
+            "official_rule": False,
+            "blocking": True,
+            "error": f"未知 PDF 内容质量策略: {quality_policy}",
+            "warnings": [],
+            "checkpoints": {},
+        }
+
+    abstract_text = _extract_abstract_text(page_texts[0] if page_texts else "")
+    abstract_characters = len(abstract_text)
+    coverage_ratio = first_page_coverage_ratio
+    abstract_density_passed = abstract_characters >= MIN_ABSTRACT_CHARACTERS
+    if coverage_ratio is not None:
+        abstract_density_passed = (
+            abstract_density_passed
+            and coverage_ratio >= MIN_ABSTRACT_TEXT_COVERAGE_RATIO
+        )
+
+    minimum_pages = MIN_EDITORIAL_BODY_PAGES if body_min_pages is None else body_min_pages
+    maximum_pages = MAX_EDITORIAL_BODY_PAGES if body_max_pages is None else body_max_pages
+    body_page_limit = _check_body_page_limit(page_texts, max_body_pages=maximum_pages)
+    body_pages = body_page_limit["body_pages_after_abstract"]
+    body_range_passed = minimum_pages <= body_pages <= maximum_pages
+    abstract_checkpoint = {
+        "passed": abstract_density_passed,
+        "abstract_characters": abstract_characters,
+        "min_abstract_characters": MIN_ABSTRACT_CHARACTERS,
+        "text_coverage_ratio": (
+            round(coverage_ratio, 4) if coverage_ratio is not None else None
+        ),
+        "min_text_coverage_ratio": MIN_ABSTRACT_TEXT_COVERAGE_RATIO,
+        "geometry_assessed": coverage_ratio is not None,
+    }
+    body_checkpoint = {
+        "passed": body_range_passed,
+        "body_pages_after_abstract": body_pages,
+        "recommended_range_pages": [minimum_pages, maximum_pages],
+        "appendix_start_page": body_page_limit["appendix_start_page"],
+    }
+    warnings = []
+    if not abstract_density_passed:
+        warnings.append("摘要页内容密度偏低或存在较大空白风险。")
+    if not body_range_passed:
+        warnings.append("正文页数未落在内部编辑建议范围内。")
+    raw_passed = not warnings
+    return {
+        "passed": raw_passed or not policy["blocking"],
+        "policy": quality_policy,
+        "scope": EDITORIAL_QUALITY_POLICY_SCOPE,
+        "official_rule": False,
+        "blocking": policy["blocking"],
+        "description": policy["description"],
+        "warnings": warnings,
+        "checkpoints": {
+            "abstract_page_density": abstract_checkpoint,
+            "body_page_range": body_checkpoint,
+        },
     }
 
 
@@ -223,7 +358,7 @@ def _check_markdown_table_leakage(page_texts: list[str]) -> dict:
     for index, text in enumerate(page_texts):
         # Code appendices may legitimately contain Markdown strings. Stop at
         # the source-code appendix and keep the rule focused on paper prose.
-        if "附录B 源程序代码" in text:
+        if re.search(r"附录\s*[A-Z]\s*源程序代码", text):
             break
         compact = re.sub(r"\s+", " ", text)
         for match in re.finditer(r"表\s*\d+[^\n]{0,1200}", compact):
@@ -237,13 +372,66 @@ def _check_markdown_table_leakage(page_texts: list[str]) -> dict:
     return {"passed": not issues, "issues": issues}
 
 
-def check_pdf_visual(pdf_path: str, work_dir: str, max_pages: int | None = None) -> dict:
+def _check_literal_markdown_headings(page_texts: list[str]) -> dict:
+    """Reject Markdown heading source visibly leaked into rendered prose.
+
+    The source-code appendix is intentionally excluded: it may legitimately
+    contain Markdown examples.  In the paper body a literal ``### 标题`` is a
+    formatting failure even when the PDF remains technically readable.
+    """
+    issues: list[dict] = []
+    for index, text in enumerate(page_texts, 1):
+        if re.search(r"附录\s*[A-Z]\s*源程序代码", text):
+            break
+        for match in re.finditer(r"(?m)^\s*#{1,6}\s+\S[^\n]{0,160}", text):
+            issues.append({"page": index, "text": match.group(0).strip()})
+    return {"passed": not issues, "issues": issues}
+
+
+def check_pdf_visual(
+    pdf_path: str,
+    work_dir: str,
+    max_pages: int | None = None,
+    quality_policy: str = DEFAULT_EDITORIAL_QUALITY_POLICY,
+    body_min_pages: int | None = None,
+    body_max_pages: int | None = None,
+    min_content_margin_cm: float | None = None,
+    export_profile: str | None = None,
+    template_override_audit: dict | None = None,
+) -> dict:
     """检查 PDF 是否基本可交付，并写入 pdf_visual_check.json。
 
     该检查逐页验证非空、A4 尺寸和文本边界，并检测正文中的 Markdown
-    表格源码泄漏。调用方仍决定失败是否阻断主导出流程。
-    由调用方决定是否只报警。
+    表格源码泄漏。``quality_policy`` 还可启用内部编辑质量检查：默认
+    ``internal_editorial_warn`` 只写警告，``cumcm2026_strict`` 会阻断低密度
+    摘要页或正文页数不在建议范围内的候选。任务级模板覆盖可安全调整正文
+    页数和内容边距阈值；该策略本身不是官方竞赛规则。
     """
+    if body_min_pages is not None and (
+        isinstance(body_min_pages, bool)
+        or not isinstance(body_min_pages, int)
+        or body_min_pages < 0
+    ):
+        raise ValueError("body_min_pages 必须为非负整数")
+    if body_max_pages is not None and (
+        isinstance(body_max_pages, bool)
+        or not isinstance(body_max_pages, int)
+        or body_max_pages <= 0
+    ):
+        raise ValueError("body_max_pages 必须为正整数")
+    if body_min_pages is not None and body_max_pages is not None and body_min_pages > body_max_pages:
+        raise ValueError("body_min_pages 不能大于 body_max_pages")
+    if min_content_margin_cm is not None:
+        if isinstance(min_content_margin_cm, bool) or not isinstance(
+            min_content_margin_cm, (int, float)
+        ) or not 1.0 <= float(min_content_margin_cm) <= 5.0:
+            raise ValueError("min_content_margin_cm 必须在 1.0 至 5.0 之间")
+    effective_body_max = MAX_CUMCM_BODY_PAGES if body_max_pages is None else body_max_pages
+    effective_margin = (
+        CUMCM_MIN_CONTENT_MARGIN_PT
+        if min_content_margin_cm is None
+        else float(min_content_margin_cm) / 2.54 * 72
+    )
     report = {
         "enabled": False,
         "success": False,
@@ -251,6 +439,8 @@ def check_pdf_visual(pdf_path: str, work_dir: str, max_pages: int | None = None)
         "generated_at": datetime.datetime.now().isoformat(),
         "pdf_path": os.path.basename(pdf_path),
         "pdf_sha256": None,
+        "export_profile": export_profile,
+        "template_override": dict(template_override_audit or {"active": False}),
         "scan_scope": "none",
         "page_count": 0,
         "pages_checked": 0,
@@ -287,6 +477,7 @@ def check_pdf_visual(pdf_path: str, work_dir: str, max_pages: int | None = None)
             text_margin_overflows: list[dict] = []
             content_margin_issues: list[dict] = []
             page_texts: list[str] = []
+            first_page_coverage_ratio: float | None = None
 
             for index in range(pages_checked):
                 page = doc[index]
@@ -307,12 +498,18 @@ def check_pdf_visual(pdf_path: str, work_dir: str, max_pages: int | None = None)
                     }
                 )
                 page_texts.append(page.get_text() or "")
+                if index == 0:
+                    first_page_coverage_ratio = _text_coverage_ratio(
+                        page, _iter_text_lines(page)
+                    )
                 if len(text_margin_overflows) < MAX_TEXT_MARGIN_OVERFLOWS:
                     page_overflows = _find_text_margin_overflows(page, index + 1)
                     remaining = MAX_TEXT_MARGIN_OVERFLOWS - len(text_margin_overflows)
                     text_margin_overflows.extend(page_overflows[:remaining])
                 if len(content_margin_issues) < MAX_CONTENT_MARGIN_ISSUES:
-                    page_margin_issues = _find_content_margin_issues(page, index + 1)
+                    page_margin_issues = _find_content_margin_issues(
+                        page, index + 1, min_margin=effective_margin
+                    )
                     remaining = MAX_CONTENT_MARGIN_ISSUES - len(content_margin_issues)
                     content_margin_issues.extend(page_margin_issues[:remaining])
     except Exception as exc:
@@ -328,7 +525,16 @@ def check_pdf_visual(pdf_path: str, work_dir: str, max_pages: int | None = None)
             "max_bytes": MAX_CUMCM_PDF_SIZE_BYTES,
         },
         "page_count": {"passed": page_count > 0},
-        "body_page_limit": _check_body_page_limit(page_texts),
+        "body_page_limit": _check_body_page_limit(
+            page_texts, max_body_pages=effective_body_max
+        ),
+        "editorial_quality": _check_editorial_quality(
+            page_texts,
+            first_page_coverage_ratio,
+            quality_policy,
+            body_min_pages=body_min_pages,
+            body_max_pages=body_max_pages,
+        ),
         "a4_size": {
             "passed": bool(page_sizes) and all(item["a4"] for item in page_sizes),
             "pages": page_sizes,
@@ -337,6 +543,7 @@ def check_pdf_visual(pdf_path: str, work_dir: str, max_pages: int | None = None)
         "no_table_of_contents": _check_no_table_of_contents(page_texts),
         "submission_anonymity": _check_forbidden_submission_terms(page_texts),
         "markdown_table_leakage": _check_markdown_table_leakage(page_texts),
+        "literal_markdown_headings": _check_literal_markdown_headings(page_texts),
         "nonblank_pages": {
             "passed": pages_checked > 0 and len(nonblank_pages) == pages_checked,
             "pages": nonblank_pages,
@@ -349,7 +556,7 @@ def check_pdf_visual(pdf_path: str, work_dir: str, max_pages: int | None = None)
         },
         "content_margin": {
             "passed": not content_margin_issues,
-            "min_margin_pt": round(CUMCM_MIN_CONTENT_MARGIN_PT, 2),
+            "min_margin_pt": round(effective_margin, 2),
             "tolerance_pt": CUMCM_CONTENT_MARGIN_TOLERANCE_PT,
             "issues": content_margin_issues,
         },

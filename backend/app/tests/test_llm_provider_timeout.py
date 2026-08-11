@@ -7,6 +7,7 @@ from app.core.llm.llm import LLM
 from app.core.llm.providers.openai_chat import OpenAIChatProvider
 from app.core.llm.providers.openai_responses import OpenAIResponsesProvider
 from app.core.llm.types import StandardResponse, Usage
+from app.utils.outbound_http import llm_http_client
 
 
 class ProviderTimeoutTest(unittest.IsolatedAsyncioTestCase):
@@ -127,6 +128,19 @@ class ProviderTimeoutTest(unittest.IsolatedAsyncioTestCase):
                 await model.chat(max_retries=3, retry_delay=0)
 
         self.assertEqual(validate.call_count, 1)
+
+    async def test_llm_http_client_only_uses_explicit_proxy_setting(self):
+        with mock.patch("app.utils.outbound_http.httpx.AsyncClient") as client_cls:
+            with mock.patch.object(
+                settings, "LLM_OUTBOUND_PROXY", "http://proxy.example:8080"
+            ):
+                async with llm_http_client(12):
+                    pass
+
+        self.assertFalse(client_cls.call_args.kwargs["trust_env"])
+        self.assertEqual(
+            client_cls.call_args.kwargs["proxy"], "http://proxy.example:8080"
+        )
 
 
 if __name__ == "__main__":

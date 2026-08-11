@@ -16,6 +16,11 @@ def _write_json(work_dir: str, name: str, value: dict) -> None:
         json.dump(value, handle)
 
 
+def _read_json(work_dir: str, name: str) -> dict:
+    with open(os.path.join(work_dir, name), encoding="utf-8") as handle:
+        return json.load(handle)
+
+
 def _prepare_technical_fixture(work_dir: str) -> None:
     source = "def solve():\n    return 2200\n"
     with open(os.path.join(work_dir, "solve.py"), "w", encoding="utf-8") as handle:
@@ -156,6 +161,57 @@ class FinalAcceptanceTest(unittest.TestCase):
             self.assertEqual(report["technical_status"], "TECHNICAL_FAIL")
             font_check = next(item for item in report["checks"] if item["id"] == "official_fonts")
             self.assertFalse(font_check["passed"])
+
+    def test_formal_profile_rejects_legacy_pass_reports_without_editorial_gate(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            _prepare_technical_fixture(work_dir)
+            export_status = _read_json(work_dir, "export_status.json")
+            export_status["export_profile"] = "cumcm2026"
+            _write_json(work_dir, "export_status.json", export_status)
+
+            report = audit_final_acceptance(work_dir)
+
+            self.assertEqual(report["technical_status"], "TECHNICAL_FAIL")
+            editorial = next(
+                item for item in report["checks"] if item["id"] == "editorial_quality_gate"
+            )
+            self.assertFalse(editorial["passed"])
+
+    def test_formal_profile_accepts_explicit_strict_editorial_reports(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            _prepare_technical_fixture(work_dir)
+            preflight = _read_json(work_dir, "paper_preflight_report.json")
+            preflight["checks"] = {
+                "editorial_quality": {
+                    "passed": True,
+                    "quality_passed": True,
+                    "enforced": True,
+                    "policy": "cumcm_formal",
+                    "official_rule": False,
+                }
+            }
+            _write_json(work_dir, "paper_preflight_report.json", preflight)
+            visual = _read_json(work_dir, "pdf_visual_check.json")
+            visual["checks"] = {
+                "editorial_quality": {
+                    "passed": True,
+                    "blocking": True,
+                    "policy": "cumcm2026_strict",
+                    "official_rule": False,
+                }
+            }
+            _write_json(work_dir, "pdf_visual_check.json", visual)
+            export_status = _read_json(work_dir, "export_status.json")
+            export_status["export_profile"] = "cumcm2026"
+            _write_json(work_dir, "export_status.json", export_status)
+
+            report = audit_final_acceptance(work_dir)
+
+            self.assertEqual(report["technical_status"], "TECHNICAL_PASS")
+            editorial = next(
+                item for item in report["checks"] if item["id"] == "editorial_quality_gate"
+            )
+            self.assertTrue(editorial["passed"])
 
 
 if __name__ == "__main__":

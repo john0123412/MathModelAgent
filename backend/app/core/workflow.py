@@ -2,6 +2,7 @@
 
 import asyncio
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -29,15 +30,26 @@ from app.tools.pdf_exporter import export_markdown_to_pdf
 from app.tools.tex_project_exporter import export_markdown_to_latex_project
 from app.tools.candidate_exporter import write_candidate_manifest
 from app.tools.export_profiles import normalize_export_profile
+from app.tools.export_template_override import (
+    TemplateOverrideError,
+    get_editorial_policy_override,
+    get_pdf_visual_constraints,
+    load_export_template_override,
+)
 from app.tools.paper_postprocessor import build_result_fact_summary, prepare_paper_markdown
 from app.tools.result_integrity import validate_result_freeze
-from app.tools.pdf_visual_checker import check_pdf_visual
+from app.tools.pdf_visual_checker import (
+    CUMCM2026_STRICT_EDITORIAL_QUALITY_POLICY,
+    DEFAULT_EDITORIAL_QUALITY_POLICY,
+    check_pdf_visual,
+)
 from app.tools.submission_audit import write_submission_audit_report
 from app.tools.execution_validation import (
     write_execution_validation_report,
     write_frozen_results_from_execution_validation,
 )
 from app.tools.execution_quality_review import write_execution_quality_review
+from app.tools.ai_usage_exporter import ensure_ai_usage_details
 from app.core.flows import Flows
 from app.core.llm.llm_factory import LLMFactory
 from app.schemas.problem_contract import (
@@ -45,6 +57,27 @@ from app.schemas.problem_contract import (
     build_problem_contract,
     validate_modeler_plan,
 )
+
+
+_FORMAL_EDITORIAL_EXPORT_PROFILES = {"cumcm2025", "cumcm2026"}
+
+
+def _pdf_editorial_quality_policy(
+    export_profile: ExportProfile | str | None,
+) -> str:
+    """Choose the internal PDF quality policy for the selected profile.
+
+    This policy is intentionally not an assertion about official CUMCM page
+    limits.  It only makes the project's formal CUMCM candidate path reject
+    the low-density abstract/body failure that this audit uncovered; all
+    non-CUMCM and smoke paths retain the non-blocking diagnostic policy.
+    """
+    profile = normalize_export_profile(export_profile).value
+    return (
+        CUMCM2026_STRICT_EDITORIAL_QUALITY_POLICY
+        if profile in _FORMAL_EDITORIAL_EXPORT_PROFILES
+        else DEFAULT_EDITORIAL_QUALITY_POLICY
+    )
 
 
 class WorkFlow:
@@ -105,6 +138,7 @@ class MathModelWorkFlow(WorkFlow):
         format_output: FormatOutPut,
         user_input_provider,
         problem_context: str,
+        checkpoint_manager: CheckpointManager | None = None,
     ) -> tuple[NotebookSerializer, BaseCodeInterpreter, CoderAgent, WriterAgent]:
         """构建代码手/写作手 Agent 及其依赖的沙盒环境（execute 与 resume 共享）。
 
@@ -170,6 +204,7 @@ class MathModelWorkFlow(WorkFlow):
                 cancel_event=self.cancel_event,
                 user_input_provider=user_input_provider,
                 problem_context=problem_context,
+                checkpoint_manager=checkpoint_manager,
             )
 
             writer_agent = WriterAgent(
@@ -435,6 +470,28 @@ class MathModelWorkFlow(WorkFlow):
             execution_error_occurred=False,
         )
 
+    @staticmethod
+    def _quality_repair_sensitivity_response() -> CoderToWriter:
+        """Replace stale sensitivity prose with a source-only hand-off.
+
+        Sensitivity analysis is not a formal quesN evidence owner.  After a
+        quality-review rejection its previous exploratory numbers are not
+        trustworthy, so a repair must not call the model merely to recreate a
+        second numerical baseline.  Writer may mention only the refreshed
+        formal sources if the problem requires a sensitivity section.
+        """
+        return CoderToWriter(
+            code_response=(
+                "质量返修已使旧敏感性探索交接失效；本轮不复用其数值或图表。"
+                "如需撰写扩展分析，只能引用本轮正式题的结果 CSV、"
+                "execution_validation.json 和冻结结果，不能新增敏感性数值。"
+            ),
+            created_images=[],
+            execution_attempted=True,
+            execution_succeeded=True,
+            execution_error_occurred=False,
+        )
+
     async def _run_solution_flows(
         self,
         flows: Flows,
@@ -446,6 +503,7 @@ class MathModelWorkFlow(WorkFlow):
         checkpoint_manager: CheckpointManager,
         config_template: dict,
         recovery_context: str = "",
+        quality_repair: bool = False,
     ) -> str | None:
         """先完成全部代码求解与验证冻结，再允许论文手撰写。"""
         solution_flows = flows.get_solution_flows(self.questions, modeler_response)
@@ -461,6 +519,11 @@ class MathModelWorkFlow(WorkFlow):
             if flow_key.startswith("ques") and flow_key != "ques_count"
         ]
         checkpoint = checkpoint_manager._checkpoint
+        quality_repair = quality_repair or bool(
+            checkpoint
+            and checkpoint.workflow_state in {"quality_repair", "repairing"}
+            and checkpoint_manager.quality_repair_source_is_prepared()
+        )
         recovery_reuses_verified_evidence = False
         if checkpoint is not None and checkpoint.workflow_state == "repairing":
             current_report = write_execution_validation_report(
@@ -479,6 +542,17 @@ class MathModelWorkFlow(WorkFlow):
 
         for key, value in solution_flows.items():
             await self._check_cancelled()
+
+            if quality_repair and key == "sensitivity_analysis":
+                # A prior sensitivity handoff is intentionally removed by
+                # request_quality_repair.  Keep this stage deterministic and
+                # source-only instead of waking the provider for stale data.
+                coder_response = self._quality_repair_sensitivity_response()
+                coder_responses[key] = coder_response
+                checkpoint_manager.mark_solution_coder_completed(
+                    key, coder_response.model_dump()
+                )
+                continue
 
             saved_coder_response = checkpoint_manager.get_solution_coder_response(key)
             if saved_coder_response is not None:
@@ -514,8 +588,9 @@ class MathModelWorkFlow(WorkFlow):
                     "请据此重新检查本题计算路径；不得把恢复过程或失败描述写入论文。\n\n"
                     + coder_prompt
                 )
+            coder_kwargs = {"quality_repair": True} if quality_repair else {}
             coder_response = await coder_agent.run(
-                prompt=coder_prompt, subtask_title=key
+                prompt=coder_prompt, subtask_title=key, **coder_kwargs
             )
 
             if (
@@ -523,11 +598,30 @@ class MathModelWorkFlow(WorkFlow):
                 or not coder_response.execution_succeeded
                 or coder_response.execution_error_occurred
             ):
-                # This is a formal question failure, not an EDA-only status
-                # snapshot.  Requiring the per-question manifest keeps the
-                # persisted report aligned with the authoritative failed task
-                # status instead of emitting a misleading PASS for a clean
-                # notebook that never recorded execution evidence.
+                if key not in required_subtasks:
+                    # EDA is allowed to execute code but never owns a formal
+                    # quesN evidence manifest.  It must still stop the task
+                    # when it fails, yet writing `required_subtasks=["eda"]`
+                    # creates a misleading report that later treats EDA as a
+                    # required formal question.
+                    await redis_manager.publish_message(
+                        self.task_id,
+                        SystemMessage(
+                            content=(
+                                f"非正式代码阶段 {key} 未成功执行，已停止进入正式问题；"
+                                "未生成正式执行验证报告。"
+                            ),
+                            type="error",
+                        ),
+                    )
+                    raise RuntimeError(
+                        f"非正式代码阶段 {key} 未成功执行，无法进入正式问题"
+                    )
+
+                # Requiring the per-question manifest keeps the persisted
+                # report aligned with the authoritative failed task status
+                # instead of emitting a misleading PASS for a clean notebook
+                # that never recorded execution evidence.
                 report = write_execution_validation_report(
                     self.work_dir,
                     required_subtasks=[key],
@@ -892,6 +986,7 @@ class MathModelWorkFlow(WorkFlow):
         decision_json_path = os.path.join(self.work_dir, "modeling_decision.json")
         decision_md_path = os.path.join(self.work_dir, "modeling_decision.md")
         review_history: list[dict] = []
+        prior_gate_enabled = False
         if os.path.exists(decision_json_path):
             try:
                 with open(decision_json_path, encoding="utf-8") as decision_file:
@@ -899,20 +994,35 @@ class MathModelWorkFlow(WorkFlow):
                 prior_history = prior_decision.get("review_history", [])
                 if isinstance(prior_history, list):
                     review_history = prior_history
+                prior_gate_enabled = prior_decision.get("gate_enabled") is True
             except (OSError, json.JSONDecodeError):
                 logger.warning("读取已有建模审查历史失败，将重建确认文件")
 
+        modeler_payload = modeler_response.model_dump()
+        modeler_plan_sha256 = hashlib.sha256(
+            json.dumps(
+                modeler_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
         payload = {
             "task_id": self.task_id,
             "status": "waiting_review",
-            "gate_enabled": settings.HUMAN_MODEL_GATE_ENABLED or problem.require_model_review,
+            "gate_enabled": (
+                settings.HUMAN_MODEL_GATE_ENABLED
+                or problem.require_model_review
+                or prior_gate_enabled
+            ),
             "created_at": datetime.datetime.now().isoformat(),
             "comp_template": problem.comp_template.value,
             "format_output": problem.format_output.value,
             "export_profile": problem.export_profile.value,
             "questions": self.questions,
             "ques_count": self.ques_count,
-            "modeler_response": modeler_response.model_dump(),
+            "modeler_response": modeler_payload,
+            "modeler_plan_sha256": modeler_plan_sha256,
             "review": {
                 "approved": False,
                 "approved_at": None,
@@ -1274,6 +1384,25 @@ class MathModelWorkFlow(WorkFlow):
         logger.info(user_output.get_res())
 
         user_output.save_result()
+        profile_key = normalize_export_profile(export_profile).value
+        try:
+            template_override = load_export_template_override(
+                self.work_dir, profile_key
+            )
+            editorial_policy = get_editorial_policy_override(
+                self.work_dir, profile_key
+            )
+            pdf_visual_constraints = get_pdf_visual_constraints(
+                self.work_dir, profile_key
+            )
+        except TemplateOverrideError as exc:
+            raise RuntimeError(f"任务级模板覆盖无效，已停止导出: {exc}") from exc
+        ai_usage_result = ensure_ai_usage_details(
+            self.work_dir,
+            export_profile=profile_key,
+        )
+        if ai_usage_result.get("enabled") and not ai_usage_result.get("success"):
+            logger.warning("AI工具使用详情 PDF 生成失败，cumcm2026 预检将拒绝导出")
         try:
             declared_problem_count = len(
                 [
@@ -1285,8 +1414,10 @@ class MathModelWorkFlow(WorkFlow):
             preflight_report = prepare_paper_markdown(
                 self.work_dir,
                 "res.md",
-                export_profile=normalize_export_profile(export_profile).value,
+                export_profile=profile_key,
                 declared_problem_count=declared_problem_count or None,
+                editorial_policy=editorial_policy,
+                template_override_audit=template_override["audit"],
             )
             if (
                 preflight_report.get("status") == "FAIL"
@@ -1300,8 +1431,10 @@ class MathModelWorkFlow(WorkFlow):
                     preflight_report = prepare_paper_markdown(
                         self.work_dir,
                         "res.md",
-                        export_profile=normalize_export_profile(export_profile).value,
+                        export_profile=profile_key,
                         declared_problem_count=declared_problem_count or None,
+                        editorial_policy=editorial_policy,
+                        template_override_audit=template_override["audit"],
                     )
             if preflight_report.get("status") == "PASS" and checkpoint_manager is not None:
                 checkpoint_manager.mark_paper_preflight_passed()
@@ -1383,7 +1516,14 @@ class MathModelWorkFlow(WorkFlow):
         # Always refresh the visual report. On export failure the exporter has
         # already removed any old PDF, so this writes a fresh SKIPPED/FAIL
         # report instead of leaving a previous PASS report reusable.
-        pdf_visual_result = check_pdf_visual(pdf_path, self.work_dir)
+        pdf_visual_result = check_pdf_visual(
+            pdf_path,
+            self.work_dir,
+            quality_policy=_pdf_editorial_quality_policy(export_profile),
+            export_profile=profile_key,
+            template_override_audit=template_override["audit"],
+            **pdf_visual_constraints,
+        )
         if pdf_visual_result.get("success"):
             await redis_manager.publish_message(
                 self.task_id,
@@ -1410,6 +1550,7 @@ class MathModelWorkFlow(WorkFlow):
                         "export_profile": normalize_export_profile(
                             export_profile
                         ).value,
+                        "template_override": template_override["audit"],
                         "pdf": pdf_result,
                         "pdf_visual_check": pdf_visual_result,
                     },
@@ -1459,6 +1600,18 @@ class MathModelWorkFlow(WorkFlow):
                 ),
             )
 
+        ################################################ generate candidate manifest before audit
+        try:
+            write_candidate_manifest(self.work_dir, self.task_id)
+        except Exception as e:
+            logger.error(f"candidate_manifest.json 生成失败: {type(e).__name__}")
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(
+                    content=f"candidate_manifest.json 生成失败: {e}", type="error"
+                ),
+            )
+
         ################################################ generate submission audit report
         try:
             audit_report = write_submission_audit_report(self.work_dir)
@@ -1484,17 +1637,62 @@ class MathModelWorkFlow(WorkFlow):
                 ),
             )
 
-        ################################################ generate candidate manifest
-        try:
-            write_candidate_manifest(self.work_dir, self.task_id)
-        except Exception as e:
-            logger.error(f"candidate_manifest.json 生成失败: {type(e).__name__}")
-            await redis_manager.publish_message(
-                self.task_id,
-                SystemMessage(
-                    content=f"candidate_manifest.json 生成失败: {e}", type="error"
-                ),
-            )
+    async def _resume_paper_repair_candidate_export(
+        self,
+        checkpoint_manager: CheckpointManager,
+        export_profile: ExportProfile,
+    ) -> None:
+        """Export a staged Codex paper repair without waking any provider.
+
+        The ordinary ``paper_repair_pending_export``, independent
+        ``editorial_repair_pending_export``, and participant-authorized
+        ``format_compliance_pending_export`` states can only be written by the
+        bounded local paper-candidate tool after it validated the whole
+        manuscript in an isolated copy of the frozen task.  The separate
+        ``presentation_reflow_pending_export`` state is a one-time,
+        no-prose-change deterministic layout refresh.  Rehydrate the exact
+        persisted Writer responses and run the ordinary preflight/export
+        chain; do not replay Coder/Writer flows or turn the repair into an
+        unreviewed model call.
+        """
+        checkpoint = checkpoint_manager._checkpoint
+        if checkpoint is None:
+            raise RuntimeError("论文候选续传缺少检查点")
+        user_output = UserOutput(
+            work_dir=self.work_dir,
+            ques_count=self.ques_count,
+            export_profile=checkpoint.export_profile,
+        )
+        expected = set(user_output.seq)
+        actual = set(checkpoint.completed_phases)
+        if actual != expected:
+            missing = sorted(expected - actual)
+            extra = sorted(actual - expected)
+            details: list[str] = []
+            if missing:
+                details.append("缺少=" + ", ".join(missing))
+            if extra:
+                details.append("多出=" + ", ".join(extra))
+            raise RuntimeError("论文候选续传的 Writer 阶段不完整：" + "；".join(details))
+        for key in user_output.seq:
+            phase = checkpoint.completed_phases[key]
+            if phase.writer_response is None:
+                raise RuntimeError(f"论文候选续传缺少 Writer 正文: {key}")
+            user_output.set_res(key, WriterResponse.model_validate(phase.writer_response))
+
+        await redis_manager.publish_message(
+            self.task_id,
+            SystemMessage(
+                content="已载入通过隔离预检的论文候选，跳过 MiMo 写作并进入正式导出",
+                type="warning",
+            ),
+        )
+        await self._export_results(
+            user_output,
+            export_profile,
+            writer_agent=None,
+            checkpoint_manager=checkpoint_manager,
+        )
 
     async def execute(
         self, problem: Problem, recovery_context: str = ""
@@ -1667,7 +1865,11 @@ class MathModelWorkFlow(WorkFlow):
             )
             return "waiting_review"
 
-        user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
+        user_output = UserOutput(
+            work_dir=self.work_dir,
+            ques_count=self.ques_count,
+            export_profile=problem.export_profile.value,
+        )
 
         (
             notebook_serializer,
@@ -1681,6 +1883,7 @@ class MathModelWorkFlow(WorkFlow):
             problem.format_output,
             user_input_provider,
             problem.ques_all,
+            checkpoint_manager,
         )
 
         flows = Flows(self.questions, problem_contract)
@@ -1754,6 +1957,17 @@ class MathModelWorkFlow(WorkFlow):
         export_profile = ExportProfile(checkpoint.export_profile)
         modeler_response = ModelerToCoder.model_validate(checkpoint.modeler_response)
 
+        if checkpoint.workflow_state in {
+            "paper_repair_pending_export",
+            "editorial_repair_pending_export",
+            "presentation_reflow_pending_export",
+            "format_compliance_pending_export",
+        }:
+            await self._resume_paper_repair_candidate_export(
+                checkpoint_manager, export_profile
+            )
+            return None
+
         await redis_manager.publish_message(
             self.task_id,
             SystemMessage(content="正在从检查点续传任务，跳过已完成阶段..."),
@@ -1797,9 +2011,49 @@ class MathModelWorkFlow(WorkFlow):
         if modeler_response is not original_modeler_response:
             checkpoint_manager.replace_modeler_response(modeler_response.model_dump())
             checkpoint = checkpoint_manager.load() or checkpoint
-        self._write_modeler_plan(modeler_response)
+            self._write_modeler_plan(modeler_response)
+            problem = Problem(
+                task_id=self.task_id,
+                ques_all=checkpoint.ques_all,
+                comp_template=comp_template,
+                format_output=format_output,
+                export_profile=export_profile,
+                require_model_review=checkpoint.require_model_review,
+            )
+            decision_path = os.path.join(self.work_dir, "modeling_decision.json")
+            prior_gate_enabled = False
+            try:
+                with open(decision_path, encoding="utf-8") as decision_file:
+                    prior_gate_enabled = (
+                        json.load(decision_file).get("gate_enabled") is True
+                    )
+            except (OSError, json.JSONDecodeError):
+                pass
+            if (
+                settings.HUMAN_MODEL_GATE_ENABLED
+                or checkpoint.require_model_review
+                or prior_gate_enabled
+            ):
+                # A replacement plan invalidates the prior approval.  Pause
+                # before interpreter startup so no Coder execution can use a
+                # plan the reviewer never saw.
+                self._write_modeling_decision(problem, modeler_response)
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(
+                        content="续传时重建了建模方案，等待重新人工确认后才会执行代码。",
+                        type="warning",
+                    ),
+                )
+                return "waiting_review"
+        else:
+            self._write_modeler_plan(modeler_response)
 
-        user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
+        user_output = UserOutput(
+            work_dir=self.work_dir,
+            ques_count=self.ques_count,
+            export_profile=checkpoint.export_profile,
+        )
 
         (
             notebook_serializer,
@@ -1813,14 +2067,32 @@ class MathModelWorkFlow(WorkFlow):
             format_output,
             user_input_provider,
             checkpoint.ques_all,
+            checkpoint_manager,
         )
 
         flows = Flows(self.questions, problem_contract)
         config_template = get_config_template(comp_template)
+        quality_repair = checkpoint.workflow_state == "quality_repair" or bool(
+            checkpoint.workflow_state == "repairing"
+            and checkpoint_manager.quality_repair_source_is_prepared()
+        )
 
         async with self._managed_interpreter(code_interpreter):
-            # 重建 Jupyter 内核变量状态
-            await self._replay_notebook(code_interpreter, checkpoint_manager)
+            if quality_repair:
+                # 质量复核明确退回时，旧 notebook 中的成功探索也可能已经
+                # 被判定为过时/错误。先由 Coder 的显式返修准备动作隔离旧源，
+                # 再从新内核开始；不能把旧变量快照或旧单元重放为新修正前置。
+                coder_agent.prepare_quality_repair_source(checkpoint_manager)
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(
+                        content="质量复核定向返修已隔离旧 notebook，使用新内核重建源码链",
+                        type="warning",
+                    ),
+                )
+            else:
+                # 重建 Jupyter 内核变量状态
+                await self._replay_notebook(code_interpreter, checkpoint_manager)
 
             ################################################ solution steps
             solution_result = await self._run_solution_flows(
@@ -1833,6 +2105,7 @@ class MathModelWorkFlow(WorkFlow):
                 checkpoint_manager,
                 config_template,
                 recovery_context,
+                quality_repair=quality_repair,
             )
             if solution_result == "waiting_quality_review":
                 return solution_result

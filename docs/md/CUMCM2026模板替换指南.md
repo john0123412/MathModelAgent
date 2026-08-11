@@ -32,6 +32,53 @@
 - 当前 `paper_postprocessor.append_code_appendix()` 默认在附录 B 写入任务目录发现的完整可运行脚本及 notebook 代码单元（不含 notebook 输出），逐份记录原始 SHA-256；`final_acceptance_report.json -> complete_source_appendix` 会核对源码覆盖、哈希和正文代码内容。若启用 `paper_appendix_config.json -> mode=key`，只展示关键算法，技术验收会刻意保持非 `TECHNICAL_PASS`，正式提交必须恢复 `full`。
 - 自动完整性门禁仍不能替代人工运行源码、核对数学推导与数值、逐页审查 PDF/DOCX 和确认比赛平台最终规则；`TECHNICAL_PASS` 仍标记 `PENDING_HUMAN_REVIEW`。
 
+## 任务级导入：不改公共模板的临时覆盖
+
+当前 `cumcm2026` 和 `cumcm2025` 是仓库内可复现的 profile；如果比赛临近又取得了新的
+Word 参考模板，或队伍需要为一个已完成任务记录某份中文竞赛格式，优先使用任务级覆盖，
+不要直接替换 `backend/app/templates/export_profiles/`。导入文件会复制进该任务的
+`template_overrides/`，并由 `export_template_override.json` 绑定 DOCX 与合同 SHA-256；
+`template show` 会在导出前重新校验。该接口只接受安全 `.docx`，不接受 `.doc`、符号链接、
+不安全的压缩包路径或任意 TeX；当前只支持 `cumcm2025`、`cumcm2026`。
+
+在 `backend/` 中执行以下完整闭环（`task-refresh` 是必需步骤）：
+
+```powershell
+cd D:\workspace\MathModelAgent\backend
+uv run python -m app.tools.export_cli template install `
+  --task-id <task_id> --profile cumcm2026 `
+  --docx-template "D:\format-package\official.docx" `
+  --format-contract "D:\format-package\format.json" `
+  --label "用户指定中文竞赛格式基线 2026-08"
+uv run python -m app.tools.export_cli template show `
+  --task-id <task_id> --profile cumcm2026
+uv run python -m app.tools.export_cli task-refresh `
+  --task-id <task_id> --profile cumcm2026 --local
+```
+
+刷新不会调用 Provider，也不会重新执行题目代码；它只重建 Markdown、DOCX、PDF、LaTeX
+sidecar、预检、视觉检查、submission audit、candidate manifest 和最终技术验收。若合同或
+模板哈希不匹配，先重新导入，不要手改 `export_template_override.json`。Docker 调用时，
+官方文件和合同必须先放入容器可见的任务目录（例如
+`/app/project/work_dir/<task_id>/`）。
+
+合同示例见 [`docs/md/竞赛版式合同示例.json`](竞赛版式合同示例.json)。其
+`schema_version` 必须为 `mma.export-format-contract.v1`；允许的 PDF 变量只有字体、字号、
+行距、`geometry`、A4 等安全字段，DOCX 只记录字体/字号/行距/正文起始分页，`preflight` 只
+记录摘要段数、参考文献开关和正文页数范围。系统会将导入合同标为
+`source=user_supplied_unverified`、`official_rule=false`，不能因为文件名或 `label` 写了
+“official”就宣称官方认证。
+
+当前用户指定的中文论文基线为：摘要正文和正文 prose 使用宋体小四（12pt）、单倍行距；摘要至少
+分为两段，关键词后从“问题重述”开始另起页；正文（不含摘要、参考文献和附录）按 10--20 页做
+内部完整性检查；参考文献必须存在且按正文首次引用顺序编号。它是应用的可机检基线，而不是对
+CUMCM 当年官方格式的声明；最新官方包若不同，应由队员核实后将允许的版式字段写入合同，再执行
+`template install`、`template show` 和 `task-refresh`。
+
+这里的中文竞赛格式是用户指定基线；`huashubei` 仅供华数杯参考，不能当作 CUMCM 高教社杯
+官方格式。无论使用仓库内置 profile 还是任务级覆盖，比赛前一天和提交前都必须打开最新
+官方包、官方公告及提交系统，人工核对字体、边距、摘要页、匿名字段、文件命名和大小限制。
+
 ## 官方资料入口
 
 - 官方首页：
@@ -57,6 +104,7 @@
 | API 默认值 | `backend/app/routers/modeling_router.py` | `/modeling` 默认 `cumcm2026` | 一般不需要改 |
 | 主 PDF 导出 | `backend/app/tools/pdf_exporter.py` | Pandoc + XeLaTeX，主交付 PDF | 仅当官方要求 raw TeX、目录、特殊参数时调整 |
 | DOCX reference | `backend/app/templates/export_profiles/cumcm2025_docx/format2025_reference.docx` | 当前 2026 暂时复用 2025 | 官方给 Word/DOCX 模板后新增 `cumcm2026_docx/format2026_reference.docx` 并切换 |
+| 任务级模板覆盖 | 任务目录 `export_template_override.json`、`template_overrides/` | 仅对当前任务生效，DOCX/受限合同以 SHA-256 绑定；审计标记 `user_supplied_unverified` | 官方包尚未纳入仓库时优先用 `export_cli template install` + `task-refresh`，不得把覆盖写成官方认证 |
 | LaTeX 模板资源 | 无外部 2026 类文件 | 当前 2026 sidecar 使用代码内无封面 `ctexart` 外壳，不复制 2025 `gmcmthesis` | 官方给 LaTeX 模板后新增 `cumcm2026/` 并切换 |
 | LaTeX sidecar main 模板 | `backend/app/tools/tex_project_exporter.py` | `_CUMCM2026_MAIN_TEX_TEMPLATE`；无封面、无目录、无身份字段，`listings` 使用 `\ttfamily\footnotesize` 并自动换行 | 官方 LaTeX 模板结构变化时修改；保留 `% MMA_SECTION_INPUTS` 与代码换行/字号回归 |
 | 论文后处理/预检 | `backend/app/tools/paper_postprocessor.py` | 参考文献、附录、支撑材料、路径、宽表、claim trace；默认附录 B 写入完整脚本/notebook 代码单元及 SHA-256 | 官方附录或提交规则变化时修改；同步更新 `complete_source_appendix` 验收与回归测试 |

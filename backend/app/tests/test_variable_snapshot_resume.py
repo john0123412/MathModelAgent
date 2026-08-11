@@ -204,6 +204,20 @@ class TestNotebookSerializerResume(unittest.TestCase):
             loaded = nbformat.read(notebook_path, as_version=4)
             self.assertEqual([cell.source for cell in loaded.cells], ["a = 1", "b = 2"])
 
+    def test_failed_last_cell_can_be_discarded_from_replay_source(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            serializer = NotebookSerializer(work_dir=work_dir)
+            serializer.add_code_cell_to_notebook("answer = 42")
+            serializer.add_code_cell_to_notebook("raise RuntimeError('broken')")
+            serializer.add_code_cell_error_to_notebook("RuntimeError: broken")
+
+            self.assertTrue(serializer.discard_last_code_cell())
+
+            loaded = nbformat.read(serializer.notebook_path, as_version=4)
+            self.assertEqual([cell.source for cell in loaded.cells], ["answer = 42"])
+            self.assertTrue(serializer.discard_last_code_cell())
+            self.assertFalse(serializer.discard_last_code_cell())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -147,7 +147,6 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
             error_message = self._truncate_text(error_message)
             logger.error(f"沙箱代码执行失败: error_chars={len(error_message)}")
             text_to_gpt.append(self.delete_color_control_char(error_message))
-            self.notebook_serializer.add_code_cell_error_to_notebook(error_message)
             content_to_display.append(
                 ErrorModel(
                     name=execution.error.name,
@@ -155,6 +154,7 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
                     traceback=execution.error.traceback,
                 )
             )
+
         # 处理标准输出和标准错误
 
         if execution.logs:
@@ -283,6 +283,11 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
                     text_to_gpt.append(
                         f"[{item.format} 图片已生成，内容为 base64，未展示]"
                     )
+
+        if error_occurred:
+            # Preserve failure diagnostics in task messages, while retaining only
+            # successfully executable source in the notebook replay artifact.
+            self.notebook_serializer.discard_last_code_cell()
 
         logger.info(
             "沙箱代码执行结果已整理: "

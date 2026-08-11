@@ -21,6 +21,12 @@ services:
       dockerfile: Dockerfile # Dockerfile 文件名
     container_name: mathmodelagent_backend
     restart: unless-stopped
+    # Docker Desktop's inherited resolver can fail to resolve MiMo Token Plan
+    # hosts even when the Windows host succeeds. Use two reachable public
+    # resolvers only for the backend's outbound provider lookups.
+    dns:
+      - 223.5.5.5
+      - 119.29.29.29
     ports:
       - "127.0.0.1:8000:8000" # 仅允许本机通过前端代理或调试端口访问后端
     healthcheck:

@@ -78,6 +78,21 @@ docker compose up -d --wait            # 等待服务健康；正常启动时可
 docker compose ps                      # 查看服务状态，应显示 healthy
 ```
 
+后端镜像通过官方 Debian HTTPS 源分批安装 CJK、Pandoc 和 TeX Live，避免 Docker Desktop
+在大包 HTTP 下载中断或一次性 apt 安装触发内存峰值；不要把这些层合回单条 apt 命令。默认镜像
+保留主工作流、SciPy/scikit-learn/statsmodels 与完整导出工具链；`sentence-transformers` 和
+`xgboost` 分别是 `semantic-search`、`modeling-extensions` 可选能力，不会在基础镜像中隐式拉取
+Torch/CUDA/NCCL。当前主工作流没有接入前者；需要后者的定制部署应在专用镜像中显式安装对应 extra。
+
+若 Docker Desktop 能解析 provider 域名却无法完成 TLS 握手，而 Windows 已有本机 HTTP CONNECT
+代理，基础/remote Compose 可在 `backend/.env.dev` 显式设置
+`LLM_OUTBOUND_PROXY=http://host.docker.internal:<端口>` 后重启 backend。当前可信本机
+local-execution 覆盖默认直连，以免 `backend/.env.dev` 中的旧代理在重建后阻断全部 Agent；该模式如需
+代理，应改在根目录 `.env` 显式设置
+`MMA_LLM_OUTBOUND_PROXY=http://host.docker.internal:<端口>` 后执行 `docker compose up -d --wait`。
+两种设置都只供 LLM 客户端使用；程序仍会校验最终 provider URL 为公开 HTTPS 地址并禁止重定向，
+不会自动读取 `HTTP_PROXY` / `HTTPS_PROXY`。
+
 ### 停止
 
 ```powershell
@@ -181,6 +196,8 @@ curl.exe -X POST http://127.0.0.1:5173/api/modeling/<task_id>/resume
 
 ```dotenv
 COMPOSE_FILE=docker-compose.yml;docker-compose.override.yml;docker-compose.local-execution.yml
+# 可选：仅当本机直连 provider 的 TLS 失败且本机 HTTP CONNECT 代理可用时设置。
+# MMA_LLM_OUTBOUND_PROXY=http://host.docker.internal:<端口>
 ```
 
 随后普通命令即会加载覆盖，无需每次重复 `-f`：
@@ -215,7 +232,7 @@ docker compose -f docker-compose.yml -f docker-compose.override.yml -f docker-co
 ```
 
 该覆盖文件设置 `CODE_INTERPRETER_KIND=local` 和 `ALLOW_LOCAL_CODE_EXECUTION=true`，明确选择
-本地 Jupyter，不会因 E2B 配置变化而切换后端。受控覆盖对单次代码执行设置 120 秒硬上限，
+本地 Jupyter，不会因 E2B 配置变化而切换后端。受控覆盖对单次代码执行设置 300 秒硬上限，
 并由独立 OS 级看门狗中断无 IOPub 返回的数值计算；超时任务会作为代码执行失败进入反思/失败流程，
 不会继续写入冻结结果或论文。该模式只支持受控 Linux Docker：内核只
 继承最小运行环境，并在 exec 前降权到镜像内专用的非 root `mma-runner` 用户；后端只临时保留
@@ -337,6 +354,13 @@ Origin 中作为网页执行。
 - 续传重放使用 `replay_code()`，只执行代码，不写入 notebook，不向前端重复推送代码单元格
 - 重建完成后继续执行未完成阶段
 
+后端在 `RECOVER_STALE_TASKS_ON_STARTUP=true`（默认值）时，会把遗留的运行状态标记为
+`interrupted`，以便用户续传。`python -m unittest` 进程（包括按目录 discover 的 TestClient
+测试）会自动禁用这项启动期写入，即使测试包初始化顺序不同也不会改写共享 Docker 任务；其他
+脚本或临时 FastAPI 生命周期测试仍应显式设置
+`RECOVER_STALE_TASKS_ON_STARTUP=false`。生产/正常 Docker 运行保持默认 `true`，以便真实遗留任务
+能被发现并续传。
+
 **执行证据收束**：每个正式 `quesN` 的计算完成后，Coder 必须调用受控
 `record_execution_evidence`，由后端计算文件 SHA-256 并生成 `execution_validation.json`。
 若连续成功代码调用达到上限，系统会停止提供 `execute_code`，只允许该证据工具；没有受控
@@ -358,6 +382,9 @@ metric/constraint 的精确数值和 SHA-256 来源统一绑定到该验收表�
 `POST /modeling/{task_id}/approve-modeling`，后端标记方案已确认并从 Coder 阶段续跑。
 如需先查看方案，可打开文件面板下载 `modeler_plan.md` 或 `modeling_decision.md`。若审查发现模型、硬约束或验收口径有误，可在尚未批准时用一次
 `POST /modeling/{task_id}/revise-modeling` 退回完整意见；后端只重新运行 Modeler，并再次停在 `waiting_review`，不会直接进入 Coder。
+审批时后端会校验 `modeling_decision.json`、`modeler_plan.json` 与 `checkpoint.json` 中的规范化计划
+SHA-256 是否一致。续传若因旧计划与当前约束冲突而重建方案，也会清除旧审批并重新停在
+`waiting_review`；必须审阅并批准新计划，不能沿用旧决策直接进入 Coder。
 
 ### 实时消息干预
 
@@ -437,13 +464,104 @@ LaTeX 资源；2026 正式 DOCX/LaTeX 模板发布后，按
 （建议 PDF，大小不超过 20MB），不要放承诺书和编号专用页，第一页必须为摘要页；
 支撑材料另行压缩提交，至少包含所有可运行源程序、数据资料和较大篇幅中间结果图表。
 
+### 任务级模板覆盖（导入最新竞赛包）
+
+如果赛事发布了新的 Word 参考模板，或队伍已经取得需要当前任务采用的格式包，优先使用
+任务级覆盖，不要直接改写仓库的公共 `export_profile` 或模板资源。覆盖只作用于一个任务，
+并将 DOCX 复制到任务目录 `template_overrides/`，在 `export_template_override.json` 中记录
+DOCX 与版式合同的 SHA-256。`template show` 会重新校验这些哈希；发现文件被替换或清单不一致
+时会 fail closed。导入接口只接受安全的 `.docx`（不是 `.doc`、符号链接或任意压缩包），
+目前只允许 `cumcm2025` 和 `cumcm2026`。
+
+仓库内的中文竞赛格式（包括用户导入的格式合同）是**用户指定基线**，不是应用对竞赛官方规则
+的认证；`huashubei` 仅作华数杯参考 profile，不能把它的版式、页数或字段写成高教社杯 CUMCM
+官方条款。系统会在审计中固定标记 `source=user_supplied_unverified`、`official_rule=false`，
+即使文件确实来自官方包，也必须由队员对当日最新官方包和提交系统再次核对。
+
+先准备一个从官方包或队伍资料取得的普通 `.docx` 和一个受限 JSON 合同。在 `backend/` 目录
+（已激活项目环境时可将 `uv run python` 换成 `python`）执行：
+
+```powershell
+cd D:\workspace\MathModelAgent\backend
+uv run python -m app.tools.export_cli template install `
+  --task-id <task_id> `
+  --profile cumcm2026 `
+  --docx-template "D:\format-package\official.docx" `
+  --format-contract "D:\format-package\format.json" `
+  --label "队伍取得的中文竞赛格式基线 2026-08"
+
+# 校验当前任务的模板/合同哈希，并显示 source=unverified 审计字段
+uv run python -m app.tools.export_cli template show `
+  --task-id <task_id> --profile cumcm2026
+
+# 必须执行：不调用 Provider、不重跑数值，只重建全部论文交付物和审计
+uv run python -m app.tools.export_cli task-refresh `
+  --task-id <task_id> --profile cumcm2026 --local
+```
+
+`--local` 只让刷新时优先检测 Windows 正式字体；没有该参数也不会改变模板合同。Docker
+调用时，两个输入文件必须先位于容器可见路径（例如任务目录的
+`/app/project/work_dir/<task_id>/`），然后执行同一组命令：
+
+```powershell
+docker compose exec backend uv run python -m app.tools.export_cli template install `
+  --task-id <task_id> --profile cumcm2026 `
+  --docx-template /app/project/work_dir/<task_id>/official.docx `
+  --format-contract /app/project/work_dir/<task_id>/format.json
+docker compose exec backend uv run python -m app.tools.export_cli template show `
+  --task-id <task_id> --profile cumcm2026
+docker compose exec backend uv run python -m app.tools.export_cli task-refresh `
+  --task-id <task_id> --profile cumcm2026
+```
+
+版式合同的完整安全结构示例（字段之外的 TeX、脚本、任意 Pandoc 参数都会被拒绝）如下：
+
+```json
+{
+  "schema_version": "mma.export-format-contract.v1",
+  "label": "队伍取得的中文竞赛格式基线 2026-08",
+  "docx": {
+    "body_font_east_asia": "SimSun",
+    "body_font_ascii": "Times New Roman",
+    "body_font_size_half_points": 24,
+    "body_line_spacing_twips": 240,
+    "body_line_rule": "auto",
+    "body_start_page_break": true
+  },
+  "pdf": {
+    "variables": {
+      "papersize": "a4",
+      "fontsize": "12pt",
+      "linestretch": "1.0",
+      "geometry": "left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm",
+      "CJKmainfont": "SimSun"
+    },
+    "min_content_margin_cm": 2.5
+  },
+  "preflight": {
+    "min_abstract_paragraphs": 2,
+    "require_references": true,
+    "require_reference_style": true,
+    "body_min_pages": 8,
+    "body_max_pages": 20
+  }
+}
+```
+
+合同中的 PDF 部分只允许字体、字号、行距、几何边距和 A4 等 allowlist 变量；DOCX 部分只
+记录安全的字体/字号/行距/正文起始分页等样式。合同不会执行任意 TeX，也不会把“官方”写入
+审计结论。`task-refresh` 成功后应检查 `res.md`、`res.docx`、`res.pdf`、`latex_project/`、
+`paper_preflight_report.json`、`pdf_visual_check.json`、`submission_audit_report.json`、
+`candidate_manifest.json` 和 `final_acceptance_report.json` 的当前哈希；技术报告通过仍不替代
+队员逐页核对最新官方包、数学内容、匿名/诚信声明和提交系统要求。
+
 **已知限制**：
 - `cumcm2026` 当前复用 2025 年 `gmcmthesis` 模板资源目录和 `format2025_reference.docx`
   的 Word 样式作为修订稿口径实现；2026 正式模板文件发布后，需要重新复核并替换
   LaTeX 模板与 DOCX reference-doc。
 - LaTeX sidecar 编译产物（`latex_project/`）属于候选导出，提交前仍需人工核对（`candidate_manifest.json` 中会标注 `known_risks`）。主交付链路是 `res.md`、`res.docx`、`res.pdf` 和 `res.json`。
 - PDF 视觉检查是低成本后验检查，会覆盖 A4、非空、文本可提取、20MB 文件大小、
-  摘要首页、无目录、正文 30 页以内、物理边缘越界和 CUMCM 2.5cm 内容边距风险；
+  摘要首页、无目录、正文 20 页以内（当前用户指定的内部基线）、物理边缘越界和 CUMCM 2.5cm 内容边距风险；
   还会阻断 `承诺书`、`编号专用页`、`参赛队号` 等身份/封面字段；不能替代人工排版
   验收。正式提交前仍需人工翻看摘要页、公式密集页、宽表、附录源码、参考文献和最后几页。
 - 主 PDF 导出显式关闭 pandoc raw TeX，避免源码中的 LaTeX 模板字符串泄漏成正文命令。正文应优先使用 Markdown 表格和标准 `$...$`、`\(...\)` 数学公式，不要依赖 `\begin{table}`、`\begin{align}` 等 raw LaTeX 环境。
@@ -458,6 +576,14 @@ LaTeX 资源；2026 正式 DOCX/LaTeX 模板发布后，按
 - **Codex/人工执行质量复核门禁**：冻结后会先生成 `execution_quality_review.json/md`。结果表只要明确标记“不达标/失败”或出现 NaN/Inf，任务就停在 `waiting_quality_review`，Writer 不会启动；启用 `require_model_review=true` 时，即使机器筛查为 `PASS` 也会暂停，因为机器筛查不证明假设、量纲、守恒、推导和领域结论正确。审查者先读取题面、ModelPlan、代码、结果 CSV 和复核报告，再调用 `POST /modeling/<task_id>/execution-review`。请求 `{"action":"repair","review_id":"报告中的编号","failed_subtasks":["ques2"],"comment":"具体可执行修正意见"}` 会只让指定子题回到 Coder，并使依赖旧冻结事实的 Writer 文本失效；请求 `{"action":"approve","review_id":"报告中的编号","comment":"逐题复核依据和风险接受理由"}` 才会进入 Writer。审批只绑定当前结果文件哈希，结果变化后必须重审；返修最多一次，普通 `/resume` 不能绕过该状态。直接手改 CSV、manifest、冻结结果或论文数值不属于可信接管流程。
 
 - **Writer 预检回修与导出停止条件**：冻结通过并不保证 Writer 没有误写数值。若 `paper_preflight_report.json = FAIL` 的硬错误仅能明确归属到某个 `quesN` 正文或摘要中的 `result_consistency` 等事实冲突，系统会把冲突句和冻结事实只交回该章节 Writer 一次，然后重新预检；已通过章节不会重写。无法可靠定位的来源、附录、版式等失败不会盲目调用模型。一次回修后仍为 `FAIL` 时任务会停止在预检阶段，不生成候选 PDF；请先看报告的 `checks`/`conflicts` 和 checkpoint 中的 `last_paper_preflight_failure`，修正后再续传。`CONDITIONAL_PASS` 不触发自动改写，但仍必须按提交清单人工处理。
+
+- **冻结后受控论文候选修复（仅技术复核/人工接管）**：若冻结结果、当前 Writer 各章节和哈希完整，但 `paper_preflight_report.json = FAIL` 且自动 Writer 回修已停止，不能直接手改 `res.md`。审查者可在任务目录 `internal/` 写入完整章节替换 JSON（`sections` 必须覆盖当前所有 Writer 阶段，另附 `comment`），再在 **backend 容器内**运行 `docker compose exec backend uv run python -m app.tools.paper_repair_candidate_cli <task_id> internal/<candidate>.json`，最后调用普通 `POST /modeling/<task_id>/resume` 触发正式预检与导出。该入口仅接受冻结状态、一次未用的论文修复预算和当前预检 `FAIL`；它先在隔离副本预检，且只能同步更新论文 Markdown/JSON 与对应 Writer hand-off，不调用 provider，也不能修改代码、结果 CSV/XLSX、执行证据或冻结结果。候选应用成功不等于竞赛人工验收，仍须检查重建后的 PDF/DOCX、提交规则和建模口径。
+
+- **正式 CUMCM 编辑质量门禁（内部口径，不是官方页数规定）**：`cumcm2025` 与 `cumcm2026` 的正式导出会自动启用 `cumcm_formal`。预检要求正文（不含摘要、参考文献和附录）至少 5000 个内容字符，并要求每个正式 `quesN` 至少有一幅真正的结果图和一张结果表。所有这些图表必须在任务目录的 `paper_assets_manifest.json` 中绑定 `quesN`、任务内数值 `source_paths` 及当前 SHA-256；来源变更后必须重绘并刷新清单。PDF 视觉检查还以当前用户指定的内部质量阈值检查摘要不少于 450 字符、摘要首页文字覆盖率和正文 10--20 页。报告会明确 `official_rule=false`，不得将上述阈值表述为竞赛官方要求；它们用于阻止“短稿、空白摘要页、重复示意图或无来源表格”被误标为正式范文。
+
+- **已完成论文的受控编辑质量返修**：若任务已在 `paper_preflight_passed` 或 `completed`，但重新执行上述内部编辑质量预检后为 `FAIL`，可在 **backend 容器内**运行 `docker compose exec backend uv run python -m app.tools.paper_repair_candidate_cli <task_id> internal/<candidate>.json --editorial-quality`。它使用独立的一次 `editorial_repair_attempts` 预算，要求冻结结果与完整 Writer hand-off 均仍有效，并先在隔离副本通过同一套严格预检；成功后只更新论文 Markdown/JSON、Writer hand-off 与候选审计，再由普通 `POST /modeling/<task_id>/resume` 做纯导出。该路径不调用 provider，不能更改代码、数值结果、执行证据或冻结结果。
+
+- **已完成论文的确定性版式重排**：若人工 PDF 复核发现可由后处理/渲染器修正的纯版式问题（例如 Markdown 三级标题被排成普通正文），不得直接手改已完成任务的 `res.md`。在冻结结果、完整 Writer hand-off、当前预检 PASS 和主产物哈希均完整时，可在 **backend 容器内**运行 `docker compose exec backend uv run python -m app.tools.paper_repair_candidate_cli <task_id> --presentation-reflow`，再调用普通 `POST /modeling/<task_id>/resume`。它只有一次 `presentation_reflow_attempts` 预算，只重建 Markdown、DOCX、PDF、LaTeX 和审计，不调用 provider、不替换 Writer 正文，也不能改动代码、数值、执行证据或冻结结果。PDF 视觉检查会拒绝正文中的字面 Markdown 标题；提交审计也会检查 DOCX 正文，附录 B 源程序代码中的 `#` 字面量不计入此项。
 
 **门禁失败时不要先补导 PDF**：如果任务状态为 `failed` 且消息为“代码执行/数值可行性门禁未通过”，先打开任务目录的 `execution_validation_report.json`，逐问修复 `errors`、`constraints` 和 `source.path` 指出的证据缺口。此时 Writer 尚未运行，`res.pdf` 缺失是预期保护行为，使用 `export_cli` 强行导出也不能让任务变为可验收。相同任务在同一模型/provider 已连续两次失败时，按恢复规程停止自动重试；由指定决策人切换到已验证的备用 provider 配置后最多续传一次，或先人工确定可复核的低开销算法，再继续。
 - 对无外部数据集的确定性参数题，后处理会清理正文/支撑材料中的 Monte Carlo、蒙特卡洛、随机模拟等探索性随机模拟内容，将样本数据 EDA 用语规范为参数核验，并删除可能触发 Pandoc definition-list 误解析的孤立 `: ... DOI ...` 参考行。

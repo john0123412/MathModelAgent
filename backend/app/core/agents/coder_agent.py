@@ -2,11 +2,14 @@
 
 import asyncio
 import ast
+import datetime
 import json
 import re
 from pathlib import Path
 from typing import Callable
+from nbformat import v4 as nbf
 from app.core.agents.agent import Agent
+from app.core.checkpoint import CheckpointManager
 from app.config.setting import settings, ApiType
 from app.utils.log_util import logger
 from app.services.redis_manager import redis_manager
@@ -91,10 +94,13 @@ def _formal_evidence_checklist(work_dir: str, subtask_id: str | None) -> str:
         metrics = plan.get("acceptance_metrics", []) if isinstance(plan, dict) else []
         diagnostic_profile = plan.get("diagnostic_profile") if isinstance(plan, dict) else None
         diagnostic_requirements = plan.get("diagnostic_requirements", []) if isinstance(plan, dict) else []
+        expected_artifacts = plan.get("expected_artifacts", []) if isinstance(plan, dict) else []
     except (OSError, ValueError, TypeError):
         return ""
     if not isinstance(metrics, list):
         metrics = []
+    if not isinstance(expected_artifacts, list):
+        expected_artifacts = []
     lines = []
     for metric in metrics:
         if not isinstance(metric, dict):
@@ -107,10 +113,29 @@ def _formal_evidence_checklist(work_dir: str, subtask_id: str | None) -> str:
     sections = []
     if lines:
         sections.append(
-            "【本题不可省略的 ModelPlan 约束清单】\\n"
+            "【本题不可省略的 ModelPlan 验收指标】\\n"
             + "\\n".join(lines)
-            + "\\n每一项都必须写入本题新建/更新的数值约束表，并作为 "
-            "record_execution_evidence 的 constraints 提交；缺项会直接失败。"
+            + "\\n每一项都必须写入本题新建/更新的数值结果或验收表，并作为 "
+            "record_execution_evidence 的 metrics 提交；缺项会直接失败。"
+        )
+    artifact_lines = []
+    for artifact in expected_artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        path = artifact.get("path")
+        kind = artifact.get("kind")
+        if isinstance(path, str) and path.strip():
+            artifact_lines.append(f"- `{path.strip()}`（{kind or 'artifact'}）")
+    if artifact_lines:
+        sections.append(
+            "【本题必须落盘的 ModelPlan 产物】\\n"
+            + "\\n".join(artifact_lines)
+            + "\\n上述每个路径必须在本轮 execute_code 中新建或更新，不能用同类但不同文件名替代。"
+            "record_execution_evidence 的 metrics、constraints 和 figures 只可引用本轮新建/更新的来源；"
+            "每个 `metrics.value` 与 `constraints.actual` 都必须以同一单位和足够精度"
+            "实际写入其声明的 `source_path`（包括 `1.0` 一类复核标志），不能只在代码输出或正文中出现；"
+            "若提交 figures，图像 `path` 与数值 `data_path` 都必须由本轮生成或更新，"
+            "否则不要把旧图列入 figures。"
         )
     if diagnostic_profile and diagnostic_profile != "not_applicable":
         requirements = [
@@ -125,6 +150,15 @@ def _formal_evidence_checklist(work_dir: str, subtask_id: str | None) -> str:
             + "\\n每一项计划要求都要有至少一个 source-backed metric；指标 id、标签或说明必须直接包含相应关键词。"
             "例如质量守恒/平衡要求必须提交由时序数组算出的 residual 或 balance metric；"
             "减压阀、双喷嘴和可行性要求也必须各自有对应指标。只写 `check=1` 或仅在 CSV 中提及而不提交 metric 会被拒绝。"
+            + (
+                "\\n优化型诊断除计划的验收指标外，至少将求解器状态（如 `solver_status=1`）、"
+                "约束可行性和计划要求的松弛量/独立复算分别作为 source-backed metrics 提交；"
+                "它们不能只留在 `*_diagnostic_report.csv` 中。若本题为线性规划重求解或灵敏度分析，"
+                "还要把实际的新最优决策变量（例如 `optimal_x1`、`optimal_x2`）以及新旧目标值分别作为 metrics 提交；"
+                "仅在正文或结果表中描述变量不够。"
+                if diagnostic_profile == "optimization"
+                else ""
+            )
         )
     return "\\n\\n".join(sections)
 
@@ -274,6 +308,7 @@ class CoderAgent(Agent):
         cancel_event: asyncio.Event | None = None,
         user_input_provider: Callable[[], list[str]] | None = None,
         problem_context: str = "",
+        checkpoint_manager: CheckpointManager | None = None,
     ) -> None:
         super().__init__(
             task_id,
@@ -292,8 +327,106 @@ class CoderAgent(Agent):
         self.system_prompt = CODER_PROMPT
         self.code_interpreter = code_interpreter
         self.problem_context = problem_context.strip()
+        self._quality_repair_source_prepared = False
+        self.checkpoint_manager = checkpoint_manager
 
-    async def run(self, prompt: str, subtask_title: str) -> CoderToWriter:  # type: ignore[reportIncompatibleMethodOverride]
+    def prepare_quality_repair_source(
+        self, checkpoint_manager: CheckpointManager | None = None
+    ) -> None:
+        """隔离质量复核前的 notebook，建立新的可重放源码入口。
+
+        质量复核退回表示旧的“成功”探索也可能已经被人工判定为过时或错误。
+        这些单元不能继续作为新修正的前置状态，否则修正代码只会被追加到旧
+        草稿之后，干净内核重跑仍可能得到相互矛盾的结果。旧 notebook 仍保留在
+        任务的 failed_attempts 审计目录中；当前 notebook 只从新的成功执行单元
+        开始。该方法只由显式 ``quality_repair=True`` 的受控返修调用。
+        """
+        if self._quality_repair_source_prepared:
+            return
+        serializer = getattr(self.code_interpreter, "notebook_serializer", None)
+        if serializer is None:
+            raise RuntimeError("质量返修无法定位 notebook 序列化器")
+
+        notebook_path = getattr(serializer, "notebook_path", None)
+        source_path = Path(notebook_path) if notebook_path else None
+        manager = checkpoint_manager or self.checkpoint_manager
+        if manager is not None and manager._checkpoint is None:
+            manager.load()
+        if manager is not None and manager._checkpoint is not None:
+            prepared_now = manager.prepare_quality_repair_source(
+                str(source_path) if source_path else None
+            )
+            if not prepared_now:
+                # A candidate or an earlier Coder turn already owns this clean
+                # source chain; never reset the serializer loaded from it.
+                self._quality_repair_source_prepared = True
+                return
+            serializer.nb = nbf.new_notebook()
+            if hasattr(serializer, "segmentation_output_content"):
+                serializer.segmentation_output_content = {}
+            if hasattr(serializer, "current_segmentation"):
+                serializer.current_segmentation = ""
+            serializer.write_to_notebook()
+            self._quality_repair_source_prepared = True
+            logger.warning("质量复核返修已隔离旧 notebook，开始建立新的可重放源码链")
+            return
+
+        # Compatibility for direct unit callers that construct a CoderAgent
+        # without a task checkpoint.  The workflow and repair-candidate paths
+        # always use the durable manager branch above.
+        files_to_archive = [
+            path
+            for path in (source_path,)
+            if path is not None and path.is_file()
+        ]
+        # A stale variable snapshot is another replayable source of old state.
+        # Isolate it with the notebook so a later resume cannot silently restore
+        # variables from before the quality-review decision.
+        files_to_archive.extend(
+            path
+            for path in (
+                Path(self.work_dir) / "variable_snapshot.pkl",
+                Path(self.work_dir) / "variable_snapshot_meta.json",
+            )
+            if path.is_file()
+        )
+        if files_to_archive:
+            archive_root = Path(self.work_dir) / "failed_attempts" / "quality_repair"
+            archive_root.mkdir(parents=True, exist_ok=True)
+            archive_dir = archive_root / datetime.datetime.now().strftime(
+                "%Y%m%d-%H%M%S-%f"
+            )
+            archive_dir.mkdir(parents=True, exist_ok=False)
+            for source_path in files_to_archive:
+                try:
+                    source_path.replace(archive_dir / source_path.name)
+                except OSError as exc:
+                    # Do not silently overwrite the only historical source if
+                    # audit isolation failed.  The caller can report this as a
+                    # bounded quality-repair failure instead of producing an
+                    # ambiguous chain.
+                    raise RuntimeError(
+                        f"质量返修无法隔离旧 {source_path.name}"
+                    ) from exc
+
+        serializer.nb = nbf.new_notebook()
+        # NotebookSerializer keeps these fields for section output aggregation;
+        # stale values must not leak into the new repair turn either.
+        if hasattr(serializer, "segmentation_output_content"):
+            serializer.segmentation_output_content = {}
+        if hasattr(serializer, "current_segmentation"):
+            serializer.current_segmentation = ""
+        serializer.write_to_notebook()
+        self._quality_repair_source_prepared = True
+        logger.warning("质量复核返修已隔离旧 notebook，开始建立新的可重放源码链")
+
+    async def run(
+        self,
+        prompt: str,
+        subtask_title: str,
+        *,
+        quality_repair: bool = False,
+    ) -> CoderToWriter:  # type: ignore[reportIncompatibleMethodOverride]
         """执行代码手子任务，生成并运行代码。
 
         Args:
@@ -309,6 +442,8 @@ class CoderAgent(Agent):
         )
         if self.code_interpreter is None:
             raise RuntimeError("code_interpreter 未初始化")
+        if quality_repair:
+            self.prepare_quality_repair_source()
         self.code_interpreter.add_section(subtask_title)
 
         # 根据 api_type 选择 tools 格式
@@ -341,6 +476,20 @@ class CoderAgent(Agent):
             )
 
         formal_subtask_id = _formal_subtask_id(subtask_title)
+        if formal_subtask_id is None:
+            # EDA and other non-formal preparation turns may execute code, but
+            # they never own a quesN execution manifest.  Keeping the trusted
+            # recorder out of their tool list prevents an otherwise successful
+            # EDA pass from being converted into a rejected formal submission.
+            tools = [
+                tool
+                for tool in tools
+                if (
+                    tool.get("name") != "record_execution_evidence"
+                    and tool.get("function", {}).get("name")
+                    != "record_execution_evidence"
+                )
+            ]
         # 添加 sub_task
         logger.info(f"添加子任务提示: chars={len(prompt)}")
         await self.append_chat_history({"role": "user", "content": prompt})
@@ -494,6 +643,46 @@ class CoderAgent(Agent):
                                 "content": (
                                     "执行次数上限已到。现在只能调用 "
                                     "record_execution_evidence；不得继续执行代码。"
+                                ),
+                            }
+                        )
+                        continue
+
+                    if is_record_evidence_tool and formal_subtask_id is None:
+                        # A few compatible providers can emit a stale tool
+                        # name that was not offered for this turn.  Treat it
+                        # as an unsupported EDA action rather than sending it
+                        # through the formal evidence failure/retry loop.
+                        logger.warning(
+                            "非正式代码阶段尝试提交正式执行证据: "
+                            f"subtask_title={subtask_title!r}"
+                        )
+                        assistant_msg: dict = {
+                            "role": "assistant", "content": response.content
+                        }
+                        if response.reasoning_content:
+                            assistant_msg["reasoning_content"] = response.reasoning_content
+                        assistant_msg["tool_calls"] = [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.name,
+                                    "arguments": tc.arguments,
+                                },
+                            }
+                            for tc in response.tool_calls
+                        ]
+                        await self.append_chat_history(assistant_msg)
+                        await self.append_chat_history(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_id,
+                                "name": tool_call.name,
+                                "content": (
+                                    "当前是非正式 EDA/准备阶段，不能记录 quesN 的"
+                                    " execution evidence。请继续执行 EDA，或直接给出"
+                                    "本阶段结论。"
                                 ),
                             }
                         )

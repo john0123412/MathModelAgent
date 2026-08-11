@@ -35,6 +35,12 @@ HIGH_PRESSURE_PIPE_Q1_CONTROL = HIGH_PRESSURE_PIPE_FIXED_CONDITIONS + """
 如果将压力从 100MPa 增加到 150MPa，并分别经过约 2 秒、5 秒、10 秒后稳定，开启时长应如何调整？
 """
 
+HIGH_PRESSURE_PIPE_SOURCE_LOCKS = HIGH_PRESSURE_PIPE_Q1_CONTROL + """
+问题1中喷油器工作时从喷油嘴B处向外喷油的速率如图2所示。
+问题2中一个喷油周期内针阀升程与时间的关系由附件2给出。
+问题3在问题2基础上增加第二个喷油嘴，每个喷嘴喷油规律相同，并调整喷油器和供油策略。
+"""
+
 OPTICAL_ANGLE_PAIR_PROBLEM = """
 问题 1 如果考虑外延层和衬底界面只有一次反射、透射所产生的干涉条纹，建立数学模型。
 问题 2 对附件 1 和附件 2 提供的碳化硅晶圆片光谱实测数据给出计算结果。
@@ -45,6 +51,36 @@ OPTICAL_ANGLE_PAIR_PROBLEM = """
 
 
 class TestProblemContract(unittest.TestCase):
+    def test_coder_summary_separates_numeric_target_and_unit_annotation(self):
+        plan = SubtaskPlan(
+            inputs=["题面给定状态变量"],
+            method="建立可复查的数值模型并登记全部结果。",
+            constraints=["结果必须符合题面给定边界。"],
+            expected_artifacts=[
+                {
+                    "path": "ques1_result.csv",
+                    "kind": "result_table",
+                    "description": "可复查数值结果表",
+                }
+            ],
+            acceptance_metrics=[
+                {
+                    "key": "state_equation_audit",
+                    "label": "状态方程审计",
+                    "comparator": "eq",
+                    "target": 1,
+                    "unit": "1=已记录",
+                    "description": "由结果来源表逐项复查。",
+                }
+            ],
+            visualization="绘制结果趋势图。",
+        )
+
+        summary = plan.to_coder_summary()
+
+        self.assertIn("状态方程审计(state_equation_audit) eq 1.0 [1=已记录]", summary)
+        self.assertNotIn("eq 1.01=已记录", summary)
+
     def test_extracts_optical_angle_pairs_and_same_sample_relationships(self):
         contract = build_problem_contract(OPTICAL_ANGLE_PAIR_PROBLEM)
         values = {
@@ -221,7 +257,7 @@ class TestProblemContract(unittest.TestCase):
             {
                 "ques1": "使用题面流量系数 C=0.85，分别给出 2 秒、5 秒和 10 秒过渡控制。",
                 "ques2": "以 100 MPa 为硬约束，检验稳态均值和波动。",
-                "ques3": "按两个喷油嘴错峰建模，并给出减压阀周期控制。",
+                "ques3": "比较两个喷油嘴同步与50ms错峰方案，按压力波动和回流损失选择策略，并给出减压阀周期控制。",
             },
         )
         self.assertTrue(result.valid)
@@ -262,6 +298,232 @@ class TestProblemContract(unittest.TestCase):
             "problem1_valve_duration_outputs",
             {item.key for item in contract.required_requirements},
         )
+
+    def test_extracts_high_pressure_source_locks_and_q3_timing_comparison(self):
+        contract = build_problem_contract(HIGH_PRESSURE_PIPE_SOURCE_LOCKS)
+
+        keys = {item.key for item in contract.required_requirements}
+
+        self.assertTrue(
+            {
+                "q1_injection_rate_source_figure2",
+                "q23_needle_lift_source_attachment2",
+                "q3_injector_timing_comparison",
+            }.issubset(keys)
+        )
+
+    def test_real_wording_add_one_more_injector_triggers_q3_contract(self):
+        problem = HIGH_PRESSURE_PIPE_Q1_CONTROL + """
+        问题2中一个喷油周期内针阀升程与时间的关系由附件2给出。
+        问题3在问题2基础上，再增加一个喷油嘴，每个喷嘴喷油规律相同，并调整喷油器和供油策略。
+        """
+
+        keys = {
+            item.key for item in build_problem_contract(problem).required_requirements
+        }
+
+        self.assertIn("two_injectors", keys)
+        self.assertIn("q3_injector_timing_comparison", keys)
+
+    def test_rejects_attachment2_as_q1_outflow_and_uncompared_default_sync(self):
+        contract = build_problem_contract(HIGH_PRESSURE_PIPE_SOURCE_LOCKS)
+        contract.required_requirements = [
+            item
+            for item in contract.required_requirements
+            if item.key
+            in {
+                "q1_injection_rate_source_figure2",
+                "q23_needle_lift_source_attachment2",
+                "q3_injector_timing_comparison",
+            }
+        ]
+        result = validate_modeler_plan(
+            contract,
+            {
+                "ques1": "根据附件2针阀升程计算喷油流量，并完成2秒、5秒、10秒控制。",
+                "ques2": "使用附件2针阀升程计算喷嘴有效面积。",
+                "ques3": "沿用问题2和附件2针阀升程，两个喷油嘴默认同步并设计减压阀。",
+            },
+        )
+
+        self.assertFalse(result.valid)
+        self.assertIn("附件2针阀升程曲线作为喷油速率", " ".join(result.violations))
+        self.assertIn("至少两种", " ".join(result.missing_requirements))
+
+    def test_accepts_locked_sources_and_source_backed_phase_comparison_plan(self):
+        contract = build_problem_contract(HIGH_PRESSURE_PIPE_SOURCE_LOCKS)
+        contract.required_requirements = [
+            item
+            for item in contract.required_requirements
+            if item.key
+            in {
+                "q1_injection_rate_source_figure2",
+                "q23_needle_lift_source_attachment2",
+                "q3_injector_timing_comparison",
+            }
+        ]
+        result = validate_modeler_plan(
+            contract,
+            {
+                "ques1": "问题一的Q_out喷油速率只读取题面图2，分别计算2秒、5秒、10秒控制。",
+                "ques2": "使用附件2针阀升程计算喷嘴有效面积和喷油流量。",
+                "ques3": "沿用附件2针阀升程，比较同步与50ms错相策略，按联合目标选择并验证减压阀。",
+            },
+        )
+
+        self.assertTrue(result.valid, result.model_dump_json())
+
+    def test_accepts_q3_inheriting_the_source_locked_q2_model(self):
+        contract = build_problem_contract(HIGH_PRESSURE_PIPE_SOURCE_LOCKS)
+        contract.required_requirements = [
+            item
+            for item in contract.required_requirements
+            if item.key == "q23_needle_lift_source_attachment2"
+        ]
+
+        result = validate_modeler_plan(
+            contract,
+            {
+                "ques2": "问题二使用附件2针阀升程计算喷嘴有效面积和喷油流量。",
+                "ques3": "问题三考虑问题2所有参数及模型，并增加第二个喷油嘴。",
+            },
+        )
+
+        self.assertTrue(result.valid, result.model_dump_json())
+
+    def test_rejects_negated_or_replaced_high_pressure_data_sources(self):
+        contract = build_problem_contract(HIGH_PRESSURE_PIPE_SOURCE_LOCKS)
+        contract.required_requirements = [
+            item
+            for item in contract.required_requirements
+            if item.key
+            in {
+                "q1_injection_rate_source_figure2",
+                "q23_needle_lift_source_attachment2",
+            }
+        ]
+
+        result = validate_modeler_plan(
+            contract,
+            {
+                "ques1": "图2不采用，Q_out喷油流量由拟合外推得到。",
+                "ques2": "附件2不使用，针阀升程由自建曲线给出并计算有效面积。",
+                "ques3": "附件2未使用，喷嘴流量由另一经验公式给出。",
+            },
+        )
+
+        self.assertFalse(result.valid)
+        self.assertIn("图2", " ".join(result.missing_requirements))
+        self.assertIn("附件2", " ".join(result.missing_requirements))
+
+    def test_rejects_claimed_single_q3_strategy_even_when_described_as_constrained(self):
+        contract = build_problem_contract(HIGH_PRESSURE_PIPE_SOURCE_LOCKS)
+        contract.required_requirements = [
+            item for item in contract.required_requirements
+            if item.key == "q3_injector_timing_comparison"
+        ]
+
+        result = validate_modeler_plan(
+            contract,
+            {
+                "ques3": "题面明确硬件约束，因此唯一采用同步时序策略，不比较错相方案。",
+            },
+        )
+
+        self.assertFalse(result.valid)
+        self.assertIn("至少两种", " ".join(result.missing_requirements))
+
+    def test_persisted_modeler_plan_json_is_validated_by_subtask(self):
+        contract = build_problem_contract(HIGH_PRESSURE_PIPE_SOURCE_LOCKS)
+        contract.required_requirements = [
+            item
+            for item in contract.required_requirements
+            if item.key
+            in {
+                "q1_injection_rate_source_figure2",
+                "q23_needle_lift_source_attachment2",
+                "q3_injector_timing_comparison",
+            }
+        ]
+        persisted = {
+            "model_plan": {
+                "subtasks": {
+                    "ques1": {
+                        "inputs": ["读取题面图2喷油速率"],
+                        "method": "以Q_out表示图2流出流量。",
+                    },
+                    "ques2": {
+                        "inputs": ["使用附件2针阀升程"],
+                        "method": "计算喷嘴有效面积。",
+                    },
+                    "ques3": {
+                        "inputs": ["沿用问题2所有参数及模型"],
+                        "method": "比较同步与50ms错相策略并按联合目标选择。",
+                    },
+                }
+            }
+        }
+
+        result = validate_modeler_plan(contract, persisted)
+
+        self.assertTrue(result.valid, result.model_dump_json())
+
+    def test_structured_q3_plan_requires_two_timing_records_and_two_scores(self):
+        contract = build_problem_contract(HIGH_PRESSURE_PIPE_SOURCE_LOCKS)
+        contract.required_requirements = [
+            item
+            for item in contract.required_requirements
+            if item.key
+            in {
+                "q23_needle_lift_source_attachment2",
+                "q3_injector_timing_comparison",
+                "two_injectors",
+            }
+        ]
+        plan = {
+            "model_plan": {
+                "subtasks": {
+                    "ques3": {
+                        "inputs": ["使用附件2针阀升程计算双喷嘴有效面积"],
+                        "method": "对两个喷油嘴比较同步与50 ms错相方案，并按联合目标选择策略。",
+                        "constraints": [],
+                        "expected_artifacts": [{"kind": "result_table"}],
+                        "acceptance_metrics": [
+                            {
+                                "key": "phase_offset_ms",
+                                "label": "选定同步相位",
+                                "description": "同步基线相位为 0 ms。",
+                            },
+                            {
+                                "key": "strategy_objective",
+                                "label": "选定策略目标",
+                                "description": "同步基线的同口径评分。",
+                            },
+                            {
+                                "key": "alternate_phase_objective",
+                                "label": "备选策略目标",
+                                "description": "错相备选的同口径评分。",
+                            },
+                        ],
+                    }
+                }
+            }
+        }
+
+        incomplete = validate_modeler_plan(contract, plan)
+        plan["model_plan"]["subtasks"]["ques3"]["acceptance_metrics"].insert(
+            1,
+            {
+                "key": "alternate_phase_offset_ms",
+                "label": "备选错相相位",
+                "description": "与同步基线比较的非零相位。",
+            },
+        )
+        complete = validate_modeler_plan(contract, plan)
+
+        self.assertFalse(incomplete.valid)
+        self.assertIn("至少两种", " ".join(incomplete.missing_requirements))
+        self.assertTrue(complete.valid, complete.model_dump_json())
 
 
 class SequencedModel:
@@ -353,25 +615,15 @@ class TestModelerContractGuard(unittest.IsolatedAsyncioTestCase):
             any("不是可执行的完整 ModelPlan" in msg.get("content", "") for msg in agent.chat_history)
         )
 
-    async def test_modeler_converges_after_distinct_enum_errors(self):
+    async def test_modeler_repairs_one_enum_error_with_single_retry(self):
         wrong_version = self._minimal_model_plan()
         wrong_version["schema_version"] = "mathmodel.model-plan.v2"
-        wrong_kind = self._minimal_model_plan()
-        wrong_kind["subtasks"]["ques1"]["expected_artifacts"][0]["kind"] = (
-            "report"
-        )
-        wrong_comparator = self._minimal_model_plan()
-        wrong_comparator["subtasks"]["ques1"]["acceptance_metrics"][0][
-            "comparator"
-        ] = "check"
         valid = self._minimal_model_plan()
         agent = ModelerAgent(
             task_id="enum-repair-test",
             model=SequencedModel(
                 [
                     json.dumps(wrong_version, ensure_ascii=False),
-                    json.dumps(wrong_kind, ensure_ascii=False),
-                    json.dumps(wrong_comparator, ensure_ascii=False),
                     json.dumps(valid, ensure_ascii=False),
                 ]
             ),
@@ -392,12 +644,10 @@ class TestModelerContractGuard(unittest.IsolatedAsyncioTestCase):
             if message.get("role") == "user"
             and "固定协议" in str(message.get("content", ""))
         ]
-        self.assertEqual(len(repair_messages), 3)
-        self.assertTrue(all("result_table" in message for message in repair_messages))
-        self.assertTrue(all("within" in message for message in repair_messages))
+        self.assertEqual(len(repair_messages), 1)
+        self.assertIn("result_table", repair_messages[0])
+        self.assertIn("within", repair_messages[0])
         self.assertIn("schema_version", repair_messages[0])
-        self.assertIn("expected_artifacts.0.kind", repair_messages[1])
-        self.assertIn("acceptance_metrics.0.comparator", repair_messages[2])
 
     async def test_modeler_repairs_non_numeric_acceptance_target(self):
         invalid = self._minimal_model_plan()
@@ -468,6 +718,106 @@ class TestStructuredModelPlan(unittest.TestCase):
             sensitivity_analysis="将机器时间增加10小时，比较最优目标值变化。",
         )
 
+    def _simulation_plan(self) -> ModelPlan:
+        return ModelPlan(
+            eda="核验题面参数、单位和仿真初始条件。",
+            subtasks={
+                "ques1": SubtaskPlan(
+                    inputs=["题面参数和初始状态"],
+                    method="采用状态方程进行数值仿真并记录完整时序结果。",
+                    constraints=["保留题面给定参数和单位"],
+                    expected_artifacts=[
+                        ExpectedArtifact(
+                            path="ques1_series.csv",
+                            kind="time_series",
+                            description="状态轨迹和仿真输出",
+                        )
+                    ],
+                    acceptance_metrics=[
+                        AcceptanceMetric(
+                            key="trajectory_duration",
+                            label="仿真时长",
+                            comparator="ge",
+                            target=0,
+                            unit="s",
+                            description="由仿真时序结果计算",
+                        )
+                    ],
+                    visualization="绘制状态轨迹图。",
+                    diagnostic_profile="simulation",
+                )
+            },
+            sensitivity_analysis="扰动关键输入并比较仿真结果。",
+        )
+
+    def test_simulation_diagnostic_requirement_needs_a_matching_metric(self):
+        plan = self._simulation_plan()
+        plan.subtasks["ques1"].diagnostic_requirements = [
+            "记录状态方程、单位和T1解析值。"
+        ]
+
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+            questions={"ques1": "完成问题一仿真。"},
+        )
+
+        self.assertFalse(result.valid)
+        self.assertIn("状态方程", " ".join(result.missing_requirements))
+
+    def test_simulation_state_equation_metric_satisfies_diagnostic_requirement(self):
+        plan = self._simulation_plan()
+        plan.subtasks["ques1"].diagnostic_requirements = [
+            "记录状态方程、单位和T1解析值。"
+        ]
+        plan.subtasks["ques1"].acceptance_metrics.append(
+            AcceptanceMetric(
+                key="state_equation_audit",
+                label="状态方程审计",
+                comparator="eq",
+                target=1,
+                description="记录状态方程、单位和T1解析值",
+            )
+        )
+
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+            questions={"ques1": "完成问题一仿真。"},
+        )
+
+        self.assertTrue(result.valid, result.model_dump_json())
+
+    def test_unmatched_plain_diagnostic_description_is_not_rejected(self):
+        plan = self._simulation_plan()
+        plan.subtasks["ques1"].diagnostic_requirements = [
+            "记录输出轨迹、单位和T1解析值。"
+        ]
+
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+            questions={"ques1": "完成问题一仿真。"},
+        )
+
+        self.assertTrue(result.valid, result.model_dump_json())
+
+    def test_convergence_only_diagnostic_is_not_mapped_to_step_grid(self):
+        plan = self._simulation_plan()
+        plan.subtasks["ques1"].diagnostic_requirements = ["记录数值收敛情况。"]
+
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+            questions={"ques1": "完成问题一仿真。"},
+        )
+
+        self.assertTrue(result.valid, result.model_dump_json())
+
     def test_linear_programming_profile_requires_machine_readable_evidence(self):
         contract = build_problem_contract(
             "某工厂最优生产 A、B 产品，最大利润，受机器时间和人工时间资源约束。"
@@ -485,6 +835,23 @@ class TestStructuredModelPlan(unittest.TestCase):
             {item.key for item in contract.required_requirements},
         )
         self.assertIn("预期产物", response.questions_solution["ques1"])
+
+    def test_linear_programming_subtask_rejects_numerical_diagnostic_profile(self):
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].diagnostic_profile = "numerical"
+        plan.subtasks["ques1"].diagnostic_requirements = ["记录步长加密误差。"]
+
+        result = validate_modeler_plan(
+            build_problem_contract(
+                "某工厂最优生产 A、B 产品，最大利润，受机器时间和人工时间资源约束。"
+            ),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+            questions={"ques1": "求最优生产方案和最大利润。"},
+        )
+
+        self.assertFalse(result.valid)
+        self.assertIn("必须使用 optimization", " ".join(result.violations))
 
     def test_exact_question_coverage_is_checked(self):
         plan = self._linear_plan()

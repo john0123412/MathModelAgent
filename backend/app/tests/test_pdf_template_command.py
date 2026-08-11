@@ -1,11 +1,14 @@
 """PDF template command tests."""
 
+import json
 import os
 import tempfile
 import unittest
 from unittest import mock
+import zipfile
 
 from app.schemas.enums import ExportProfile
+from app.tools.export_template_override import install_export_template_override
 from app.tools.pdf_exporter import export_markdown_to_pdf
 
 
@@ -313,6 +316,102 @@ class TestPdfTemplateCommand(unittest.TestCase):
         self.assertEqual(resolution["mainfont"]["source"], "override")
         self.assertEqual(resolution["CJKmonofont"]["actual"], "KaiTi")
         self.assertEqual(resolution["CJKmonofont"]["source"], "override")
+
+    def test_task_template_contract_rejects_transient_font_override(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            md_path = os.path.join(work_dir, "res.md")
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            source_docx = os.path.join(work_dir, "official.docx")
+            contract_path = os.path.join(work_dir, "format.json")
+            with open(md_path, "w", encoding="utf-8") as handle:
+                handle.write("# 测试标题\n\n摘要 测试正文。")
+            with open(pdf_path, "wb") as handle:
+                handle.write(b"previous")
+            with zipfile.ZipFile(source_docx, "w") as archive:
+                archive.writestr("[Content_Types].xml", "<Types/>")
+                archive.writestr(
+                    "word/document.xml",
+                    "<w:document xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'/>",
+                )
+            with open(contract_path, "w", encoding="utf-8") as handle:
+                json.dump({"pdf": {"variables": {"CJKmainfont": "SimSun"}}}, handle)
+            install_export_template_override(
+                work_dir,
+                "cumcm2026",
+                docx_template_path=source_docx,
+                format_contract_path=contract_path,
+            )
+
+            result = export_markdown_to_pdf(
+                md_path,
+                pdf_path,
+                work_dir,
+                export_profile=ExportProfile.CUMCM2026,
+                font_overrides={"CJKmainfont": "KaiTi"},
+            )
+
+            self.assertFalse(result["success"])
+            self.assertIn("不能再用临时 PDF 字体覆盖", result["reason"])
+            self.assertTrue(os.path.exists(pdf_path))
+
+    def test_task_template_contract_applies_small_four_single_spacing_to_pdf(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            md_path = os.path.join(work_dir, "res.md")
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            source_docx = os.path.join(work_dir, "official.docx")
+            contract_path = os.path.join(work_dir, "format.json")
+            with open(md_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "# 测试标题\n\n## 摘要\n\n第一段摘要。\n\n第二段摘要。\n\n"
+                    "关键词：测试\n\n# 一、问题重述\n\n正文。"
+                )
+            with zipfile.ZipFile(source_docx, "w") as archive:
+                archive.writestr("[Content_Types].xml", "<Types/>")
+                archive.writestr(
+                    "word/document.xml",
+                    "<w:document xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'/>",
+                )
+            with open(contract_path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "pdf": {
+                            "variables": {
+                                "CJKmainfont": "SimSun",
+                                "fontsize": "12pt",
+                                "linestretch": "1.0",
+                                "geometry": "left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm",
+                            }
+                        }
+                    },
+                    handle,
+                )
+            install_export_template_override(
+                work_dir,
+                "cumcm2026",
+                docx_template_path=source_docx,
+                format_contract_path=contract_path,
+            )
+
+            proc = mock.Mock(returncode=1, stderr="expected test failure")
+            with (
+                mock.patch("shutil.which", return_value="tool"),
+                mock.patch("subprocess.run", return_value=proc) as run_mock,
+                mock.patch("app.utils.font_utils.check_font_installed", return_value=True),
+            ):
+                export_markdown_to_pdf(
+                    md_path,
+                    pdf_path,
+                    work_dir,
+                    export_profile=ExportProfile.CUMCM2026,
+                )
+
+        command = run_mock.call_args.args[0]
+        self.assertIn("CJKmainfont=SimSun", command)
+        self.assertIn("fontsize=12pt", command)
+        self.assertIn("linestretch=1.0", command)
+        self.assertIn(
+            "geometry:left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm", command
+        )
 
 
 if __name__ == "__main__":

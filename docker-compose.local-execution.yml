@@ -3,11 +3,15 @@
 services:
   backend:
     environment:
+      # A stale proxy in backend/.env.dev must not break the trusted local
+      # default after a normal Compose rebuild.  Use direct HTTPS unless this
+      # workstation explicitly opts in through the root .env file.
+      LLM_OUTBOUND_PROXY: "${MMA_LLM_OUTBOUND_PROXY:-}"
       CODE_INTERPRETER_KIND: local
       ALLOW_LOCAL_CODE_EXECUTION: "true"
-      # A numerical experiment must yield promptly. The interpreter watchdog also
-      # protects the workflow if a Jupyter IOPub receive stalls.
-      LOCAL_CODE_EXECUTION_TIMEOUT_SECONDS: "120"
+      # Long ODE simulations need one bounded completion window. The interpreter
+      # watchdog still interrupts a stalled Jupyter IOPub receive.
+      LOCAL_CODE_EXECUTION_TIMEOUT_SECONDS: "300"
     cap_drop:
       - ALL
     # Backend uses these only to manage shared task files, prepare, and terminate the

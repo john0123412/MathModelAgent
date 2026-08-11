@@ -53,6 +53,51 @@ Docker 生成 res.md/res.docx（+ 自动化预览用的 res.pdf） ->
 Windows 本机工具读取 res.md -> Pandoc + XeLaTeX 用真实系统字体重新生成 res.pdf
 ```
 
+## 任务级模板覆盖与版式合同
+
+当最新竞赛包只针对一个已完成任务，或队伍希望保留仓库公共 profile 不变时，可以把安全的
+`.docx` 参考模板和受限版式合同导入任务目录。该路径不会改写公共模板资源，也不会调用
+Provider 或重跑数值；DOCX 复制到 `template_overrides/` 后，清单
+`export_template_override.json` 记录 DOCX/合同 SHA-256。`template show` 会重新校验哈希，
+篡改或路径不一致时拒绝导出。
+
+在 `backend/` 中可直接复制执行（激活项目环境后可把 `uv run python` 换成 `python`）：
+
+```powershell
+cd D:\workspace\MathModelAgent\backend
+uv run python -m app.tools.export_cli template install `
+  --task-id <task_id> --profile cumcm2026 `
+  --docx-template "D:\format-package\official.docx" `
+  --format-contract "D:\format-package\format.json" `
+  --label "用户指定中文竞赛格式基线 2026-08"
+uv run python -m app.tools.export_cli template show `
+  --task-id <task_id> --profile cumcm2026
+uv run python -m app.tools.export_cli task-refresh `
+  --task-id <task_id> --profile cumcm2026 --local
+```
+
+导入之后**必须**运行 `task-refresh`；单独运行 `pdf --update-status` 不能刷新 DOCX、LaTeX
+sidecar、提交审计和候选清单。刷新是确定性重建，成功后仍要检查
+`res.md`、`res.docx`、`res.pdf`、`latex_project/`、`paper_preflight_report.json`、
+`pdf_visual_check.json`、`submission_audit_report.json`、`candidate_manifest.json` 和
+`final_acceptance_report.json` 是否绑定当前产物。Docker 中执行时，输入文件需先放在容器
+可见的 `/app/project/work_dir/<task_id>/` 或其他挂载路径，再使用同一命令。
+
+版式合同的 canonical 示例在 [`docs/md/竞赛版式合同示例.json`](竞赛版式合同示例.json)。
+合同 schema 为 `mma.export-format-contract.v1`：DOCX 只允许字体、字号、行距和正文起始分页；
+PDF 只允许字体、字号、行距、`geometry`、A4 和最小内容边距；`preflight` 只允许摘要段数、
+参考文献开关和正文页数范围。任意 TeX、脚本、`header-includes` 或其他 Pandoc 参数均会被
+拒绝。应用固定写入 `source=user_supplied_unverified` 与 `official_rule=false`，因此即使
+文件来自竞赛官方包，也不能在报告中宣称“官方已验证”。
+
+当前用户指定的可机检中文基线为：摘要正文和正文 prose 使用宋体小四（12pt）和单倍行距，摘要
+至少两段且关键词后正文另起页，正文按 10--20 页进行内部完整性检查，参考文献必须存在并按引用
+顺序编号。这些字段可以通过合同收紧或按已核实模板调整，但不是华数杯或 CUMCM 的自动官方认证。
+
+当前中文竞赛格式是用户指定基线；`huashubei` 仅作华数杯参考 profile，不能把华数杯或队伍
+自定义版式写成高教社杯 CUMCM 官方规则。正式提交前必须人工打开赛事最新官方包和提交系统，
+逐项核对页边距、字体、匿名要求、文件命名和大小限制。
+
 标准化依据：官方 2026 论文格式规范页面
 `https://www.mcm.edu.cn/html_cn/node/4cd596519c9eb9fbd866398f6df0caa3.html`
 要求电子版论文为单独 PDF/Word 文件（建议 PDF、≤20MB），第一页为摘要页，
@@ -78,12 +123,40 @@ Windows 本机工具读取 res.md -> Pandoc + XeLaTeX 用真实系统字体重�
 官方站和知网提交系统；如果新增 Word/DOCX 或 LaTeX 模板，按
 `docs/md/CUMCM2026模板替换指南.md` 替换。
 
+`cumcm2026` 的论文预检还会核验支撑材料中的 `AI工具使用详情.pdf`：文件必须能由
+PyMuPDF 打开且至少包含一页；只有 `%PDF-` 文件头或损坏的占位文件会使预检失败。
+
+### 内部编辑质量门禁（不等同于官方竞赛规则）
+
+为防止“能导出但不像完整论文”的短稿进入正式候选，`cumcm2025`/`cumcm2026` 的导出会额外
+写入两组内部检查，报告均显式标注 `official_rule=false`：
+
+- `paper_preflight_report.json -> checks.editorial_quality`：正文（排除摘要、参考文献和附录）至少
+  5000 个内容字符；每个正式问题至少有一幅结果图和一张结果表；图表来源必须由任务内
+  `paper_assets_manifest.json` 绑定到 `quesN`、数值 `source_paths` 和当前 SHA-256。
+- `pdf_visual_check.json -> checks.editorial_quality`：摘要不少于 450 字符、摘要首页文字覆盖率不低于
+  0.12、正文页数处于 10--20 页。这些是当前用户指定的内部“可读性/信息密度”阈值，不得写成 CUMCM 的官方最小页数或字数。
+- `pdf_visual_check.json -> checks.literal_markdown_headings`：正文不得出现被原样排出的 `#`、`##`、`###`
+  Markdown 标题；`submission_audit_report.json -> docx_markdown_heading_leakage` 对 `res.docx` 正文执行
+  同类检查（附录 B 源程序代码后的字面量不计入）。后处理会在代码围栏外补足 ATX 标题与前段之间的空行，
+  防止 Pandoc 将三级标题误当正文。
+
+`final_acceptance_report.json -> editorial_quality_gate` 会要求上述两项都以 formal policy 通过；旧报告
+即使其它项目均为 PASS，也不能仅凭旧宽松预检取得新的 `TECHNICAL_PASS`。结果源变动后，必须重绘图表、
+刷新 `paper_assets_manifest.json`，再重新预检、导出和复核哈希。该门禁不替代队员对模型、图表表达、竞赛
+规则和最终版式的人工判断。
+
+若已完成任务的人工抽检发现的是上述可确定性修复的纯版式问题，可由容器内
+`paper_repair_candidate_cli <task_id> --presentation-reflow` 写入一次独立的 export-only 重排检查点，再正常
+`POST /modeling/<task_id>/resume`。该路径重建 Markdown/DOCX/PDF/LaTeX 与审计，但不调用 provider、不能改写
+Writer 正文、结果、证据或冻结值；它不是第二次内容润色预算。
+
 已归档的 E2B 真实轻量线性规划任务 `20260711-133616-38439fe3` 使用
 OpenAI Responses 兼容运行配置和 `export_profile=cumcm2026`，通过下列主交付与严格字体验收：
 
 - `paper_preflight_report.json`：`PASS`
 - `pdf_visual_check.json`：`PASS`，A4、非空、文本可提取、20MB 文件大小、摘要首页、
-  无目录、正文 30 页以内、匿名电子稿身份字段、物理边缘越界和 CUMCM 2.5cm 内容边距检查均通过
+  无目录、正文满足该样本当时的内部页数上限、匿名电子稿身份字段、物理边缘越界和 CUMCM 2.5cm 内容边距检查均通过；当前默认内部基线为 20 页以内
 - `res.md`、`res.pdf`、`res.docx`、`res.json`、`candidate_manifest.json` 均生成
 - `tex_export_status.json`：`compile_success=true`，`missing_assets=[]`
 - `latex_project/main.pdf` 已生成且非空
@@ -137,13 +210,14 @@ PDF/sidecar 自动编译会显式禁用 XeLaTeX shell escape；模型或 Markdow
   但若失败只写入 `tex_export_status.json`，不影响 `res.md`/`res.pdf`/`res.docx`
   主交付。若要把它作为正式可编译工程交付，需要单独复核 `main.pdf` 和编译日志。
 - `pdf_visual_check.json` 是低成本自动检查；它会检查 A4、非空、文本可提取、
-  20MB 文件大小、摘要首页、无目录、正文 30 页以内、物理边缘越界和 CUMCM
+  20MB 文件大小、摘要首页、无目录、正文 20 页以内（当前用户指定的内部基线）、物理边缘越界和 CUMCM
   2.5cm 内容边距风险（允许少量字形 bbox 容差），并阻断 `承诺书`、`编号专用页`、
   `参赛队号` 等匿名电子稿不应出现的身份/封面字段，但仍不替代人工翻阅 PDF。
 - raw TeX 已在主 PDF 与 LaTeX sidecar 导出中关闭，正文不要依赖 `\begin{table}`、`\begin{align}`
   等 raw LaTeX 环境；标准 Markdown 表格与 `$...$`、`\(...\)` 数学公式仍可用。
 - `paper_preflight_report.json` 只说明格式门禁和基本证据链通过，不证明数学模型和论文论证正确。
-  `semantic_layout_review.json/md` 会额外给出非阻断的、profile-aware 语义排版提示：CUMCM profile 的主章节层级、小标题层级、标题空行、空引用和疑似原始文件名图题。`cumcm2026` 会在临时 PDF 输入中自动将附录另起页，不改写 `res.md` 或 DOCX；该策略会记录在报告的 `pdf_layout_policy`。报告只提醒 Writer/人工复核，不把其它模板的合理差异硬判为失败；PDF 书签和实际分页仍须人工抽查。
+  `semantic_layout_review.json/md` 会额外给出非阻断的、profile-aware 语义排版提示：CUMCM profile 的主章节层级、小标题层级、标题空行、空引用和疑似原始文件名图题。常见的 `quesN_plot` / `quesN_chart` 图题会在后处理时规范为“问题 N 的优化结果图”，但其它低信息图题仍须由 Writer/人工改为能说明图意的自然语言。`cumcm2026` 会在临时 PDF 输入中自动将附录另起页，不改写 `res.md` 或 DOCX；该策略会记录在报告的 `pdf_layout_policy`。报告只提醒 Writer/人工复核，不把其它模板的合理差异硬判为失败；PDF 书签和实际分页仍须人工抽查。
+  为减少 Writer 的确定性格式遗漏，后处理还会在代码围栏和数学行之外，保守地将明确的中文主章节 H2/H3 修正为 H1，并删除中文正文中的空 `{}` 引用标记；修复次数写入 `paper_preflight_report.json.fixups`。其余语义报告 WARN 仍需 Writer 或人工处理。
   对冻结结果与正文不一致这类可明确定位到 `quesN`/摘要的硬失败，工作流只允许一次定向 Writer
   回修并重新预检；无法定位或回修后仍为 `FAIL` 时不会继续生成候选 PDF。该机制只修复可追溯的
   文本事实冲突，不能替代人工复算或把不完整的模型结论“润色”为通过。

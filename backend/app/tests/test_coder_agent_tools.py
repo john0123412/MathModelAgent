@@ -2,7 +2,10 @@ import unittest
 import json
 import os
 import tempfile
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
+
+import nbformat
 
 from app.config.setting import ApiType
 from app.core.agents.coder_agent import (
@@ -11,6 +14,7 @@ from app.core.agents.coder_agent import (
     _formal_evidence_checklist,
 )
 from app.core.llm.types import StandardResponse, ToolCall
+from app.tools.notebook_serializer import NotebookSerializer
 
 
 class FakeModel:
@@ -374,6 +378,44 @@ class FakeEvidenceRecordModel:
         )
 
 
+class FakeNonFormalStaleEvidenceModel:
+    """Simulate a provider returning a recorder call that was not offered."""
+
+    api_type = ApiType.ANTHROPIC
+
+    def __init__(self):
+        self.offered_tool_names = []
+
+    async def chat(self, history, **kwargs):
+        self.offered_tool_names.append(
+            {tool.get("name") for tool in kwargs.get("tools", [])}
+        )
+        if any(
+            message.get("tool_call_id") == "eda-stale-evidence"
+            for message in history
+        ):
+            return StandardResponse(content="EDA complete after the rejected stale call.")
+        if any(message.get("tool_call_id") == "eda-code" for message in history):
+            return StandardResponse(
+                content="Attempting a stale formal recorder call.",
+                tool_calls=[
+                    ToolCall(
+                        id="eda-stale-evidence",
+                        name="record_execution_evidence",
+                        arguments='{"subtask_id":"ques1","constraints":[],"metrics":[],"figures":[]}',
+                    )
+                ],
+            )
+        return StandardResponse(
+            content="Execute EDA.",
+            tool_calls=[
+                ToolCall(
+                    id="eda-code", name="execute_code", arguments='{"code":"print(1)"}'
+                )
+            ],
+        )
+
+
 class FakeInterpreter:
     def add_section(self, _title):
         pass
@@ -543,6 +585,38 @@ class FakeEmptyCloseoutThenRaisingNarrationModel(FakeEmptyCloseoutModel):
 
 
 class CoderAgentToolHandlingTest(unittest.IsolatedAsyncioTestCase):
+    def test_quality_repair_archives_stale_notebook_and_starts_empty_source(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            serializer = NotebookSerializer(work_dir=work_dir)
+            serializer.add_code_cell_to_notebook("stale_successful_exploration = 1")
+            interpreter = FakeInterpreter()
+            interpreter.notebook_serializer = serializer
+            agent = CoderAgent(
+                task_id="t1",
+                model=FakeModel(),
+                work_dir=work_dir,
+                code_interpreter=interpreter,
+            )
+
+            agent.prepare_quality_repair_source()
+            agent.prepare_quality_repair_source()
+
+            current = nbformat.read(
+                os.path.join(work_dir, "notebook.ipynb"), as_version=4
+            )
+            self.assertEqual(current.cells, [])
+            archived = list(
+                Path(work_dir).glob(
+                    "failed_attempts/quality_repair/*/notebook.ipynb"
+                )
+            )
+            self.assertEqual(len(archived), 1)
+            old = nbformat.read(archived[0], as_version=4)
+            self.assertEqual(
+                [cell.source for cell in old.cells],
+                ["stale_successful_exploration = 1"],
+            )
+
     def test_formal_evidence_checklist_repeats_every_model_plan_constraint(self):
         """正式子题提示必须逐项带入不可省略的计划约束。"""
         with tempfile.TemporaryDirectory() as work_dir:
@@ -589,6 +663,51 @@ class CoderAgentToolHandlingTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("质量守恒", checklist)
         self.assertIn("减压阀", checklist)
         self.assertIn("source-backed metric", checklist)
+
+    def test_optimization_evidence_checklist_uses_metrics_and_explicit_solver_guidance(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(
+                os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(
+                    {
+                        "model_plan": {
+                            "subtasks": {
+                                "ques2": {
+                                    "acceptance_metrics": [
+                                        {
+                                            "key": "profit_change",
+                                            "comparator": "ge",
+                                            "target": 0,
+                                        }
+                                    ],
+                                    "diagnostic_profile": "optimization",
+                                    "diagnostic_requirements": [
+                                        "记录求解器状态、可行性和约束松弛量。"
+                                    ],
+                                    "expected_artifacts": [
+                                        {
+                                            "path": "ques2_sensitivity_results.csv",
+                                            "kind": "result_table",
+                                        }
+                                    ],
+                                }
+                            }
+                        }
+                    },
+                    handle,
+                )
+
+            checklist = _formal_evidence_checklist(work_dir, "ques2")
+
+        self.assertIn("record_execution_evidence 的 metrics", checklist)
+        self.assertIn("solver_status", checklist)
+        self.assertIn("松弛量", checklist)
+        self.assertIn("ques2_sensitivity_results.csv", checklist)
+        self.assertIn("本轮 execute_code 中新建或更新", checklist)
+        self.assertIn("metrics.value", checklist)
+        self.assertIn("source_path", checklist)
+        self.assertIn("新最优决策变量", checklist)
 
     async def test_first_run_includes_complete_problem_context_before_eda(self):
         """无附件的确定性题也必须把原始参数传给 EDA Coder。"""
@@ -680,6 +799,44 @@ class CoderAgentToolHandlingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(interpreter.executed_code, ["print(123)"])
         self.assertTrue(result.execution_attempted)
         self.assertTrue(result.execution_succeeded)
+
+    async def test_nonformal_eda_never_records_formal_evidence(self):
+        model = FakeNonFormalStaleEvidenceModel()
+        interpreter = RecordingInterpreter()
+        agent = CoderAgent(
+            task_id="t1",
+            model=model,
+            work_dir=".",
+            max_chat_turns=4,
+            code_interpreter=interpreter,
+        )
+
+        with (
+            patch(
+                "app.core.agents.coder_agent.redis_manager.publish_message",
+                new=AsyncMock(),
+            ),
+            patch("app.core.agents.coder_agent.record_execution_evidence") as recorder,
+        ):
+            result = await agent.run("do eda", "eda")
+
+        self.assertEqual(interpreter.executed_code, ["print(1)"])
+        self.assertTrue(result.execution_attempted)
+        self.assertTrue(result.execution_succeeded)
+        self.assertTrue(
+            all(
+                "record_execution_evidence" not in tool_names
+                for tool_names in model.offered_tool_names
+            )
+        )
+        recorder.assert_not_called()
+        self.assertTrue(
+            any(
+                message.get("tool_call_id") == "eda-stale-evidence"
+                and "非正式 EDA" in message.get("content", "")
+                for message in agent.chat_history
+            )
+        )
 
     async def test_repeated_final_tool_outputs_auto_complete(self):
         interpreter = FinalOutputInterpreter()

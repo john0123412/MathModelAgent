@@ -83,11 +83,38 @@ class TestExportCliPdf(unittest.TestCase):
             self.assertEqual(status["pdf"], pdf_result)
             self.assertEqual(status["pdf_visual_check"], {"status": "PASS"})
             audit_mock.assert_called_once_with(work_dir)
-            manifest_mock.assert_called_once_with(work_dir, "task-1")
+            self.assertEqual(manifest_mock.call_count, 2)
+            manifest_mock.assert_called_with(work_dir, "task-1")
             final_mock.assert_called_once_with(work_dir)
             status_mock.assert_called_once_with(
                 work_dir, "task-1", "completed", "任务处理完成"
             )
+
+    def test_update_status_rejects_noncanonical_task_paths(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            args = mock.Mock(
+                input=os.path.join(work_dir, "external.md"),
+                output=os.path.join(work_dir, "res.pdf"),
+                work_dir=work_dir,
+                profile="cumcm2026",
+                local=False,
+                update_status=True,
+                font_config=None,
+                mainfont=None,
+                monofont=None,
+                sansfont=None,
+                cjk_mainfont=None,
+                cjk_sansfont=None,
+                cjk_monofont=None,
+            )
+            with (
+                mock.patch("app.tools.export_cli.shutil.which", return_value="tool"),
+                mock.patch("app.tools.export_cli.export_markdown_to_pdf") as export_mock,
+            ):
+                exit_code = export_cli.cmd_pdf(args)
+
+        self.assertEqual(exit_code, 2)
+        export_mock.assert_not_called()
 
 
 class TestExportCliLatex(unittest.TestCase):
@@ -114,3 +141,30 @@ class TestExportCliLatex(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertIn("xelatex -no-shell-escape", stdout.getvalue())
+
+
+class TestExportCliTemplate(unittest.TestCase):
+    def test_template_install_parser_exposes_task_local_contract_inputs(self):
+        args = export_cli.build_arg_parser().parse_args(
+            [
+                "template",
+                "install",
+                "--task-id",
+                "20260811-a1",
+                "--profile",
+                "cumcm2026",
+                "--docx-template",
+                "D:\\official.docx",
+                "--format-contract",
+                "D:\\format.json",
+            ]
+        )
+        self.assertIs(args.func, export_cli.cmd_template_install)
+        self.assertEqual(args.profile, "cumcm2026")
+
+    def test_task_refresh_parser_requires_task_and_profile(self):
+        args = export_cli.build_arg_parser().parse_args(
+            ["task-refresh", "--task-id", "20260811-a1", "--profile", "cumcm2026"]
+        )
+        self.assertIs(args.func, export_cli.cmd_task_refresh)
+        self.assertFalse(args.local)

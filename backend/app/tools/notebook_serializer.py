@@ -88,6 +88,20 @@ class NotebookSerializer:
         self.nb["cells"][-1]["outputs"].append(nbf_error_output)
         self.write_to_notebook()
 
+    def discard_last_code_cell(self) -> bool:
+        """Remove the currently executing failed cell from the replayable notebook.
+
+        The notebook is the reproducible source record, not a transcript of failed
+        agent attempts.  Keeping a cell that raised makes every clean-kernel replay
+        fail even after a later correction succeeds.  Runtime errors remain visible
+        in task messages and structured logs.
+        """
+        if not self.nb["cells"] or self.nb["cells"][-1].cell_type != "code":
+            return False
+        self.nb["cells"].pop()
+        self.write_to_notebook()
+        return True
+
     def add_image_to_notebook(self, image, mime_type):
         image_output = nbf.new_output(
             output_type="display_data", data={mime_type: image}

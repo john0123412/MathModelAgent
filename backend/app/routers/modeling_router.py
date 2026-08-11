@@ -1,7 +1,7 @@
 """建模任务路由模块，提供任务创建、API 验证和配置管理等接口。"""
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, UploadFile
-from app.core.checkpoint import CheckpointManager
+from app.core.checkpoint import CheckpointManager, TaskCheckpoint
 from app.core.workflow import MathModelWorkFlow
 from app.schemas.enums import CompTemplate, ExportProfile, FormatOutPut
 from app.utils.log_util import logger
@@ -66,11 +66,12 @@ def _finalize_docx_and_manifest(
     """
     md_2_docx(task_id, export_profile=export_profile)
     work_dir = get_work_dir(task_id)
-    write_submission_audit_report(work_dir)
     # Final acceptance validates the manifest hashes, so write a current
-    # manifest before the report, then refresh it once more to include the
-    # report filenames without changing the artifact set.
+    # manifest before the submission audit.  The audit then cross-binds that
+    # manifest with the template identity used by DOCX/PDF/preflight/visual
+    # reports; refresh once more to include report filenames.
     write_candidate_manifest(work_dir, task_id)
+    write_submission_audit_report(work_dir)
     report = write_final_acceptance_report(work_dir)
     write_candidate_manifest(work_dir, task_id)
     return report
@@ -828,6 +829,106 @@ def _mark_modeling_decision_approved(work_dir: str, comment: str = "") -> None:
     os.replace(tmp_path, decision_path)
 
 
+def _canonical_json_sha256(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _modeling_approval_binding_issues(
+    work_dir: str, checkpoint: TaskCheckpoint
+) -> list[str]:
+    """Ensure the human approves exactly the plan that resume will execute."""
+    paths = {
+        "decision": os.path.join(work_dir, "modeling_decision.json"),
+        "plan": os.path.join(work_dir, "modeler_plan.json"),
+    }
+    payloads: dict[str, dict] = {}
+    for label, path in paths.items():
+        try:
+            with open(path, encoding="utf-8") as handle:
+                value = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            return [f"无法读取当前{label}文件"]
+        if not isinstance(value, dict):
+            return [f"当前{label}文件格式无效"]
+        payloads[label] = value
+
+    approved_payload = payloads["decision"].get("modeler_response")
+    checkpoint_payload = checkpoint.modeler_response
+    if not isinstance(approved_payload, dict):
+        return ["建模确认文件缺少待审批方案"]
+    if not isinstance(checkpoint_payload, dict):
+        return ["检查点缺少待执行建模方案"]
+
+    approved_hash = _canonical_json_sha256(approved_payload)
+    declared_hash = payloads["decision"].get("modeler_plan_sha256")
+    issues: list[str] = []
+    if not isinstance(declared_hash, str):
+        issues.append("建模确认文件缺少方案哈希")
+    elif declared_hash != approved_hash:
+        issues.append("建模确认文件的方案哈希不一致")
+    if _canonical_json_sha256(payloads["plan"]) != approved_hash:
+        issues.append("当前 modeler_plan.json 已与待审批方案不一致")
+    if _canonical_json_sha256(checkpoint_payload) != approved_hash:
+        issues.append("检查点待执行方案已与待审批方案不一致")
+    return issues
+
+
+def _has_payload_content(value: object) -> bool:
+    """Return whether a persisted payload contains meaningful content."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, dict):
+        return any(_has_payload_content(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_has_payload_content(item) for item in value)
+    return True
+
+
+def _cancelled_codex_modeling_issues(checkpoint: TaskCheckpoint) -> list[str]:
+    """Reject cancelled tasks that are not pristine at the pre-execution boundary."""
+    issues: list[str] = []
+    if _has_payload_content(checkpoint.modeler_response):
+        issues.append("已有 modeler_response 内容")
+    if checkpoint.completed_phases:
+        issues.append("已有 completed_phases")
+    if checkpoint.solution_coder_responses:
+        issues.append("已有 solution_coder_responses")
+    if checkpoint.executed_cell_indices:
+        issues.append("已有 executed_cell_indices")
+    if checkpoint.has_variable_snapshot:
+        issues.append("已有变量快照")
+    if checkpoint.workflow_state not in {"", "solving"}:
+        issues.append(f"已有执行状态 {checkpoint.workflow_state!r}")
+    if checkpoint.targeted_repair_attempts or checkpoint.last_validation_failure:
+        issues.append("已有执行验证失败/返修状态")
+    if checkpoint.manual_recovery_attempts or checkpoint.last_manual_recovery:
+        issues.append("已有人工执行恢复状态")
+    if checkpoint.paper_repair_attempts or checkpoint.last_paper_preflight_failure:
+        issues.append("已有论文预检返修状态")
+    if checkpoint.quality_review_status not in {"", "not_run"}:
+        issues.append(f"已有质量复核状态 {checkpoint.quality_review_status!r}")
+    if (
+        checkpoint.quality_review_id
+        or checkpoint.quality_review_history
+        or checkpoint.quality_review_repairs
+    ):
+        issues.append("已有质量复核记录")
+    if checkpoint.modeling_review_revisions:
+        issues.append("已有建模方案修订状态")
+    return issues
+
+
 def _mark_modeling_decision_revision_requested(work_dir: str, comment: str) -> None:
     """Persist an auditable rejection before a ModelPlan is rebuilt."""
     decision_path = os.path.join(work_dir, "modeling_decision.json")
@@ -904,6 +1005,15 @@ async def approve_modeling(
     checkpoint = CheckpointManager(work_dir).load()
     if checkpoint is None:
         raise HTTPException(status_code=404, detail="未找到可继续执行的检查点")
+    prior_state = (read_task_status(work_dir) or {}).get("status")
+    if prior_state != "waiting_review":
+        raise HTTPException(status_code=409, detail="仅 waiting_review 状态可确认建模方案")
+    binding_issues = _modeling_approval_binding_issues(work_dir, checkpoint)
+    if binding_issues:
+        raise HTTPException(
+            status_code=409,
+            detail="当前建模方案已变化，请重新生成并复核：" + "；".join(binding_issues),
+        )
 
     _mark_modeling_decision_approved(
         work_dir,
@@ -974,9 +1084,9 @@ async def revise_modeling(
 async def submit_codex_modeling(task_id: str, request: CodexModelingRequest):
     """Place a Codex-authored, contract-validated plan behind normal approval.
 
-    The endpoint is intentionally limited to a Modeler-failed task or a paused
-    reviewer task that requested the modeling review gate.  It is not a route around ModelPlan validation or
-    the downstream execution/freeze gates.
+    The endpoint is intentionally limited to a Modeler-failed task, a paused
+    reviewer task, or a pristine cancelled task at the pre-execution boundary.
+    It is not a route around ModelPlan validation or downstream execution gates.
     """
     safe_task_id = _require_safe_task_id(task_id)
     try:
@@ -986,17 +1096,42 @@ async def submit_codex_modeling(task_id: str, request: CodexModelingRequest):
     if safe_task_id in _active_tasks:
         raise HTTPException(status_code=409, detail="任务仍在运行中")
     prior_state = (read_task_status(work_dir) or {}).get("status")
-    if prior_state not in {"failed", "waiting_review"}:
-        raise HTTPException(status_code=409, detail="仅 Modeler 失败或等待建模审查的任务可由 Codex 接管")
+    if prior_state not in {"failed", "waiting_review", "cancelled"}:
+        raise HTTPException(
+            status_code=409,
+            detail="仅 Modeler 失败、等待建模审查或满足安全前置条件的取消任务可由 Codex 接管",
+        )
     checkpoint = CheckpointManager(work_dir).load()
-    if checkpoint is None or not checkpoint.require_model_review:
-        raise HTTPException(status_code=409, detail="该任务未启用可审计的建模人工门禁")
+    if checkpoint is None:
+        detail = (
+            "取消任务缺少检查点，不能安全接管"
+            if prior_state == "cancelled"
+            else "该任务未启用可审计的建模人工门禁"
+        )
+        raise HTTPException(status_code=409, detail=detail)
+    if not checkpoint.require_model_review:
+        detail = (
+            "取消任务未启用可审计的建模人工门禁，不能安全接管"
+            if prior_state == "cancelled"
+            else "该任务未启用可审计的建模人工门禁"
+        )
+        raise HTTPException(status_code=409, detail=detail)
+    if prior_state == "cancelled":
+        cancelled_issues = _cancelled_codex_modeling_issues(checkpoint)
+        if cancelled_issues:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "取消任务已越过 Codex 安全接管边界，不能接管："
+                    + "；".join(cancelled_issues)
+                ),
+            )
     workflow = MathModelWorkFlow()
     try:
         workflow.accept_codex_modeling(safe_task_id, request.modeler_response)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    note = request.comment.strip()[:1000] or "当前 Codex 在 Modeler 失败后提交结构化建模方案。"
+    note = request.comment.strip()[:1000] or "当前 Codex 在 Modeler 失败或安全取消点提交结构化建模方案。"
     _append_guidance_audit(
         work_dir, task_id=safe_task_id, target="modeler", purpose="review", source="codex", content=note
     )
@@ -1101,16 +1236,34 @@ async def resume_task(
 
     prior_status = read_task_status(work_dir)
     prior_state = (prior_status or {}).get("status")
-    if prior_state == "completed":
+    checkpoint_manager = CheckpointManager(work_dir)
+    checkpoint = checkpoint_manager.load()
+    export_only_paper_repair = bool(
+        checkpoint is not None
+        and checkpoint.workflow_state
+        in {
+            "paper_repair_pending_export",
+            "editorial_repair_pending_export",
+            "presentation_reflow_pending_export",
+            "format_compliance_pending_export",
+        }
+    )
+    # A bounded paper candidate is allowed to be applied after a technically
+    # completed task.  Its immutable checkpoint state is the authority here:
+    # let the normal resume path perform export only, rather than bypassing the
+    # router or waking any provider because ``task_status`` still says completed.
+    if prior_state == "completed" and not export_only_paper_repair:
         raise HTTPException(status_code=409, detail="任务已完成，无需续传")
     if prior_state == "waiting_review":
         raise HTTPException(status_code=409, detail="任务等待建模方案确认，请使用 approve-modeling")
     if prior_state == "waiting_quality_review":
         raise HTTPException(status_code=409, detail="任务等待执行质量复核，请使用 execution-review")
 
-    checkpoint_manager = CheckpointManager(work_dir)
-    checkpoint = checkpoint_manager.load()
-    if checkpoint is not None and checkpoint_manager.repair_attempts_exhausted():
+    if (
+        checkpoint is not None
+        and not export_only_paper_repair
+        and checkpoint_manager.repair_attempts_exhausted()
+    ):
         if request is None or request.recovery_mode is None:
             raise HTTPException(
                 status_code=409,
@@ -1224,6 +1377,13 @@ async def run_resume_task_async(task_id: str, recovery_context: str = ""):
     workflow_completed = False
     try:
         workflow_result = await asyncio.wait_for(task, timeout=3600 * 5)
+        if workflow_result == "waiting_review":
+            write_task_status(task_id, "waiting_review", "任务等待人工确认建模方案")
+            await redis_manager.publish_message(
+                task_id,
+                SystemMessage(content="任务等待人工确认建模方案", type="warning"),
+            )
+            return
         if workflow_result == "waiting_quality_review":
             write_task_status(
                 task_id,

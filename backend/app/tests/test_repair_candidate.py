@@ -10,9 +10,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import nbformat
 from app.core.checkpoint import CheckpointManager, TaskCheckpoint
 from app.tools.repair_candidate import RepairCandidateError, run_repair_candidate
 from app.tools import repair_candidate_cli
+from app.tools.notebook_serializer import NotebookSerializer
 
 
 class _FakeInterpreter:
@@ -58,6 +60,26 @@ def _prepare(root: Path) -> None:
 def _write_candidate(root: Path, code: str, evidence: dict) -> None:
     (root / "candidate.py").write_text(code, encoding="utf-8")
     (root / "evidence.json").write_text(json.dumps(evidence), encoding="utf-8")
+
+
+def _write_expected_artifacts(root: Path, subtask_id: str, *paths: str) -> None:
+    (root / "modeler_plan.json").write_text(
+        json.dumps(
+            {
+                "model_plan": {
+                    "subtasks": {
+                        subtask_id: {
+                            "expected_artifacts": [
+                                {"path": path} for path in paths
+                            ]
+                        }
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
 
 def _evidence() -> dict:
@@ -181,6 +203,169 @@ class TestRepairCandidate(unittest.TestCase):
             self.assertTrue(checkpoint.solution_coder_responses["ques1"]["execution_succeeded"])
             self.assertTrue((root / "repair_candidate_manifest.json").is_file())
             self.assertFalse((root / "frozen_results.json").exists())
+
+    def test_first_candidate_prepares_clean_source_and_archives_old_snapshot(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _prepare(root)
+            serializer = NotebookSerializer(work_dir=str(root))
+            serializer.add_code_cell_to_notebook("stale = 1")
+            (root / "variable_snapshot.pkl").write_bytes(b"stale snapshot")
+            (root / "variable_snapshot_meta.json").write_text("{}", encoding="utf-8")
+            _write_candidate(
+                root,
+                "from pathlib import Path\n"
+                "Path('ques1_results.csv').write_text('value\\n42\\n', encoding='utf-8')",
+                _evidence(),
+            )
+
+            async def factory(**kwargs):
+                return _FakeInterpreter(root)
+
+            with patch("app.tools.repair_candidate.get_work_dir", return_value=str(root)):
+                result = asyncio.run(
+                    run_repair_candidate(
+                        "unit-task", "ques1", "review-a", "candidate.py", "evidence.json",
+                        interpreter_factory=factory,
+                    )
+                )
+
+            self.assertEqual(result["status"], "evidence_passed")
+            checkpoint = CheckpointManager(str(root)).load()
+            self.assertTrue(checkpoint.quality_repair_source_prepared)
+            self.assertFalse((root / "variable_snapshot.pkl").exists())
+            self.assertFalse((root / "variable_snapshot_meta.json").exists())
+            archived = list((root / "failed_attempts" / "quality_repair").glob("*/notebook.ipynb"))
+            self.assertEqual(len(archived), 1)
+            self.assertEqual(
+                [cell.source for cell in nbformat.read(archived[0], as_version=4).cells],
+                ["stale = 1"],
+            )
+            self.assertTrue(
+                any(cell.cell_type == "code" for cell in nbformat.read(root / "notebook.ipynb", as_version=4).cells)
+            )
+
+    def test_followup_candidate_appends_to_same_clean_source_chain(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _prepare(root)
+
+            async def factory(**kwargs):
+                return _FakeInterpreter(root)
+
+            def run_candidate(value: int):
+                evidence = _evidence()
+                evidence["metrics"][0]["value"] = value
+                evidence["constraints"][0]["actual"] = value
+                _write_candidate(
+                    root,
+                    "from pathlib import Path\n"
+                    f"Path('ques1_results.csv').write_text('value\\n{value}\\n', encoding='utf-8')",
+                    evidence,
+                )
+                with patch("app.tools.repair_candidate.get_work_dir", return_value=str(root)):
+                    return asyncio.run(
+                        run_repair_candidate(
+                            "unit-task", "ques1", "review-a", "candidate.py", "evidence.json",
+                            interpreter_factory=factory,
+                        )
+                    )
+
+            self.assertEqual(run_candidate(42)["status"], "evidence_passed")
+            archives_after_first = list(
+                (root / "failed_attempts" / "quality_repair").glob("*")
+            )
+            self.assertEqual(run_candidate(43)["status"], "evidence_passed")
+            archives = list((root / "failed_attempts" / "quality_repair").glob("*"))
+            self.assertEqual(archives, archives_after_first)
+            notebook = nbformat.read(root / "notebook.ipynb", as_version=4)
+            self.assertEqual(sum(cell.cell_type == "code" for cell in notebook.cells), 2)
+
+    def test_declared_template_artifact_can_be_updated(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _prepare(root)
+            _write_expected_artifacts(root, "ques1", "result1.xlsx")
+            _write_candidate(
+                root,
+                "from pathlib import Path\n"
+                "Path('result1.xlsx').write_bytes(b'updated template')\n"
+                "Path('ques1_results.csv').write_text('value\\n42\\n', encoding='utf-8')",
+                _evidence(),
+            )
+
+            async def factory(**kwargs):
+                return _FakeInterpreter(root)
+
+            with patch("app.tools.repair_candidate.get_work_dir", return_value=str(root)):
+                result = asyncio.run(
+                    run_repair_candidate(
+                        "unit-task", "ques1", "review-a", "candidate.py", "evidence.json",
+                        interpreter_factory=factory,
+                    )
+                )
+
+            self.assertEqual(result["status"], "evidence_passed")
+            self.assertEqual((root / "result1.xlsx").read_bytes(), b"updated template")
+            self.assertIn("result1.xlsx", result["changed_outputs"])
+
+    def test_undeclared_other_question_artifact_is_rejected_and_rolled_back(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _prepare(root)
+            _write_expected_artifacts(root, "ques1", "result1.xlsx")
+            _write_candidate(
+                root,
+                "from pathlib import Path\n"
+                "Path('result2.xlsx').write_bytes(b'wrong question template')\n"
+                "Path('ques1_results.csv').write_text('value\\n42\\n', encoding='utf-8')",
+                _evidence(),
+            )
+
+            async def factory(**kwargs):
+                return _FakeInterpreter(root)
+
+            with patch("app.tools.repair_candidate.get_work_dir", return_value=str(root)):
+                with self.assertRaisesRegex(RepairCandidateError, "只能更新"):
+                    asyncio.run(
+                        run_repair_candidate(
+                            "unit-task", "ques1", "review-a", "candidate.py", "evidence.json",
+                            interpreter_factory=factory,
+                        )
+                    )
+
+            self.assertFalse((root / "result2.xlsx").exists())
+            self.assertFalse((root / "ques1_results.csv").exists())
+
+    def test_undeclared_attachment_is_rejected_even_with_expected_artifacts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _prepare(root)
+            _write_expected_artifacts(root, "ques1", "result1.xlsx")
+            attachment = root / "附件1.csv"
+            attachment.write_text("original\n", encoding="utf-8")
+            _write_candidate(
+                root,
+                "from pathlib import Path\n"
+                "Path('附件1.csv').write_text('tampered\\n', encoding='utf-8')\n"
+                "Path('ques1_results.csv').write_text('value\\n42\\n', encoding='utf-8')",
+                _evidence(),
+            )
+
+            async def factory(**kwargs):
+                return _FakeInterpreter(root)
+
+            with patch("app.tools.repair_candidate.get_work_dir", return_value=str(root)):
+                with self.assertRaisesRegex(RepairCandidateError, "只能更新"):
+                    asyncio.run(
+                        run_repair_candidate(
+                            "unit-task", "ques1", "review-a", "candidate.py", "evidence.json",
+                            interpreter_factory=factory,
+                        )
+                    )
+
+            self.assertEqual(attachment.read_text(encoding="utf-8"), "original\n")
+            self.assertFalse((root / "ques1_results.csv").exists())
 
     def test_wrong_review_or_state_is_rejected_before_execution(self):
         with tempfile.TemporaryDirectory() as temporary:

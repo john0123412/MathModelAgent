@@ -18,6 +18,7 @@ import secrets
 import shutil
 import tempfile
 from pathlib import Path
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Callable
 
 from app.core.checkpoint import CheckpointManager
@@ -157,6 +158,79 @@ def _read_json(path: Path, *, limit: int) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RepairCandidateError(f"JSON 顶层必须是对象: {path.name}")
     return payload
+
+
+def _expected_artifact_paths(root: Path, subtask_id: str) -> set[str]:
+    """Return safe, exact artifact paths declared for one formal subtask.
+
+    The ModelPlan is immutable from the candidate's perspective.  A declaration
+    can therefore widen the output allowlist only for that exact relative path;
+    malformed, absolute, traversal, symlinked, or protected paths are ignored
+    and never become an implicit write permission.
+    """
+    try:
+        plan = _read_json(root / "modeler_plan.json", limit=_MAX_EVIDENCE_BYTES)
+    except RepairCandidateError:
+        return set()
+
+    model_plan = plan.get("model_plan", plan)
+    if not isinstance(model_plan, dict):
+        return set()
+    subtasks = model_plan.get("subtasks")
+    if not isinstance(subtasks, dict):
+        return set()
+    subtask = subtasks.get(subtask_id)
+    if not isinstance(subtask, dict):
+        return set()
+    artifacts = subtask.get("expected_artifacts")
+    if not isinstance(artifacts, list):
+        return set()
+
+    root = root.resolve()
+    allowed: set[str] = set()
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        raw_path = artifact.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            continue
+        raw_path = raw_path.strip()
+        normalised = raw_path.replace("\\", "/")
+        try:
+            posix_path = PurePosixPath(normalised)
+            windows_path = PureWindowsPath(raw_path)
+        except (TypeError, ValueError):
+            continue
+        # Reject both POSIX and Windows absolute/drive-relative spellings even
+        # when this process runs on the other platform.
+        if (
+            posix_path.is_absolute()
+            or windows_path.is_absolute()
+            or bool(windows_path.drive)
+            or not posix_path.parts
+            or any(part in {"", ".."} for part in posix_path.parts)
+        ):
+            continue
+
+        candidate_path = (root / Path(*posix_path.parts)).resolve()
+        try:
+            relative_path = candidate_path.relative_to(root)
+        except ValueError:
+            continue
+
+        # Existing symlink components are never an allowed destination.  A
+        # newly-created symlink is caught by the post-execution symlink gate.
+        current = root
+        unsafe = False
+        for component in relative_path.parts:
+            current /= component
+            if current.is_symlink():
+                unsafe = True
+                break
+        if unsafe or relative_path.name in _PROTECTED_FILES:
+            continue
+        allowed.add(str(relative_path).replace("\\", "/"))
+    return allowed
 
 
 def _has_path_escape(code: str) -> bool:
@@ -342,6 +416,9 @@ async def run_repair_candidate(
     evidence = _read_json(evidence_file, limit=_MAX_EVIDENCE_BYTES)
     _validate_evidence(evidence, subtask_id)
 
+    # Keep a pre-preparation snapshot for rollback.  Once the durable clean
+    # source boundary is established below, ``before`` is reset so the archive
+    # itself is not mistaken for a candidate output.
     before = _snapshot(root)
     backup = _TaskBackup(root)
     checkpoint_path = root / "checkpoint.json"
@@ -390,7 +467,16 @@ async def run_repair_candidate(
         raise RepairCandidateError(failure["error"])
 
     try:
+        prepared_now = manager.prepare_quality_repair_source(
+            str(root / "notebook.ipynb")
+        )
         serializer = NotebookSerializer(work_dir=str(root))
+        if prepared_now:
+            # Establish an explicit empty source file before execution.  The
+            # controlled interpreter appends the actual candidate cell(s) to
+            # this serializer; a later resume therefore sees the same chain.
+            serializer.write_to_notebook()
+        before = _snapshot(root)
         interpreter = await interpreter_factory(
             task_id=task_id,
             work_dir=str(root),
@@ -423,6 +509,15 @@ async def run_repair_candidate(
         )
         if failed:
             execution_failure = execution_error or "候选脚本执行失败"
+        elif not any(
+            cell.get("cell_type") == "code" and cell.get("source") == code
+            for cell in serializer.nb.get("cells", [])
+        ):
+            # The production interpreters append the executed cell themselves.
+            # Keep the contract explicit for compatible/custom factories too:
+            # a successful candidate always leaves its runnable source in the
+            # clean chain before evidence is accepted.
+            serializer.add_code_cell_to_notebook(code)
     except asyncio.TimeoutError:
         execution_error = "候选脚本超过受控超时，未生成冻结结果"
         execution_failure = execution_error
@@ -449,6 +544,7 @@ async def run_repair_candidate(
     if protected_changed:
         fail("候选改写了受保护文件: " + ", ".join(protected_changed))
 
+    expected_artifacts = _expected_artifact_paths(root, subtask_id)
     invalid_outputs = sorted(
         name
         for name in changed
@@ -456,12 +552,16 @@ async def run_repair_candidate(
         and name not in {"repair_candidate_manifest.json", "repair_candidate_audit.jsonl"}
         and name not in {_relative(root, script), _relative(root, evidence_file)}
         and not name.startswith(f"{subtask_id}_")
+        and name not in expected_artifacts
     )
     immutable_inputs = {_relative(root, script), _relative(root, evidence_file)}
     if immutable_inputs & changed:
         fail("候选不得改写脚本或 evidence JSON")
     if invalid_outputs:
-        fail("候选只能更新当前子题 quesN_* 文件: " + ", ".join(invalid_outputs))
+        fail(
+            "候选只能更新当前子题 quesN_* 文件或 ModelPlan 声明的预期产物: "
+            + ", ".join(invalid_outputs)
+        )
 
     source_paths = _evidence_paths(evidence)
     if not source_paths or any(

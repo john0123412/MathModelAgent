@@ -103,7 +103,16 @@ class Settings(BaseSettings):
     LLM_MAX_RETRIES: int = 3
     CODER_MAX_SUCCESSFUL_TOOL_CALLS_PER_SUBTASK: Optional[int] = 8
     LLM_REQUEST_TIMEOUT_SECONDS: float = 90.0
+    # Operator-controlled explicit egress proxy for LLM API calls.  Unlike
+    # HTTP_PROXY/HTTPS_PROXY, this does not let arbitrary process environment
+    # variables alter outbound routing; the destination URL still passes the
+    # normal public-host/SSRF validation before every call.
+    LLM_OUTBOUND_PROXY: Optional[str] = None
     HUMAN_MODEL_GATE_ENABLED: bool = False
+    # A real backend process should recover active tasks left by a prior
+    # process.  TestClient/lint subprocesses share the host work_dir during
+    # development, so their test package explicitly disables this side effect.
+    RECOVER_STALE_TASKS_ON_STARTUP: bool = True
     E2B_API_KEY: Optional[str] = None
     # 代码手会执行模型生成的代码。默认只允许远程隔离环境，避免在后端进程中
     # 直接执行不可信代码并读取服务端环境变量或项目文件。auto 仅在显式允许

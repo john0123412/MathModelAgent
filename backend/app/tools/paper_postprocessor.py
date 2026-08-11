@@ -9,6 +9,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from app.utils.log_util import logger
 from app.tools.result_integrity import (
@@ -21,10 +22,16 @@ from app.tools.candidate_exporter import (
     support_material_category,
 )
 from app.tools.semantic_layout_review import (
+    normalize_markdown_semantics,
     review_markdown,
     write_semantic_layout_review,
 )
 from app.tools.export_profiles import get_export_profile_config
+from app.schemas.problem_contract import (
+    affirmatively_binds_source,
+    build_problem_contract,
+    validate_modeler_plan,
+)
 
 
 REFERENCE_HEADING_RE = re.compile(
@@ -43,13 +50,21 @@ FORBIDDEN_SUBMISSION_RE = re.compile(
     r"(?<![A-Za-z0-9_])姓名\s*[:：]|(?<![A-Za-z0-9_])学号\s*[:：]"
 )
 APPENDIX_HEADING_RE = re.compile(r"(?m)^#{1,6}\s*附录\s*$")
-SUPPORT_MATERIAL_HEADING_RE = re.compile(r"(?m)^#{1,6}\s*附录A\s+支撑材料文件列表\s*$")
-CODE_APPENDIX_HEADING_RE = re.compile(r"(?m)^#{1,6}\s*附录B\s+源程序代码\s*$")
+SUPPORT_MATERIAL_HEADING_RE = re.compile(r"(?m)^#{1,6}\s*附录[A-Z]\s+支撑材料文件列表\s*$")
+CODE_APPENDIX_HEADING_RE = re.compile(r"(?m)^#{1,6}\s*附录[A-Z]\s+源程序代码\s*$")
+AI_USAGE_DECLARATION_RE = re.compile(
+    r"(?mi)^#{1,6}\s*AI\s*工具使用声明\s*$"
+)
+AI_USAGE_DETAILS_FILENAME = "AI工具使用详情.pdf"
 NO_PROGRAM_RE = re.compile(r"本论文没有用到程序")
 NO_SUPPORT_MATERIAL_RE = re.compile(r"本论文没有支撑材料")
 HEADING_RE = re.compile(r"(?m)^#{1,6}\s+(.+?)\s*$")
+ATX_HEADING_LINE_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
 ABSTRACT_HEADING_RE = re.compile(r"(?m)^#{1,6}\s*摘要\s*$")
 KEYWORDS_RE = re.compile(r"\*{0,2}\s*关键词\s*\*{0,2}\s*[:：]\s*(.+)")
+KEYWORDS_LINE_RE = re.compile(
+    r"(?m)^\s*\*{0,2}\s*关键词\s*\*{0,2}\s*[:：].*$"
+)
 CJK_INLINE_SPACE_RE = re.compile(r"(?<=[\u4e00-\u9fff])[ \t]+(?=[\u4e00-\u9fff])")
 KEYWORDS_HEADING_RE = re.compile(
     r"(?ms)^#{1,6}\s*关键词\s*\n+(?P<keywords>.*?)(?=\n#{1,6}\s|\Z)"
@@ -103,6 +118,13 @@ FUTURE_ALGORITHM_CONTEXT_RE = re.compile(
     r"(?:遗传算法|genetic\s+algorithm|Pareto|帕累托|粒子群|particle\s+swarm|PSO)",
     re.IGNORECASE,
 )
+NON_IMPLEMENTED_ALGORITHM_CONTEXT_RE = re.compile(
+    r"(?:若|如果|假如|可)(?:采用|使用).{0,48}"
+    r"(?:遗传算法|genetic\s+algorithm|Pareto|帕累托|粒子群|particle\s+swarm|PSO)"
+    r"|(?:遗传算法|genetic\s+algorithm|Pareto|帕累托|粒子群|particle\s+swarm|PSO)"
+    r"[^。\n]{0,80}(?:未(?:采用|使用|实现)|不(?:及|适用)|作为[^。\n]{0,24}(?:对比|替代))",
+    re.IGNORECASE,
+)
 RANDOM_SIMULATION_RE = re.compile(
     r"Monte[\s_-]*Carlo|蒙特卡洛|随机模拟|随机扰动|随机生成样本|模拟样本|模拟数据集",
     re.IGNORECASE,
@@ -151,6 +173,89 @@ REQUIRED_SECTION_KEYWORDS = {
 
 CORE_SECTION_KEYS = {"model_solution", "validation"}
 EXPECTED_EXPORT_PROFILE = "cumcm2026"
+EDITORIAL_QUALITY_POLICIES = {
+    # This is deliberately opt-in: existing tasks predate the editorial policy
+    # and must not become non-exportable solely because it was introduced.
+    "off": {
+        "active": False,
+        "enforce": False,
+        "min_body_chars": 0,
+        "min_result_figures": 0,
+        "min_result_tables": 0,
+        "min_result_figures_per_question": 0,
+        "min_result_tables_per_question": 0,
+        "require_asset_source_trace": False,
+        "min_abstract_paragraphs": 0,
+        "require_references": False,
+        "require_reference_style": False,
+    },
+    # Smoke runs surface the same measurements without making lightweight
+    # fixtures or quick end-to-end checks fail on editorial completeness.
+    "smoke": {
+        "active": True,
+        "enforce": False,
+        "min_body_chars": 1200,
+        "min_result_figures": 1,
+        "min_result_tables": 1,
+        "min_result_figures_per_question": 0,
+        "min_result_tables_per_question": 0,
+        "require_asset_source_trace": False,
+        "min_abstract_paragraphs": 0,
+        "require_references": False,
+        "require_reference_style": False,
+    },
+    # An internal review policy, not an official CUMCM rule.  It deliberately
+    # measures content/assets instead of inventing a page-count requirement.
+    "cumcm_formal": {
+        "active": True,
+        "enforce": True,
+        "min_body_chars": 5000,
+        "min_result_figures": 1,
+        "min_result_tables": 1,
+        "min_result_figures_per_question": 1,
+        "min_result_tables_per_question": 1,
+        # A formal deliverable must identify the frozen numerical sources for
+        # every result asset.  This remains an internal quality requirement,
+        # not a claimed CUMCM rule.
+        "require_asset_source_trace": True,
+        # User-specified Chinese contest delivery conventions.  They are
+        # deliberately represented as traceable internal format checks rather
+        # than asserted as a future official CUMCM rule.
+        "min_abstract_paragraphs": 2,
+        "require_references": True,
+        "require_reference_style": True,
+    },
+}
+FORMAL_CUMCM_EXPORT_PROFILES = {"cumcm2025", "cumcm2026"}
+EDITORIAL_RESULT_TERMS = (
+    "结果",
+    "最优",
+    "方案",
+    "敏感",
+    "灵敏",
+    "误差",
+    "性能",
+    "指标",
+    "对比",
+    "统计",
+    "验证",
+    "优化",
+    # Domain-neutral result vocabulary: a formal result asset need not be
+    # named literally "结果图".  These terms still require a question context
+    # and (under the formal policy) a hash-bound source manifest.
+    "遮蔽",
+    "时长",
+    "区间",
+    "起爆",
+    "轨迹",
+    "短名单",
+    "投放",
+    "分配",
+    "网格",
+    "候选",
+    "可行性",
+    "距离",
+)
 EXPORT_PROFILE_LABELS = {
     "default": "默认导出",
     "cumcm2025": "高教社杯/CUMCM 2025",
@@ -221,6 +326,7 @@ _SUPPORT_EXCLUDED_FILENAMES = {
     "paper_preflight_report.json",
     "paper_preflight_report.md",
     "paper_outline.json",
+    "paper_repair_candidate_manifest.json",
     "figure_usage.json",
     "claim_trace.json",
     "claim_trace.md",
@@ -423,6 +529,40 @@ def normalize_markdown_headings(markdown: str) -> str:
     return BOLD_REFERENCE_HEADING_RE.sub("## 参考文献", markdown)
 
 
+def normalize_heading_blank_lines(markdown: str) -> tuple[str, int]:
+    """Ensure an ATX heading is separated from a preceding prose paragraph.
+
+    Pandoc treats a level-three-or-deeper ATX heading immediately following a
+    nonblank paragraph line as ordinary text in some Markdown modes.  Repair
+    that layout-only slip before semantic review, while preserving fenced code
+    blocks byte-for-byte so source-code appendices and formulas are untouched.
+    """
+
+    def normalize_prose(segment: str) -> tuple[str, int]:
+        output: list[str] = []
+        inserted = 0
+        for line in segment.splitlines(keepends=True):
+            if ATX_HEADING_LINE_RE.match(line) and output and output[-1].strip():
+                output.append("\n")
+                inserted += 1
+            output.append(line)
+        return "".join(output), inserted
+
+    parts: list[str] = []
+    cursor = 0
+    total = 0
+    for match in FENCED_CODE_BLOCK_RE.finditer(markdown):
+        prose, inserted = normalize_prose(markdown[cursor : match.start()])
+        parts.append(prose)
+        parts.append(match.group(0))
+        total += inserted
+        cursor = match.end()
+    prose, inserted = normalize_prose(markdown[cursor:])
+    parts.append(prose)
+    total += inserted
+    return "".join(parts), total
+
+
 def remove_duplicate_reference_fragments(markdown: str) -> tuple[str, int]:
     """删除最终参考文献表之前明显为空或只有孤立编号的重复片段。
 
@@ -604,6 +744,14 @@ def _clean_image_caption_text(caption: str, path: str) -> str:
         source = stem
     source = re.sub(r"[_-]+", " ", source)
     source = re.sub(r"\s+", " ", source).strip(" .。_-")
+    question_plot_match = re.fullmatch(
+        r"ques(?:tion)?\s*(\d+)\s+(?:plot|figure|chart)(?:\s+results?)?",
+        source,
+        flags=re.IGNORECASE,
+    )
+    if question_plot_match:
+        question_number = question_plot_match.group(1)
+        return f"问题{question_number}的优化结果图"
     return source or "结果图"
 
 
@@ -1029,8 +1177,72 @@ def _support_category(filename: str) -> str | None:
 
 
 def collect_support_materials(work_dir: str) -> list[SupportMaterial]:
-    """收集 CUMCM 附录A中的支撑材料文件列表。"""
+    """收集附录中的支撑材料文件列表。"""
     return [SupportMaterial(path, category) for path, category in collect_bounded_support_material_paths(work_dir)]
+
+
+def _appendix_table_cell(value: object, fallback: str = "未记录") -> str:
+    """Escape a compact, disclosure-safe Markdown table cell."""
+    text = str(value or fallback).strip().replace("|", "\\|")
+    return text.replace("\n", "<br>")
+
+
+def _ai_usage_appendix_lines(work_dir: str) -> list[str]:
+    """Build the in-paper counterpart of the required AI-details PDF.
+
+    The separate PDF remains the complete support material.  This concise
+    appendix makes the declaration auditable from the paper itself while
+    avoiding secrets and full internal prompts.
+    """
+    path = os.path.join(work_dir, "ai_usage_details.json")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            details = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(details, dict) or not isinstance(details.get("tools"), list):
+        return []
+
+    lines = [
+        "## 附录A AI工具使用详情",
+        "",
+        "本附录按结构化 AI 工具使用详情模板，概述工具、使用环节、关键交互摘要、采纳修改和人工核验状态。"
+        "完整可打开记录见支撑材料《AI工具使用详情.pdf》。",
+        "",
+    ]
+    for index, tool in enumerate(details["tools"], 1):
+        if not isinstance(tool, dict):
+            continue
+        stages = tool.get("stages", [])
+        stage_text = "、".join(str(item) for item in stages) if isinstance(stages, list) else str(stages)
+        lines.extend(
+            [
+                f"表 A-{index}  AI 工具使用记录",
+                "| 记录项目 | 本次情况 |",
+                "| --- | --- |",
+                f"| 工具名称 | {_appendix_table_cell(tool.get('name'))} |",
+                f"| 模型/版本 | {_appendix_table_cell(tool.get('model'))} |",
+                f"| 具体使用目的和环节 | {_appendix_table_cell(stage_text)} |",
+                f"| 关键交互记录（提示与回复摘要） | {_appendix_table_cell(tool.get('prompt_process'))} |",
+                f"| 采纳和人工修改情况 | {_appendix_table_cell(tool.get('adoption_and_modification'))} |",
+                "",
+            ]
+        )
+    review = details.get("human_review")
+    if isinstance(review, dict):
+        lines.extend(
+            [
+                f"人工核验状态：{_appendix_table_cell(review.get('status'))}。",
+                "已完成技术复核："
+                + "；".join(str(item) for item in review.get("completed_technical_checks", []) if item)
+                + "。",
+                "仍需参赛队员确认："
+                + "；".join(str(item) for item in review.get("pending_items", []) if item)
+                + "。",
+                "",
+            ]
+        )
+    return lines
 
 
 def _appendix_code_mode(work_dir: str) -> str:
@@ -1067,7 +1279,7 @@ def append_code_appendix(markdown: str, work_dir: str) -> tuple[str, list[str]]:
     """Rebuild the CUMCM appendix with complete runnable source code.
 
     CUMCM's final-paper requirement is stricter than a support-material list:
-    every discovered program is embedded in Appendix B and tagged with its raw
+    every discovered program is embedded in the source-code appendix and tagged with its raw
     SHA-256.  The strict final acceptance report verifies that no source was
     silently shortened or replaced after this step.
     """
@@ -1077,7 +1289,13 @@ def append_code_appendix(markdown: str, work_dir: str) -> tuple[str, list[str]]:
     if appendix_match:
         markdown = markdown[: appendix_match.start()].rstrip()
 
-    lines = [markdown.rstrip(), "", "# 附录", "", "## 附录A 支撑材料文件列表", ""]
+    ai_usage_lines = _ai_usage_appendix_lines(work_dir)
+    support_label = "B" if ai_usage_lines else "A"
+    code_label = "C" if ai_usage_lines else "B"
+    lines = [markdown.rstrip(), "", "# 附录", ""]
+    if ai_usage_lines:
+        lines.extend(ai_usage_lines)
+    lines.extend([f"## 附录{support_label} 支撑材料文件列表", ""])
     if materials:
         lines.extend(["| 文件名 | 类型 |", "| --- | --- |"])
         for material in materials:
@@ -1087,13 +1305,13 @@ def append_code_appendix(markdown: str, work_dir: str) -> tuple[str, list[str]]:
         lines.extend(["本论文没有支撑材料。", ""])
 
     mode = _appendix_code_mode(work_dir)
-    lines.extend(["## 附录B 源程序代码", ""])
+    lines.extend([f"## 附录{code_label} 源程序代码", ""])
     if mode == "key":
         note = _key_algorithm_note(work_dir)
         lines.extend(
             [
                 "本附录按精简展示模式给出经本次计算对应的关键伪代码与核心实现；"
-                "完整可运行源码已在附录A所列支撑材料中保留。该展示模式用于版式审阅，"
+                f"完整可运行源码已在附录{support_label}所列支撑材料中保留。该展示模式用于版式审阅，"
                 "不能获得完整源码附录的严格技术验收。",
                 "",
             ]
@@ -1116,7 +1334,7 @@ def append_code_appendix(markdown: str, work_dir: str) -> tuple[str, list[str]]:
             fence = _code_fence(source.code)
             lines.extend(
                 [
-                    f"### B.{index} {source.name}",
+                    f"### {code_label}.{index} {source.name}",
                     "",
                     "SHA-256:",
                     " ".join(
@@ -1267,7 +1485,13 @@ def _extract_abstract(markdown: str) -> str:
     match = ABSTRACT_HEADING_RE.search(markdown)
     if match:
         next_heading = HEADING_RE.search(markdown, match.end())
-        end = next_heading.start() if next_heading else len(markdown)
+        keyword_line = KEYWORDS_LINE_RE.search(markdown, match.end())
+        end_candidates = [
+            candidate.start()
+            for candidate in (next_heading, keyword_line)
+            if candidate is not None
+        ]
+        end = min(end_candidates) if end_candidates else len(markdown)
         return markdown[match.end() : end].strip()
 
     first_heading = HEADING_RE.search(markdown)
@@ -1276,7 +1500,7 @@ def _extract_abstract(markdown: str) -> str:
         m.start()
         for m in (
             re.search(r"(?m)^#{1,6}\s*(?:一、)?问题重述", markdown[start:]),
-            re.search(r"(?m)^关键词\s*[:：]", markdown[start:]),
+            KEYWORDS_LINE_RE.search(markdown[start:]),
         )
         if m is not None
     ]
@@ -1296,6 +1520,123 @@ def _check_abstract(markdown: str) -> dict:
     }
 
 
+def _check_abstract_structure(markdown: str, *, min_paragraphs: int) -> dict:
+    """Check the user-specified multi-paragraph abstract convention.
+
+    This is intentionally separate from the generic 120--1200 character
+    guard: a sufficiently long single block is still hard to scan and caused
+    the original delivery issue.  Paragraphs are Markdown blocks, so soft
+    line wrapping does not inflate the count.
+    """
+    abstract = _extract_abstract(markdown)
+    paragraphs = [
+        block.strip()
+        for block in re.split(r"\n\s*\n", abstract)
+        if _plain_text(block).strip()
+    ]
+    return {
+        "passed": len(paragraphs) >= min_paragraphs,
+        "paragraph_count": len(paragraphs),
+        "min_paragraphs": min_paragraphs,
+        "char_count": _count_content_chars(abstract),
+        "scope": "user_specified_chinese_contest_format",
+        "official_rule": False,
+    }
+
+
+def _reference_lines(markdown: str) -> list[str]:
+    """Return only numbered bibliography entries before the appendix."""
+    match = REFERENCE_HEADING_RE.search(markdown)
+    if not match:
+        return []
+    entries: list[str] = []
+    for line in markdown[match.end() :].splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# 附录"):
+            break
+        if stripped:
+            entries.append(stripped)
+    return entries
+
+
+_WEB_REFERENCE_FORMAT_RE = re.compile(
+    r"^[^，,]+[，,][^，,]+[，,]https?://\S+[，,]访问时间[（(]\d{4}年\d{1,2}月\d{1,2}日[）)](?:[。.]?)$"
+)
+_BOOK_REFERENCE_FORMAT_RE = re.compile(
+    r"^[^，,]+[，,][^，,]+[，,][^，,:：]+[：:][^，,]+[，,]\d{4}(?:[。.]?)$"
+)
+_JOURNAL_REFERENCE_FORMAT_RE = re.compile(
+    r"^[^，,]+[，,][^，,]+[，,][^，,]+[，,]\d+(?:[（(]\d+[）)])?[：:]\d+(?:[-–—]\d+)?[，,]\d{4}(?:[。.]?)$"
+)
+_AI_TOOL_REFERENCE_FORMAT_RE = re.compile(
+    r"^[^，,]+[，,][^，,]+[，,][^，,]+[，,]\d{4}-\d{2}-\d{2}(?:[。.]?)$"
+)
+
+
+def _reference_format_kind(content: str) -> str | None:
+    """Classify the three requested bibliography forms plus AI disclosures."""
+    text = content.strip()
+    if _WEB_REFERENCE_FORMAT_RE.fullmatch(text):
+        return "web"
+    if _BOOK_REFERENCE_FORMAT_RE.fullmatch(text):
+        return "book"
+    if _JOURNAL_REFERENCE_FORMAT_RE.fullmatch(text):
+        return "journal"
+    # The applicable AI disclosure can require a compact tool/model/operator/
+    # date entry.  It is not mislabelled as a book, journal, or web source.
+    if _AI_TOOL_REFERENCE_FORMAT_RE.fullmatch(text):
+        return "ai_tool"
+    return None
+
+
+def _check_reference_format(markdown: str, *, required: bool) -> dict:
+    """Validate citation order and the user-specified Chinese entry forms."""
+    lines = _reference_lines(markdown)
+    numbered: list[tuple[int, str]] = []
+    bad_numbering: list[str] = []
+    for line in lines:
+        match = re.match(r"^\[(\d+)\]\s+(.+)$", line)
+        if match is None:
+            bad_numbering.append(line)
+            continue
+        numbered.append((int(match.group(1)), match.group(2).strip()))
+
+    expected_numbers = list(range(1, len(numbered) + 1))
+    actual_numbers = [number for number, _ in numbered]
+    malformed: list[dict[str, str]] = []
+    kinds: list[str] = []
+    for number, content in numbered:
+        kind = _reference_format_kind(content)
+        if kind is None:
+            malformed.append({"number": str(number), "content": content})
+        else:
+            kinds.append(kind)
+
+    body_before_references, _ = _reference_body_parts(markdown)
+    inline_numbers = sorted(_inline_reference_numbers(body_before_references))
+    missing_inline = sorted(set(inline_numbers) - set(actual_numbers))
+    passed = (
+        (bool(numbered) or not required)
+        and not bad_numbering
+        and actual_numbers == expected_numbers
+        and not malformed
+        and not missing_inline
+    )
+    return {
+        "passed": passed,
+        "required": required,
+        "count": len(numbered),
+        "numbering": actual_numbers,
+        "inline": inline_numbers,
+        "missing_inline": missing_inline,
+        "bad_numbering": bad_numbering,
+        "malformed": malformed,
+        "formats": kinds,
+        "scope": "user_specified_chinese_contest_format",
+        "official_rule": False,
+    }
+
+
 def _check_keywords(markdown: str) -> dict:
     match = KEYWORDS_RE.search(markdown)
     if not match:
@@ -1307,6 +1648,408 @@ def _check_keywords(markdown: str) -> dict:
         if item.strip()
     ]
     return {"passed": 3 <= len(items) <= 8, "count": len(items), "items": items}
+
+
+def _extract_editorial_body(markdown: str) -> str:
+    """Return prose assessed by the internal editorial policy.
+
+    The region intentionally excludes the abstract, keyword line, references,
+    appendices, and fenced code.  It is a content-density metric rather than a
+    rendered-page estimate, so it cannot be mistaken for an official page rule.
+    """
+    visible = _without_fenced_code_blocks(markdown)
+    start = 0
+    abstract_match = ABSTRACT_HEADING_RE.search(visible)
+    if abstract_match:
+        start = abstract_match.end()
+        keyword_line = KEYWORDS_LINE_RE.search(visible, start)
+        next_heading = HEADING_RE.search(visible, start)
+        if keyword_line and (next_heading is None or keyword_line.start() < next_heading.start()):
+            start = keyword_line.end()
+        elif next_heading:
+            start = next_heading.start()
+
+    end_candidates = [
+        match.start()
+        for pattern in (
+            REFERENCE_HEADING_RE,
+            re.compile(r"(?m)^#{1,6}\s*附录"),
+        )
+        for match in pattern.finditer(visible, start)
+    ]
+    end = min(end_candidates) if end_candidates else len(visible)
+    return visible[start:end].strip()
+
+
+def _editorial_question_numbers(text: str) -> list[int]:
+    numbers: set[int] = set()
+    # Chinese question labels such as ``问题四三机协同`` have a numeral-like
+    # word immediately after the number.  Greedily consuming Chinese digits
+    # would turn ``四三`` into a fictional question 43, so use one Chinese
+    # ordinal character while retaining multi-digit Arabic labels.
+    for match in re.finditer(
+        r"(?:第\s*)?(?:问题|问|Q)\s*(\d+|[一二三四五六七八九十])",
+        text,
+        re.IGNORECASE,
+    ):
+        number = _chinese_problem_number(match.group(1))
+        if number is not None:
+            numbers.add(number)
+    return sorted(numbers)
+
+
+def _editorial_asset_context(body: str, offset: int) -> str:
+    """Use the closest preceding heading as an asset's question context."""
+    headings = list(HEADING_RE.finditer(body, 0, offset))
+    return headings[-1].group(1) if headings else ""
+
+
+def _editorial_result_assets(body: str) -> dict:
+    """Find body figures/tables that document results, with question binding."""
+    figures: list[dict] = []
+    for index, match in enumerate(IMAGE_MARKDOWN_RE.finditer(body), 1):
+        caption = _clean_image_caption_text(match.group(1), match.group(2))
+        context = _editorial_asset_context(body, match.start())
+        evidence_text = f"{caption} {context}"
+        if not any(term in evidence_text for term in EDITORIAL_RESULT_TERMS):
+            continue
+        figures.append(
+            {
+                "index": index,
+                "caption": caption,
+                "path": match.group(2).replace("\\", "/"),
+                "questions": _editorial_question_numbers(evidence_text),
+            }
+        )
+
+    tables: list[dict] = []
+    lines = body.splitlines(keepends=True)
+    line_offsets: list[int] = []
+    offset = 0
+    for line in lines:
+        line_offsets.append(offset)
+        offset += len(line)
+    line_index = 0
+    table_index = 0
+    while line_index < len(lines):
+        if not (
+            _is_markdown_table_line(lines[line_index])
+            and line_index + 1 < len(lines)
+            and MARKDOWN_TABLE_SEPARATOR_RE.match(lines[line_index + 1])
+        ):
+            line_index += 1
+            continue
+        table_index += 1
+        table_start = line_offsets[line_index]
+        table_line_index = line_index
+        table_lines: list[str] = []
+        while line_index < len(lines) and _is_markdown_table_line(lines[line_index]):
+            table_lines.append(lines[line_index].strip())
+            line_index += 1
+        caption = ""
+        for caption_index in range(table_line_index - 1, -1, -1):
+            if lines[caption_index].strip():
+                caption = lines[caption_index].strip()
+                break
+        context = _editorial_asset_context(body, table_start)
+        evidence_text = " ".join((caption, table_lines[0] if table_lines else "", context))
+        if not any(term in evidence_text for term in EDITORIAL_RESULT_TERMS):
+            continue
+        tables.append(
+            {
+                "index": table_index,
+                "caption": caption,
+                "questions": _editorial_question_numbers(evidence_text),
+            }
+        )
+    return {"figures": figures, "tables": tables}
+
+
+def _editorial_manifest_question_numbers(value: object) -> list[int]:
+    """Normalize the deliberately small ``quesN`` asset-manifest vocabulary."""
+    if not isinstance(value, list):
+        return []
+    numbers: list[int] = []
+    for item in value:
+        match = re.fullmatch(r"(?:ques|q)?(\d+)", str(item).strip(), re.IGNORECASE)
+        if match:
+            number = int(match.group(1))
+            if number > 0 and number not in numbers:
+                numbers.append(number)
+    return numbers
+
+
+def _editorial_safe_relative_path(work_dir: str, value: object) -> str | None:
+    """Return a normalized task-relative path, rejecting traversal and links."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    relative = value.replace("\\", "/").strip()
+    drive, _ = os.path.splitdrive(relative)
+    if drive or os.path.isabs(relative):
+        return None
+    root = os.path.realpath(work_dir)
+    candidate = os.path.realpath(os.path.join(root, relative.replace("/", os.sep)))
+    try:
+        if os.path.commonpath((root, candidate)) != root:
+            return None
+    except ValueError:
+        return None
+    if os.path.islink(candidate):
+        return None
+    return os.path.relpath(candidate, root).replace(os.sep, "/")
+
+
+def _check_editorial_asset_trace(
+    work_dir: str,
+    assets: dict,
+    expected_questions: int | None,
+    required: bool,
+) -> dict:
+    """Verify that formal result assets carry a task-local source hash trace.
+
+    The Markdown table itself has no filename, so table traceability is bound
+    by declared question; figures are bound by their exact Markdown path.  This
+    deliberately does not treat a pretty image or a filename as evidence.
+    """
+    manifest_name = "paper_assets_manifest.json"
+    manifest_path = os.path.join(work_dir, manifest_name)
+    result = {
+        "required": required,
+        "manifest_path": manifest_name,
+        "passed": not required,
+        "errors": [],
+        "traced_figures": [],
+        "traced_table_questions": [],
+        "missing_figure_paths": [],
+        "missing_table_questions": [],
+    }
+    if not required:
+        return result
+    if not os.path.isfile(manifest_path):
+        result["errors"].append("缺少 paper_assets_manifest.json")
+        return result
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        result["errors"].append(f"展示资产清单不可读取: {exc}")
+        return result
+    if not isinstance(manifest, dict):
+        result["errors"].append("展示资产清单必须是 JSON 对象")
+        return result
+
+    manifest_entries: dict[str, list[dict]] = {}
+    table_questions: set[int] = set()
+    for kind in ("figures", "tables"):
+        entries = manifest.get(kind)
+        if not isinstance(entries, list):
+            result["errors"].append(f"展示资产清单缺少 {kind} 列表")
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                result["errors"].append(f"{kind} 存在非对象条目")
+                continue
+            questions = _editorial_manifest_question_numbers(entry.get("questions"))
+            if not questions:
+                result["errors"].append(f"{kind} 条目缺少合法 quesN 问题绑定")
+                continue
+            source_paths = entry.get("source_paths")
+            source_hashes = entry.get("source_sha256")
+            if not isinstance(source_paths, list) or not source_paths or not isinstance(source_hashes, dict):
+                result["errors"].append(f"{kind} 条目缺少来源路径或 SHA-256")
+                continue
+            sources_ok = True
+            for source in source_paths:
+                safe_source = _editorial_safe_relative_path(work_dir, source)
+                expected_hash = source_hashes.get(source) if isinstance(source, str) else None
+                source_path = (
+                    os.path.join(work_dir, safe_source.replace("/", os.sep))
+                    if safe_source
+                    else None
+                )
+                if (
+                    safe_source is None
+                    or not isinstance(expected_hash, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", expected_hash)
+                    or not source_path
+                    or _sha256_file(source_path) != expected_hash
+                ):
+                    sources_ok = False
+                    result["errors"].append(
+                        f"{kind} 来源哈希失配或路径不安全: {source!r}"
+                    )
+            if not sources_ok:
+                continue
+            if kind == "figures":
+                safe_path = _editorial_safe_relative_path(work_dir, entry.get("path"))
+                if safe_path is None or not os.path.isfile(
+                    os.path.join(work_dir, safe_path.replace("/", os.sep))
+                ):
+                    result["errors"].append("figures 条目缺少存在的任务内图片路径")
+                    continue
+                manifest_entries.setdefault(safe_path, []).append(entry)
+            else:
+                table_questions.update(questions)
+
+    for figure in assets.get("figures", []):
+        safe_path = _editorial_safe_relative_path(work_dir, figure.get("path"))
+        figure_questions = set(figure.get("questions", []))
+        matching_entries = manifest_entries.get(safe_path or "", [])
+        has_question_binding = any(
+            not figure_questions
+            or bool(figure_questions & set(_editorial_manifest_question_numbers(entry.get("questions"))))
+            for entry in matching_entries
+        )
+        if safe_path and has_question_binding:
+            result["traced_figures"].append(safe_path)
+        else:
+            result["missing_figure_paths"].append(figure.get("path", ""))
+    result["traced_figures"] = sorted(set(result["traced_figures"]))
+    result["missing_figure_paths"] = sorted(set(result["missing_figure_paths"]))
+
+    table_question_set = {
+        question
+        for table in assets.get("tables", [])
+        for question in table.get("questions", [])
+    }
+    result["traced_table_questions"] = sorted(table_question_set & table_questions)
+    result["missing_table_questions"] = sorted(table_question_set - table_questions)
+    if expected_questions:
+        for question in range(1, expected_questions + 1):
+            if question not in table_questions:
+                result["missing_table_questions"].append(question)
+        result["missing_table_questions"] = sorted(set(result["missing_table_questions"]))
+    result["passed"] = not (
+        result["errors"]
+        or result["missing_figure_paths"]
+        or result["missing_table_questions"]
+    )
+    return result
+
+
+def _resolve_editorial_quality_policy(
+    editorial_policy: str | dict | None,
+    export_profile: str | None,
+) -> tuple[str, dict]:
+    """Resolve an explicit internal policy without changing legacy defaults."""
+    if editorial_policy == "auto":
+        profile = get_export_profile_config(export_profile).key.value
+        editorial_policy = (
+            "cumcm_formal" if profile in FORMAL_CUMCM_EXPORT_PROFILES else "smoke"
+        )
+    if isinstance(editorial_policy, dict):
+        policy_name = str(editorial_policy.get("base", "cumcm_formal"))
+        base = dict(EDITORIAL_QUALITY_POLICIES.get(policy_name, EDITORIAL_QUALITY_POLICIES["off"]))
+        base.update(
+            {
+                key: value
+                for key, value in editorial_policy.items()
+                if key in base
+            }
+        )
+        return policy_name, base
+    policy_name = str(editorial_policy or "off")
+    return policy_name, dict(EDITORIAL_QUALITY_POLICIES.get(policy_name, EDITORIAL_QUALITY_POLICIES["off"]))
+
+
+def _check_editorial_quality(
+    work_dir: str,
+    markdown: str,
+    export_profile: str | None,
+    declared_problem_count: int | None,
+    editorial_policy: str | dict | None,
+) -> dict:
+    """Assess internal CUMCM editorial completeness; never claim official status."""
+    policy_name, policy = _resolve_editorial_quality_policy(editorial_policy, export_profile)
+    body = _extract_editorial_body(markdown)
+    body_char_count = _count_content_chars(body)
+    abstract_structure = _check_abstract_structure(
+        markdown, min_paragraphs=int(policy["min_abstract_paragraphs"])
+    )
+    reference_format = _check_reference_format(
+        markdown, required=bool(policy["require_references"])
+    )
+    assets = _editorial_result_assets(body)
+    expected_questions = declared_problem_count or _infer_declared_problem_count(markdown)
+    question_assets: dict[int, dict[str, list[str]]] = {
+        question: {"figures": [], "tables": []}
+        for question in range(1, (expected_questions or 0) + 1)
+    }
+    for kind, entries in assets.items():
+        for entry in entries:
+            for question in entry["questions"]:
+                if question in question_assets:
+                    question_assets[question][kind].append(f"{kind[:-1]}_{entry['index']}")
+
+    failures: list[str] = []
+    if not abstract_structure["passed"]:
+        failures.append("摘要未按要求分段")
+    if bool(policy["require_references"]) and not reference_format["passed"]:
+        failures.append("参考文献缺失、编号顺序或格式不符合要求")
+    if body_char_count < int(policy["min_body_chars"]):
+        failures.append("正文字符数不足")
+    if len(assets["figures"]) < int(policy["min_result_figures"]):
+        failures.append("结果图覆盖不足")
+    if len(assets["tables"]) < int(policy["min_result_tables"]):
+        failures.append("结果表覆盖不足")
+    missing_figure_questions = [
+        question
+        for question, evidence in question_assets.items()
+        if len(evidence["figures"]) < int(policy["min_result_figures_per_question"])
+    ]
+    missing_table_questions = [
+        question
+        for question, evidence in question_assets.items()
+        if len(evidence["tables"]) < int(policy["min_result_tables_per_question"])
+    ]
+    missing_questions = sorted(set(missing_figure_questions + missing_table_questions))
+    if expected_questions and missing_figure_questions:
+        failures.append("存在缺少结果图证据资产的问题")
+    if expected_questions and missing_table_questions:
+        failures.append("存在缺少结果表证据资产的问题")
+
+    asset_trace = _check_editorial_asset_trace(
+        work_dir,
+        assets,
+        expected_questions,
+        required=bool(policy["require_asset_source_trace"]),
+    )
+    if not asset_trace["passed"]:
+        failures.append("结果图表缺少可复查的来源哈希清单")
+
+    quality_passed = not failures
+    active = bool(policy["active"])
+    enforced = active and bool(policy["enforce"])
+    return {
+        # ``passed`` is gate status; smoke diagnostics never make a task fail.
+        "passed": quality_passed or not enforced,
+        "quality_passed": quality_passed,
+        "active": active,
+        "enforced": enforced,
+        "policy": policy_name,
+        "label": "Internal editorial-quality policy (non-official)",
+        "official_rule": False,
+        "body_char_count": body_char_count,
+        "min_body_chars": int(policy["min_body_chars"]),
+        "abstract_structure": abstract_structure,
+        "reference_format": reference_format,
+        "result_assets": {
+            "figure_count": len(assets["figures"]),
+            "table_count": len(assets["tables"]),
+            "min_figures": int(policy["min_result_figures"]),
+            "min_tables": int(policy["min_result_tables"]),
+            **assets,
+        },
+        "asset_source_trace": asset_trace,
+        "expected_question_count": expected_questions,
+        "question_assets": {
+            str(question): evidence for question, evidence in question_assets.items()
+        },
+        "missing_questions": missing_questions,
+        "missing_figure_questions": missing_figure_questions,
+        "missing_table_questions": missing_table_questions,
+        "failures": failures,
+    }
 
 
 def _check_sections(markdown: str) -> dict:
@@ -1946,7 +2689,19 @@ def scan_similarity_ai_risk(markdown: str, work_dir: str | None = None) -> dict:
     visible = _without_fenced_code_blocks(markdown)
     appendix_match = re.search(r"(?m)^#{1,6}\s*附录", visible)
     body = visible[: appendix_match.start()] if appendix_match else visible
-    sentences = [re.sub(r"\s+", "", item) for item in re.split(r"[。！？.!?]\s*", body) if len(item.strip()) >= 16]
+    # Captions and asset paths are structured Markdown rather than prose.  A
+    # repeated image link must not be counted as a repeated sentence merely
+    # because several generated charts share similar filenames.
+    body = IMAGE_MARKDOWN_RE.sub("", body)
+    # A period between digits is a decimal separator, not a sentence boundary.
+    # Splitting ``0.05`` or ``99.8694`` created short repeated fragments and
+    # produced false AI/similarity warnings for numerical papers.
+    sentence_boundary = r"[。！？!?]\s*|(?<!\d)\.(?!\d)\s*"
+    sentences = [
+        re.sub(r"\s+", "", item)
+        for item in re.split(sentence_boundary, body)
+        if len(item.strip()) >= 16
+    ]
     counts: dict[str, int] = {}
     for sentence in sentences:
         counts[sentence] = counts.get(sentence, 0) + 1
@@ -2741,13 +3496,28 @@ def _check_algorithm_evidence(work_dir: str, markdown: str) -> dict:
             continue
         # “可升级为遗传算法”等未来改进建议不等于已在本次求解中采用；只有
         # 当前任务的实际算法声明才应当要求代码证据。
-        actual_matches = [
-            match
-            for match in declared_matches
-            if not FUTURE_ALGORITHM_CONTEXT_RE.search(
-                body[max(0, match.start() - 40) : match.end() + 1]
+        actual_matches = []
+        for match in declared_matches:
+            # Scope negation/future wording to the same sentence.  A character
+            # window makes a genuine later statement such as “本文采用遗传算法”
+            # disappear merely because the previous sentence discussed a
+            # hypothetical or rejected genetic algorithm.
+            context = next(
+                (
+                    sentence
+                    for offset, sentence in _sentences_with_offsets(body)
+                    if offset <= match.start() < offset + len(sentence)
+                ),
+                body[match.start() : match.end()],
             )
-        ]
+            if FUTURE_ALGORITHM_CONTEXT_RE.search(context):
+                continue
+            # A comparison that explicitly says an algorithm was not used is
+            # not an implementation claim.  Keep this intentionally narrow:
+            # actual claims such as “本文采用遗传算法” still require evidence.
+            if NON_IMPLEMENTED_ALGORITHM_CONTEXT_RE.search(context):
+                continue
+            actual_matches.append(match)
         if not actual_matches:
             continue
         evidence_found = any(token.lower() in code_text for token in evidence_tokens)
@@ -2881,6 +3651,251 @@ def _check_reference_relevance(markdown: str) -> dict:
     return {"passed": not unrelated, "unrelated": unrelated}
 
 
+def _load_json_object(path: str) -> dict | None:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _canonical_json_sha256(value: object) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _check_modeling_decision_approval(work_dir: str) -> dict:
+    """Require the human ModelPlan approval whenever the task enabled that gate."""
+    request = _load_json_object(os.path.join(work_dir, "task_request.json")) or {}
+    decision_path = os.path.join(work_dir, "modeling_decision.json")
+    decision = _load_json_object(decision_path)
+    required = bool(request.get("require_model_review")) or bool(
+        decision and decision.get("gate_enabled") is True
+    )
+    if not required:
+        return {"passed": True, "active": False, "required": False}
+
+    review = decision.get("review", {}) if decision else {}
+    md_path = os.path.join(work_dir, "modeling_decision.md")
+    md_present = os.path.isfile(md_path) and os.path.getsize(md_path) > 0
+    plan = _load_json_object(os.path.join(work_dir, "modeler_plan.json"))
+    approved_plan = decision.get("modeler_response") if decision else None
+    current_plan_sha256 = _canonical_json_sha256(plan) if plan else None
+    approved_payload_sha256 = (
+        _canonical_json_sha256(approved_plan)
+        if isinstance(approved_plan, dict)
+        else None
+    )
+    declared_plan_sha256 = decision.get("modeler_plan_sha256") if decision else None
+    declared_hash_matches_approved_payload = bool(
+        isinstance(declared_plan_sha256, str)
+        and approved_payload_sha256
+        and declared_plan_sha256 == approved_payload_sha256
+    )
+    plan_bound = bool(
+        current_plan_sha256
+        and approved_payload_sha256
+        and current_plan_sha256 == approved_payload_sha256
+        and declared_hash_matches_approved_payload
+    )
+    problem_text = str(request.get("ques_all") or "")
+    plan_validation = (
+        validate_modeler_plan(build_problem_contract(problem_text), plan)
+        if plan is not None
+        else None
+    )
+    plan_valid = bool(plan_validation and plan_validation.valid)
+    approved = bool(
+        decision
+        and decision.get("status") == "approved"
+        and isinstance(review, dict)
+        and review.get("approved") is True
+        and isinstance(review.get("approved_at"), str)
+        and review["approved_at"].strip()
+    )
+    return {
+        "passed": approved and md_present and plan_bound and plan_valid,
+        "active": True,
+        "required": True,
+        "decision_present": decision is not None,
+        "decision_status": decision.get("status") if decision else None,
+        "review_approved": review.get("approved") if isinstance(review, dict) else None,
+        "approved_at": review.get("approved_at") if isinstance(review, dict) else None,
+        "markdown_present": md_present,
+        "modeler_plan_present": plan is not None,
+        "current_plan_sha256": current_plan_sha256,
+        "approved_plan_sha256": approved_payload_sha256,
+        "declared_modeler_plan_sha256": declared_plan_sha256,
+        "declared_hash_matches_approved_payload": declared_hash_matches_approved_payload,
+        "approved_plan_matches_current": plan_bound,
+        "current_plan_contract_valid": plan_valid,
+        "plan_violations": plan_validation.violations if plan_validation else [],
+        "plan_missing_requirements": (
+            plan_validation.missing_requirements if plan_validation else []
+        ),
+    }
+
+
+def _check_ai_disclosure(work_dir: str, markdown: str, export_profile: str | None) -> dict:
+    """Enforce the CUMCM 2026 declaration and support-material PDF contract."""
+    profile = get_export_profile_config(export_profile).key.value
+    if profile != "cumcm2026":
+        return {"passed": True, "active": False, "profile": profile}
+
+    declaration = AI_USAGE_DECLARATION_RE.search(markdown)
+    references = REFERENCE_HEADING_RE.search(markdown)
+    declaration_before_references = bool(
+        declaration and (references is None or declaration.start() < references.start())
+    )
+    declaration_text = ""
+    if declaration:
+        next_heading = re.search(r"(?m)^#{1,6}\s+", markdown[declaration.end() :])
+        stop = declaration.end() + next_heading.start() if next_heading else len(markdown)
+        declaration_text = _plain_text(markdown[declaration.end() : stop]).strip()
+
+    pdf_path = os.path.join(work_dir, AI_USAGE_DETAILS_FILENAME)
+    pdf_size = os.path.getsize(pdf_path) if os.path.isfile(pdf_path) else 0
+    pdf_valid = False
+    if pdf_size > 100:
+        try:
+            import fitz  # PyMuPDF is already a runtime export dependency.
+
+            with fitz.open(pdf_path) as document:
+                pdf_valid = document.page_count > 0
+        except (ImportError, OSError, RuntimeError, ValueError):
+            pdf_valid = False
+    listed = bool(
+        re.search(
+            rf"(?m)^\|\s*{re.escape(AI_USAGE_DETAILS_FILENAME)}\s*\|\s*AI\s*工具使用详情\s*\|",
+            markdown,
+            re.IGNORECASE,
+        )
+    )
+    return {
+        "passed": bool(
+            declaration
+            and declaration_before_references
+            and declaration_text
+            and pdf_valid
+            and listed
+        ),
+        "active": True,
+        "profile": profile,
+        "declaration_present": declaration is not None,
+        "declaration_before_references": declaration_before_references,
+        "declaration_nonempty": bool(declaration_text),
+        "details_pdf": AI_USAGE_DETAILS_FILENAME,
+        "details_pdf_size": pdf_size,
+        "details_pdf_valid": pdf_valid,
+        "listed_in_support_materials": listed,
+    }
+
+
+def _replay_file_evidence(work_dir: str, report: dict, field: str) -> bool:
+    files = report.get("files")
+    if not isinstance(files, list) or not files:
+        return False
+    match_key = "byte_match" if field == "byte_reproducibility" else "numerical_match"
+    for item in files:
+        if not isinstance(item, dict) or item.get(match_key) is not True:
+            return False
+        relative = item.get("path")
+        if not isinstance(relative, str):
+            return False
+        candidate = os.path.abspath(os.path.join(work_dir, relative))
+        try:
+            if os.path.commonpath([os.path.abspath(work_dir), candidate]) != os.path.abspath(work_dir):
+                return False
+        except ValueError:
+            return False
+        if not os.path.isfile(candidate):
+            return False
+        # A numerical-match flag describes the *reference* run recorded in
+        # the report.  It cannot prove a later-edited result file is still
+        # numerically reproducible.  Bind both kinds of claim to the current
+        # reference input; otherwise a paper that only says "数值复现" could
+        # retain a stale PASS after its CSV values changed.
+        expected = item.get("reference_sha256")
+        if not isinstance(expected, str):
+            return False
+        with open(candidate, "rb") as handle:
+            if hashlib.sha256(handle.read()).hexdigest() != expected:
+                return False
+    return True
+
+
+def _check_reproducibility_claims(work_dir: str, markdown: str) -> dict:
+    """Reject independent replay/equality claims without matching current evidence."""
+    body, _ = _reference_body_parts(_without_fenced_code_blocks(markdown))
+    body = re.split(r"(?m)^#{1,6}\s*附录", body, maxsplit=1)[0]
+    independent_claim = bool(
+        re.search(r"独立(?:环境|进程|副本|重跑|复跑|执行)|隔离(?:目录|环境|副本).{0,36}(?:执行|重跑|复跑)", body)
+    )
+    byte_claim = bool(
+        re.search(r"逐字节一致|字节(?:级)?(?:一致|复现)|SHA-?256[^。\n]{0,48}(?:一致|相同|匹配)", body, re.IGNORECASE)
+    )
+    numerical_claim = bool(
+        re.search(r"数值(?:一致性|复现)[^。\n]{0,36}(?:PASS|通过|一致)|最大绝对差", body, re.IGNORECASE)
+    )
+    if not any((independent_claim, byte_claim, numerical_claim)):
+        return {"passed": True, "active": False, "claims": []}
+
+    report = _load_json_object(os.path.join(work_dir, "independent_replay_report.json"))
+    byte_status = (
+        report.get("byte_reproducibility", {}).get("status")
+        if report and isinstance(report.get("byte_reproducibility"), dict)
+        else None
+    )
+    numerical_status = (
+        report.get("numerical_reproducibility", {}).get("status")
+        if report and isinstance(report.get("numerical_reproducibility"), dict)
+        else None
+    )
+    byte_evidence = bool(
+        report
+        and byte_status == "PASS"
+        and _replay_file_evidence(work_dir, report, "byte_reproducibility")
+    )
+    numerical_evidence = bool(
+        report
+        and numerical_status == "PASS"
+        and _replay_file_evidence(work_dir, report, "numerical_reproducibility")
+    )
+    passed = bool(report)
+    independent_evidence = byte_evidence and numerical_evidence
+    if independent_claim:
+        passed = passed and independent_evidence
+    if byte_claim:
+        passed = passed and byte_evidence
+    if numerical_claim:
+        passed = passed and numerical_evidence
+    return {
+        "passed": passed,
+        "active": True,
+        "claims": [
+            label
+            for label, active in (
+                ("independent_replay", independent_claim),
+                ("byte_equality", byte_claim),
+                ("numerical_reproducibility", numerical_claim),
+            )
+            if active
+        ],
+        "report_present": report is not None,
+        "byte_status": byte_status,
+        "byte_evidence_current": byte_evidence,
+        "numerical_status": numerical_status,
+        "numerical_evidence_current": numerical_evidence,
+        "independent_replay_current": independent_evidence,
+    }
+
+
 def _mentions_incident_angle(text: str, angle: int) -> bool:
     """判断正文是否声明了某个入射角。
 
@@ -2925,7 +3940,7 @@ def _check_problem_alignment(work_dir: str, markdown: str) -> dict:
         return {"passed": True, "triggered": False, "issues": []}
     problem = str(request.get("ques_all") or "") if isinstance(request, dict) else ""
     compact_problem = re.sub(r"\s+", "", problem)
-    triggered = (
+    optical_triggered = (
         "问题1" in compact_problem
         and "只有一次反射" in compact_problem
         and "问题3" in compact_problem
@@ -2933,37 +3948,89 @@ def _check_problem_alignment(work_dir: str, markdown: str) -> dict:
         and "附件1" in compact_problem
         and "附件4" in compact_problem
     )
-    if not triggered:
+    high_pressure_triggered = (
+        "高压油管" in compact_problem
+        and "喷油嘴B处向外喷油的速率如图2所示" in compact_problem
+        and "针阀升程与时间的关系由附件2给出" in compact_problem
+        and re.search(r"(?:第二个|两个|双|(?:再)?增加一个)喷油嘴", compact_problem)
+        is not None
+    )
+    if not optical_triggered and not high_pressure_triggered:
         return {"passed": True, "triggered": False, "issues": []}
 
     q1 = _numbered_model_section(markdown, 1)
     q2 = _numbered_model_section(markdown, 2)
     q3 = _numbered_model_section(markdown, 3)
     issues: list[str] = []
-    if not re.search(r"双光束|两束(?:反射)?光", q1):
-        issues.append("5.1 未以题面要求的双光束/一次反射模型回答问题1。")
-    if re.search(
-        r"(?:采用|使用|建立).{0,30}(?:Airy|多光束).{0,30}(?:模型|反演)",
-        q1,
-        re.DOTALL,
-    ):
-        issues.append("5.1 把问题3的 Airy/多光束模型提前作为问题1的主模型。")
-    if not all(token in q2 for token in ("附件1", "附件2", "碳化硅")):
-        issues.append("5.2 未使用附件1/2的碳化硅数据回答问题2。")
-    if not all(_mentions_incident_angle(q2, angle) for angle in (10, 15)):
-        issues.append("5.2 未明确使用附件1/2对应的10°与15°入射角。")
-    if not all(token in q3 for token in ("附件3", "附件4", "多光束")):
-        issues.append("5.3 未使用附件3/4完成多光束判定和硅外延层计算。")
+    false_sample_claims: list[str] = []
+    if optical_triggered:
+        if not re.search(r"双光束|两束(?:反射)?光", q1):
+            issues.append("5.1 未以题面要求的双光束/一次反射模型回答问题1。")
+        if re.search(
+            r"(?:采用|使用|建立).{0,30}(?:Airy|多光束).{0,30}(?:模型|反演)",
+            q1,
+            re.DOTALL,
+        ):
+            issues.append("5.1 把问题3的 Airy/多光束模型提前作为问题1的主模型。")
+        if not all(token in q2 for token in ("附件1", "附件2", "碳化硅")):
+            issues.append("5.2 未使用附件1/2的碳化硅数据回答问题2。")
+        if not all(_mentions_incident_angle(q2, angle) for angle in (10, 15)):
+            issues.append("5.2 未明确使用附件1/2对应的10°与15°入射角。")
+        if not all(token in q3 for token in ("附件3", "附件4", "多光束")):
+            issues.append("5.3 未使用附件3/4完成多光束判定和硅外延层计算。")
 
-    body = re.split(r"(?m)^#\s*附录", markdown, maxsplit=1)[0]
-    false_sample_claims = re.findall(
-        r"(?:碳化硅|硅)?(?:两片|两个)(?:独立)?(?:样品|晶圆片|硅片)", body
-    )
-    if false_sample_claims:
-        issues.append("正文把同一晶圆的双角度测量错误表述为两个独立样品。")
+        body = re.split(r"(?m)^#\s*附录", markdown, maxsplit=1)[0]
+        false_sample_claims = re.findall(
+            r"(?:碳化硅|硅)?(?:两片|两个)(?:独立)?(?:样品|晶圆片|硅片)", body
+        )
+        if false_sample_claims:
+            issues.append("正文把同一晶圆的双角度测量错误表述为两个独立样品。")
+
+    if high_pressure_triggered:
+        q1_outflow_terms = ("喷油速率", "喷油流量", "流出流量", "q_out", "qout")
+        needle_lift_terms = ("针阀升程", "有效面积", "喷嘴流量")
+        if not affirmatively_binds_source(q1, "图2", q1_outflow_terms):
+            issues.append("5.1 未明确把题面图2作为问题一喷油流出速率的数据源。")
+        if affirmatively_binds_source(q1, "附件2", q1_outflow_terms):
+            issues.append("5.1 把附件2针阀升程曲线作为问题一喷油速率来源，违反题面图2数据源约束。")
+        q2_source_locked = affirmatively_binds_source(q2, "附件2", needle_lift_terms)
+        if not q2_source_locked:
+            issues.append("5.2 未明确使用附件2针阀升程计算喷嘴流量/有效面积。")
+        q3_compact = re.sub(r"\s+", "", q3).lower()
+        q3_explicit_source = affirmatively_binds_source(q3, "附件2", needle_lift_terms)
+        q3_inherits_q2 = any(
+            not re.search(
+                r"(?:不(?:沿用|继承|承接|采用|使用)|未(?:沿用|继承|承接|采用|使用)|"
+                r"不得|不能|不可|并非|而非|不应|禁止|避免)",
+                q3_compact[max(0, match.start() - 12) : match.end() + 24],
+            )
+            for match in re.finditer(
+                r"(?:沿用|继承|承接|基于|采用|使用).{0,18}(?:问题2|问题二|q2)|"
+                r"(?:问题2|问题二|q2).{0,18}(?:所有)?(?:参数|模型|针阀|喷嘴)",
+                q3_compact,
+            )
+        )
+        if not (q3_explicit_source or (q2_source_locked and q3_inherits_q2)):
+            issues.append("5.3 未明确使用附件2针阀升程模型，或正向继承已锁定的问题二模型。")
+        timing_terms = any(
+            token in q3_compact for token in ("错相", "错峰", "相位差", "时间差", "offset")
+        )
+        comparison_terms = any(
+            token in q3_compact for token in ("比较", "对比", "权衡", "备选", "目标值")
+        )
+        if not ("同步" in q3_compact and timing_terms and comparison_terms):
+            issues.append("5.3 未比较同步与至少一种错相/错峰双喷嘴时序策略，也未给出可复核的选择依据。")
     return {
         "passed": not issues,
         "triggered": True,
+        "profiles": [
+            name
+            for name, active in (
+                ("optical_interference", optical_triggered),
+                ("high_pressure_pipe", high_pressure_triggered),
+            )
+            if active
+        ],
         "issues": issues,
         "false_sample_claims": sorted(set(false_sample_claims)),
     }
@@ -2976,6 +4043,8 @@ def build_preflight_report(
     export_profile: str | None = None,
     claim_trace: dict | None = None,
     declared_problem_count: int | None = None,
+    editorial_policy: str | dict | None = None,
+    template_override_audit: dict[str, Any] | None = None,
 ) -> dict:
     """生成论文排版预检报告。"""
     markdown_without_code = _without_fenced_code_blocks(markdown)
@@ -3080,6 +4149,20 @@ def build_preflight_report(
     reference_sources_check = build_reference_source_trace(markdown, work_dir)
     similarity_ai_risk_check = scan_similarity_ai_risk(markdown, work_dir)
     problem_alignment_check = _check_problem_alignment(work_dir, markdown_without_code)
+    modeling_decision_check = _check_modeling_decision_approval(work_dir)
+    ai_disclosure_check = _check_ai_disclosure(work_dir, markdown, export_profile)
+    reproducibility_claims_check = _check_reproducibility_claims(work_dir, markdown)
+    editorial_quality_check = _check_editorial_quality(
+        work_dir,
+        markdown,
+        export_profile,
+        declared_problem_count,
+        editorial_policy,
+    )
+    formal_format_gate = bool(
+        editorial_quality_check["enforced"]
+        and editorial_quality_check["reference_format"]["required"]
+    )
     semantic_layout_check = review_markdown(
         markdown,
         appendix_pagebreak_in_pdf=get_export_profile_config(
@@ -3095,6 +4178,25 @@ def build_preflight_report(
         "images": _with_severity(images_check, _image_check_severity(images_check)),
         "placeholders": _with_severity(placeholders_check, "fail"),
         "abstract": _with_severity(_check_abstract(markdown), "fail"),
+        "abstract_structure": _with_severity(
+            editorial_quality_check["abstract_structure"],
+            "fail" if formal_format_gate else "info",
+        ),
+        "reference_format": _with_severity(
+            editorial_quality_check["reference_format"],
+            "fail" if formal_format_gate else "info",
+        ),
+        # This internal policy is only a hard gate when explicitly enforced.
+        # Keep successful/smoke reports in the readable non-hard-check section.
+        "editorial_quality": {
+            **editorial_quality_check,
+            "severity": (
+                "fail"
+                if editorial_quality_check["enforced"]
+                and not editorial_quality_check["passed"]
+                else "info"
+            ),
+        },
         "keywords": _with_severity(_check_keywords(markdown), "conditional"),
         "sections": _with_severity(sections_check, _sections_check_severity(sections_check)),
         "internal_paths": _with_severity(_check_internal_paths(markdown), "fail"),
@@ -3123,6 +4225,11 @@ def build_preflight_report(
             figure_result_consistency_check, "fail"
         ),
         "problem_alignment": _with_severity(problem_alignment_check, "fail"),
+        "modeling_decision": _with_severity(modeling_decision_check, "fail"),
+        "ai_disclosure": _with_severity(ai_disclosure_check, "fail"),
+        "reproducibility_claims": _with_severity(
+            reproducibility_claims_check, "fail"
+        ),
         "reference_relevance": _with_severity(reference_relevance_check, "fail"),
         "reference_sources": _with_severity(reference_sources_check, "conditional"),
         "similarity_ai_risk": _with_severity(similarity_ai_risk_check, "conditional"),
@@ -3138,11 +4245,22 @@ def build_preflight_report(
         "conclusion": _conclusion_for_status(status),
         "generated_at": datetime.datetime.now().isoformat(),
         "source_sha256": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+        "export_profile": get_export_profile_config(export_profile).key.value,
+        "template_override": dict(template_override_audit or {"active": False}),
         "checks": checks,
     }
 
 
 def _format_check_detail(check: dict) -> str:
+    if "policy" in check and "body_char_count" in check:
+        assets = check.get("result_assets", {})
+        return (
+            f"policy={check['policy']}; official_rule=false; "
+            f"body_chars={check['body_char_count']}/{check['min_body_chars']}; "
+            f"result_figures={assets.get('figure_count', 0)}/{assets.get('min_figures', 0)}; "
+            f"result_tables={assets.get('table_count', 0)}/{assets.get('min_tables', 0)}; "
+            f"missing_questions={check.get('missing_questions', []) or 'none'}"
+        )
     if "profile" in check and "expected" in check:
         return f"profile={check['profile']}; expected={check['expected']}"
     if "count" in check and "bad_lines" in check:
@@ -3160,8 +4278,15 @@ def _format_check_detail(check: dict) -> str:
         )
     if "matches" in check:
         return ", ".join(check["matches"]) or "none"
+    if "paragraph_count" in check:
+        return (
+            f"paragraphs={check['paragraph_count']}/{check.get('min_paragraphs', 0)}; "
+            f"chars={check.get('char_count', 0)}"
+        )
     if "char_count" in check:
-        return f"chars={check['char_count']} ({check['min_chars']}-{check['max_chars']})"
+        if "min_chars" in check and "max_chars" in check:
+            return f"chars={check['char_count']} ({check['min_chars']}-{check['max_chars']})"
+        return f"chars={check['char_count']}"
     if "items" in check:
         return f"count={check['count']}; items={', '.join(check['items'])}"
     if "headings" in check and "missing" in check:
@@ -3274,6 +4399,8 @@ def prepare_paper_markdown(
     md_filename: str = "res.md",
     export_profile: str | None = None,
     declared_problem_count: int | None = None,
+    editorial_policy: str | dict | None = None,
+    template_override_audit: dict[str, Any] | None = None,
 ) -> dict:
     """后处理 res.md 并写入 paper_preflight_report.json。"""
     md_path = os.path.join(work_dir, md_filename)
@@ -3296,6 +4423,8 @@ def prepare_paper_markdown(
         markdown = f.read()
 
     markdown = normalize_markdown_headings(markdown)
+    markdown, normalised_heading_blank_lines = normalize_heading_blank_lines(markdown)
+    markdown, semantic_layout_fixups = normalize_markdown_semantics(markdown)
     markdown, removed_duplicate_reference_fragments = (
         remove_duplicate_reference_fragments(markdown)
     )
@@ -3354,8 +4483,20 @@ def prepare_paper_markdown(
         export_profile=export_profile,
         claim_trace=claim_trace,
         declared_problem_count=declared_problem_count,
+        editorial_policy=editorial_policy,
+        template_override_audit=template_override_audit,
     )
     fixups = {}
+    if semantic_layout_fixups["normalised_main_section_headings"]:
+        fixups["normalised_main_section_headings"] = semantic_layout_fixups[
+            "normalised_main_section_headings"
+        ]
+    if semantic_layout_fixups["removed_empty_reference_markers"]:
+        fixups["removed_empty_reference_markers"] = semantic_layout_fixups[
+            "removed_empty_reference_markers"
+        ]
+    if normalised_heading_blank_lines:
+        fixups["normalised_heading_blank_lines"] = normalised_heading_blank_lines
     if removed_missing_images:
         fixups["removed_missing_images"] = removed_missing_images
     if removed_duplicate_reference_fragments:

@@ -36,11 +36,20 @@ dependencies = [
     "scipy>=1.15.2",
     "seaborn>=0.13.2",
     "semanticscholar>=0.10.0",
-    "sentence-transformers>=2.2.0",
     "shap>=0.51.0",
     "statsmodels>=0.14.4",
     "uvicorn[standard]>=0.34.0",
     "websocket>=0.2.1",
+]
+
+[project.optional-dependencies]
+# Semantic embedding is not imported by the active workflow.  Keep its large
+# PyTorch dependency opt-in so the CPU-only Docker backend remains buildable;
+# deployments that wire semantic retrieval can install `.[semantic-search]`.
+semantic-search = [
+    "sentence-transformers>=2.2.0",
+]
+modeling-extensions = [
     "xgboost>=3.0.0",
 ]
 
@@ -123,4 +132,3 @@ docstring-code-format = false
 # This only has an effect when the `docstring-code-format` setting is
 # enabled.
 docstring-code-line-length = "dynamic"
-

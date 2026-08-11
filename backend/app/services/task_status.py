@@ -12,6 +12,7 @@ TaskStatus = Literal[
     "pending",
     "running",
     "waiting_review",
+    "waiting_quality_review",
     "resuming",
     "finalizing",
     "interrupted",

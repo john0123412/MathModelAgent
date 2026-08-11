@@ -7,6 +7,11 @@ import hashlib
 import re
 import zipfile
 from app.utils.log_util import logger
+from app.tools.export_template_override import (
+    MANIFEST_FILENAME as TEMPLATE_OVERRIDE_MANIFEST,
+    TemplateOverrideError,
+    load_export_template_override,
+)
 
 SCHEMA_VERSION = "1.2"
 SOURCE_NAME = "MathModelAgent"
@@ -34,6 +39,7 @@ _EXCLUDED_DIR_NAMES = {
     "recovery_review_pages",
     "review",
     "screenshots",
+    "template_overrides",
 }
 
 # Files which may contain credentials, runtime state or internal review data are
@@ -49,10 +55,12 @@ _SUPPORT_EXCLUDED_FILENAMES = {
     "pdf_visual_check.json", "submission_audit_report.json", "submission_audit_report.md",
     "final_acceptance_report.json", "final_acceptance_report.md", "tex_export_status.json",
     "res.md", "res.json", "res.docx", "res.pdf", "paper_appendix_config.json",
+    TEMPLATE_OVERRIDE_MANIFEST,
     "test_save.png",
 }
 _SUPPORT_EXCLUDED_DIR_NAMES = _EXCLUDED_DIR_NAMES | {
     "internal", "review", "screenshots", "recovery_review_pages", "latex_project",
+    "template_overrides",
 }
 _SECRET_NAME_RE = re.compile(
     r"(?:^|[_\-.])(secret|secrets|token|password|passwd|credential|credentials|api[_-]?key|apikey|key|keys|cookie|private|id[_-]?rsa)(?:$|[_\-.])",
@@ -74,6 +82,8 @@ def support_material_category(filename: str) -> str | None:
     base = os.path.basename(filename).lower()
     if base in _SUPPORT_EXCLUDED_FILENAMES or _SECRET_NAME_RE.search(base):
         return None
+    if base == "ai工具使用详情.pdf":
+        return "AI工具使用详情"
     return _SUPPORT_EXT_CATEGORY.get(os.path.splitext(base)[1])
 
 
@@ -119,6 +129,33 @@ def _file_sha256(path: str) -> str | None:
     except OSError:
         return None
     return digest.hexdigest()
+
+
+def _read_json(path: str) -> dict | None:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _task_template_override_audit(work_dir: str) -> dict:
+    """Bind the candidate to a checked task template when one is installed."""
+    manifest_path = os.path.join(work_dir, TEMPLATE_OVERRIDE_MANIFEST)
+    if not os.path.lexists(manifest_path):
+        return {"active": False}
+    export_status = _read_json(os.path.join(work_dir, "export_status.json")) or {}
+    docx_status = _read_json(os.path.join(work_dir, "docx_export_status.json")) or {}
+    profile = str(
+        export_status.get("export_profile") or docx_status.get("export_profile") or ""
+    )
+    if not profile:
+        raise RuntimeError("任务级模板覆盖存在，但候选清单无法确定当前导出 profile")
+    try:
+        return load_export_template_override(work_dir, profile)["audit"]
+    except TemplateOverrideError as exc:
+        raise RuntimeError(f"任务级模板覆盖无效，拒绝生成候选清单: {exc}") from exc
 
 
 def _artifact_hashes(work_dir: str) -> tuple[str | None, dict[str, str]]:
@@ -310,6 +347,7 @@ def write_candidate_manifest(
     """
     support_manifest = _write_support_materials(work_dir)
     artifact_set_id, artifact_hashes = _artifact_hashes(work_dir)
+    template_override = _task_template_override_audit(work_dir)
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "source": SOURCE_NAME,
@@ -317,6 +355,7 @@ def write_candidate_manifest(
         "generated_at": datetime.datetime.now().isoformat(),
         "artifact_set_id": artifact_set_id,
         "artifact_hashes": artifact_hashes,
+        "template_override": template_override,
         # Exactly one primary file is exported for external submission.  Keep
         # this explicit even when the file is absent so an auditor can reject
         # an incomplete candidate instead of guessing from directory contents.

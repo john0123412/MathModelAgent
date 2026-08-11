@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 import os
+import sys
 from app.routers import modeling_router, ws_router, common_router, files_router
 from app.utils.log_util import logger
 from fastapi.responses import JSONResponse
@@ -33,9 +34,19 @@ async def lifespan(app: FastAPI):
 
     PROJECT_FOLDER = "./project"
     os.makedirs(PROJECT_FOLDER, exist_ok=True)
-    recovered_tasks = recover_stale_task_statuses()
-    if recovered_tasks:
-        logger.warning("已将 {} 个遗留活动任务标记为 interrupted: {}", len(recovered_tasks), ", ".join(recovered_tasks[:20]))
+    # ``python -m unittest discover app/tests`` imports test modules by their
+    # bare names, so ``app.tests.__init__`` is not guaranteed to run first.
+    # Never let a host-side TestClient mutate the Docker service's shared
+    # work_dir merely because the process inherited the production default.
+    is_unittest_process = "unittest" in sys.modules
+    recovery_enabled = settings.RECOVER_STALE_TASKS_ON_STARTUP and not is_unittest_process
+    if recovery_enabled:
+        recovered_tasks = recover_stale_task_statuses()
+        if recovered_tasks:
+            logger.warning("已将 {} 个遗留活动任务标记为 interrupted: {}", len(recovered_tasks), ", ".join(recovered_tasks[:20]))
+    else:
+        reason = "unittest 测试进程" if is_unittest_process else "配置开关"
+        logger.info("当前进程因 {} 禁用遗留任务恢复，不改写共享工作目录状态", reason)
 
     yield
     logger.info("Stopping MathModelAgent")

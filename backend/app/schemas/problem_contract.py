@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 from pydantic import BaseModel, Field
@@ -197,8 +198,35 @@ _VAGUE_PROMPT_AS_NUMERIC_BASIS = re.compile(
 
 
 _LINEAR_PROGRAMMING_TERMS = ("线性规划", "最优生产", "最大利润", "最小成本", "资源约束", "机器时间", "人工时间")
+_LINEAR_PROGRAMMING_METHOD_RE = re.compile(
+    r"(?:线性规划|整数规划|混合整数|单纯形|\blinprog\b|\blinear\s+program(?:ming)?\b|\bsimplex\b)",
+    re.IGNORECASE,
+)
 _DATA_ANALYSIS_TERMS = ("数据集", "样本", "预测", "回归", "统计分析", "数据分析", "附件")
 _PHYSICAL_SIMULATION_TERMS = ("压力", "流量", "油管", "仿真", "动力学", "微分方程", "温度", "浓度", "运动")
+
+_Q1_OUTFLOW_TERMS = ("喷油速率", "喷油流量", "流出流量", "q_out", "qout")
+_Q23_NEEDLE_LIFT_TERMS = ("针阀升程", "有效面积", "喷嘴流量")
+_Q3_TIMING_TERMS = ("同步", "错相", "错峰", "相位", "时序", "时间差", "offset")
+_Q3_COMPARISON_TERMS = ("比较", "对比", "扫描", "权衡", "选择", "备选")
+_TWO_INJECTOR_RE = re.compile(r"(?:第二个|两个|双|(?:再)?增加一个)喷油嘴")
+_SOURCE_NEGATION_RE = re.compile(
+    r"(?:不(?:读取|采用|使用|作为|来自|取自|依据|参考)|未(?:读取|采用|使用)|"
+    r"不得|不能|不可|并非|而非|不应|禁止|避免|仅(?:讨论|说明|提及))"
+)
+
+# Keep the plan-level check in sync with the source-backed diagnostic gate in
+# ``execution_validation.py``.  A requirement only activates its first group;
+# ordinary prose such as "记录输出轨迹和单位" therefore remains compatible.
+_STRUCTURED_DIAGNOSTIC_REQUIREMENT_GROUPS = (
+    (("求解器", "solver", "状态", "status"), ("求解器", "solver", "状态", "status")),
+    (("松弛", "slack"), ("松弛", "slack")),
+    (("质量", "守恒", "balance", "residual"), ("质量", "守恒", "balance", "residual")),
+    (("双喷嘴", "双喷油器", "injector"), ("双喷嘴", "双喷油器", "injector")),
+    (("减压阀", "溢流阀", "relief"), ("减压阀", "溢流阀", "relief")),
+    (("可行性", "feasible"), ("可行性", "feasible")),
+    (("步长", "网格", "step", "grid"), ("步长", "网格", "step", "grid")),
+)
 
 
 def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
@@ -208,6 +236,105 @@ def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
 def _append_requirement_once(contract: ProblemContract, requirement: ContractRequirement) -> None:
     if requirement.key not in {item.key for item in contract.required_requirements}:
         contract.required_requirements.append(requirement)
+
+
+def affirmatively_binds_source(
+    text: str,
+    source: str,
+    terms: tuple[str, ...],
+) -> bool:
+    """Return whether a clause positively binds a named source to given terms.
+
+    Mere token co-occurrence is not a provenance statement: ``图2不采用，q_out
+    由外推得到`` used to satisfy the Q1 source lock.  Keep the check clause
+    scoped, reject a nearby negative relation, and require an actual data-use
+    verb.  This helper is also used by the paper preflight so planning and
+    manuscript validation cannot disagree about what counts as a source lock.
+    """
+    normalized_source = source.lower()
+    for clause in re.split(r"[。；;\n]", text):
+        compact = re.sub(r"\s+", "", clause).lower()
+        if (
+            normalized_source not in compact
+            or not any(term in compact for term in terms)
+        ):
+            continue
+        source_index = compact.find(normalized_source)
+        context = compact[max(0, source_index - 24) : source_index + 80]
+        if _SOURCE_NEGATION_RE.search(context):
+            continue
+        escaped_source = re.escape(normalized_source)
+        if re.search(
+            rf"(?:由|来自|读取|采用|使用|根据|依据|取自|参照|沿用|继承|承接).{{0,36}}{escaped_source}",
+            compact,
+        ):
+            return True
+        if re.search(
+            rf"{escaped_source}.{{0,36}}(?:给出|提供|用于|作为|计算|驱动|输入|数据源|曲线|读取|采用|使用)",
+            compact,
+        ):
+            return True
+    return False
+
+
+def _affirmatively_uses_attachment2_for_q1_outflow(text: str) -> bool:
+    """Return whether Q1 wrongly binds Attachment 2 to its outflow curve."""
+    return affirmatively_binds_source(text, "附件2", _Q1_OUTFLOW_TERMS)
+
+
+def _affirmatively_uses_figure2_for_q1_outflow(text: str) -> bool:
+    return affirmatively_binds_source(text, "图2", _Q1_OUTFLOW_TERMS)
+
+
+def _affirmatively_uses_attachment2_for_needle_lift(text: str) -> bool:
+    return affirmatively_binds_source(text, "附件2", _Q23_NEEDLE_LIFT_TERMS)
+
+
+def _mentions_q3_timing_comparison(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text).lower()
+    timing_count = sum(term in compact for term in _Q3_TIMING_TERMS)
+    has_comparison = any(
+        term in compact
+        and not re.search(rf"(?:不|未|无需|无需再){re.escape(term)}", compact)
+        for term in _Q3_COMPARISON_TERMS
+    )
+    has_sync = "同步" in compact and not re.search(
+        r"(?:不(?:采用|使用|考虑)?|未(?:采用|使用|考虑)?).{0,12}同步", compact
+    )
+    alternate_terms = ("错相", "错峰", "相位差", "时间差", "offset")
+    has_alternate = False
+    for term in alternate_terms:
+        for match in re.finditer(re.escape(term), compact):
+            context = compact[max(0, match.start() - 36) : match.end()]
+            if re.search(
+                r"(?:不(?:比较|采用|使用|考虑)?|未(?:比较|采用|使用|考虑)?|"
+                r"无需(?:比较|采用|使用|考虑)?|唯一采用同步|仅采用同步|固定为同步).{0,24}"
+                + re.escape(term),
+                context,
+            ):
+                continue
+            has_alternate = True
+            break
+        if has_alternate:
+            break
+    return timing_count >= 1 and has_comparison and has_sync and has_alternate
+
+
+def _q3_inherits_q2_model_source(text: str) -> bool:
+    """Accept an explicit Q3 inheritance of the already source-locked Q2 model."""
+    compact = re.sub(r"\s+", "", text).lower()
+    patterns = (
+        r"(?:沿用|继承|承接|基于|采用|使用).{0,18}(?:问题2|问题二|q2)",
+        r"(?:问题2|问题二|q2).{0,18}(?:所有)?(?:参数|模型|针阀|喷嘴)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, compact)
+        if match is None:
+            continue
+        context = compact[max(0, match.start() - 12) : match.end() + 24]
+        if not _SOURCE_NEGATION_RE.search(context):
+            return True
+    return False
 
 
 def build_problem_contract(problem_text: str) -> ProblemContract:
@@ -319,6 +446,30 @@ def build_problem_contract(problem_text: str) -> ProblemContract:
                 source="题面原文的问题一控制量与 150 MPa 过渡要求",
             )
         )
+    if (
+        "图2" in normalized
+        and "喷油嘴B处向外喷油的速率" in normalized
+        and "问题1" in normalized
+    ):
+        _append_requirement_once(
+            contract,
+            ContractRequirement(
+                key="q1_injection_rate_source_figure2",
+                label="问题一喷油流出速率必须来自题面图2，不得以附件2针阀升程曲线替代",
+                evidence_terms=["图2", "喷油速率"],
+                source="题面问题一明确指定的喷油速率图2",
+            ),
+        )
+    if "附件2" in normalized and "针阀升程与时间的关系" in normalized:
+        _append_requirement_once(
+            contract,
+            ContractRequirement(
+                key="q23_needle_lift_source_attachment2",
+                label="问题二和问题三的针阀升程/喷嘴有效面积必须使用附件2，并与问题一图2数据源分离",
+                evidence_terms=["附件2", "针阀升程"],
+                source="题面问题二的针阀升程附件说明及问题三对问题二模型的继承",
+            ),
+        )
     for match in _PRESSURE_TARGET.finditer(normalized):
         target_pressure = float(match.group(1))
         target_key = f"{target_pressure:g}".replace(".", "_")
@@ -331,13 +482,29 @@ def build_problem_contract(problem_text: str) -> ProblemContract:
                 source="题面原文的压力目标",
             ),
         )
-    if re.search(r"(?:第二个|两个|双)喷油嘴", normalized):
+    if _TWO_INJECTOR_RE.search(normalized):
         contract.required_requirements.append(
             ContractRequirement(
                 key="two_injectors",
                 label="问题三须按两个喷油嘴建模；不得把新增喷油嘴改写为新增泵",
                 source="题面原文的第二喷油嘴条件",
             )
+        )
+        _append_requirement_once(
+            contract,
+            ContractRequirement(
+                key="q3_injector_timing_comparison",
+                label="问题三须比较至少两种双喷嘴同步/错相/错峰时序策略，并给出选择依据",
+                evidence_terms=["喷油嘴", "相位", "比较"],
+                source="题面要求调整两个同规律喷油嘴的喷油器和供油策略",
+                expected_artifact_kinds=["result_table"],
+                acceptance_metric_terms=[
+                    "phase_offset_ms",
+                    "alternate_phase_offset_ms",
+                    "strategy_objective",
+                    "alternate_phase_objective",
+                ],
+            ),
         )
     if "减压阀" in normalized:
         contract.required_requirements.append(
@@ -431,6 +598,17 @@ def _plan_sections(plan: object) -> dict[str, str]:
     if isinstance(questions_solution, dict):
         return {str(key): str(value) for key, value in questions_solution.items()}
     if isinstance(plan, dict):
+        persisted_model_plan = plan.get("model_plan")
+        if isinstance(persisted_model_plan, dict):
+            persisted_subtasks = persisted_model_plan.get("subtasks")
+            if isinstance(persisted_subtasks, dict):
+                return {
+                    str(key): json.dumps(value, ensure_ascii=False, sort_keys=True)
+                    for key, value in persisted_subtasks.items()
+                }
+        persisted_questions = plan.get("questions_solution")
+        if isinstance(persisted_questions, dict):
+            return {str(key): str(value) for key, value in persisted_questions.items()}
         return {str(key): str(value) for key, value in plan.items()}
     return {}
 
@@ -505,7 +683,17 @@ def _subtask_plans(plan: object) -> dict[str, object]:
         return dict(model_plan.subtasks)
     if hasattr(plan, "subtasks"):
         return dict(getattr(plan, "subtasks"))
+    if isinstance(plan, dict):
+        model_plan = plan.get("model_plan", plan)
+        if isinstance(model_plan, dict) and isinstance(model_plan.get("subtasks"), dict):
+            return dict(model_plan["subtasks"])
     return {}
+
+
+def _plan_field(value: object, field: str, default: object = None) -> object:
+    if isinstance(value, dict):
+        return value.get(field, default)
+    return getattr(value, field, default)
 
 
 def _conclusion_forcing_metrics(plan: object, question: str) -> list[str]:
@@ -513,11 +701,11 @@ def _conclusion_forcing_metrics(plan: object, question: str) -> list[str]:
     if not _OPEN_ENDED_DECISION_QUESTION.search(question):
         return []
     issues: list[str] = []
-    for metric in getattr(plan, "acceptance_metrics", []):
-        comparator = str(getattr(metric, "comparator", ""))
-        target = float(getattr(metric, "target", 0))
+    for metric in _plan_field(plan, "acceptance_metrics", []) or []:
+        comparator = str(_plan_field(metric, "comparator", ""))
+        target = float(_plan_field(metric, "target", 0))
         metric_text = " ".join(
-            str(getattr(metric, field, ""))
+            str(_plan_field(metric, field, ""))
             for field in ("key", "label", "description")
         )
         forces_direction = (
@@ -538,23 +726,21 @@ def _conclusion_forcing_metrics(plan: object, question: str) -> list[str]:
             and target in {0, 1}
         )
         if forces_direction or forces_significance or forces_boolean_outcome:
-            issues.append(
-                f"{getattr(metric, 'key', 'unknown')} {comparator} {target:g}"
-            )
+            issues.append(f"{_plan_field(metric, 'key', 'unknown')} {comparator} {target:g}")
     return issues
 
 
 def _unsupported_empirical_thresholds(plan: object) -> list[str]:
     """Find empirical quality targets whose numeric cutoff has no stated basis."""
     issues: list[str] = []
-    for metric in getattr(plan, "acceptance_metrics", []):
+    for metric in _plan_field(plan, "acceptance_metrics", []) or []:
         identity_text = " ".join(
-            str(getattr(metric, field, "")) for field in ("key", "label")
+            str(_plan_field(metric, field, "")) for field in ("key", "label")
         )
-        description = str(getattr(metric, "description", ""))
+        description = str(_plan_field(metric, "description", ""))
         metric_text = f"{identity_text} {description}"
-        comparator = str(getattr(metric, "comparator", ""))
-        target = float(getattr(metric, "target", 0))
+        comparator = str(_plan_field(metric, "comparator", ""))
+        target = float(_plan_field(metric, "target", 0))
         if not _EMPIRICAL_QUALITY_METRIC.search(metric_text):
             continue
         if _NEUTRAL_COMPLETION_METRIC.search(identity_text):
@@ -570,7 +756,7 @@ def _unsupported_empirical_thresholds(plan: object) -> list[str]:
         # 假设变成必须通过的 acceptance contract，造成无解或伪造证据。
         if _THRESHOLD_BASIS.search(description) and not _VAGUE_PROMPT_AS_NUMERIC_BASIS.search(description):
             continue
-        issues.append(f"{getattr(metric, 'key', 'unknown')} {comparator} {target:g}")
+        issues.append(f"{_plan_field(metric, 'key', 'unknown')} {comparator} {target:g}")
     return issues
 
 
@@ -580,6 +766,17 @@ def _matching_plan_keys(
     questions: dict[str, str | int] | None,
 ) -> list[str]:
     """Select only questions whose text matches a generic domain profile."""
+    conventional_key = next(
+        (
+            f"ques{number}"
+            for number in range(1, 10)
+            if requirement.key.startswith(f"q{number}_")
+            or requirement.key.startswith(f"q{number}")
+        ),
+        None,
+    )
+    if conventional_key is not None:
+        return [conventional_key] if conventional_key in subtasks else []
     if not requirement.question_keywords or not questions:
         return list(subtasks)
     matched = [
@@ -599,14 +796,18 @@ def _structured_requirement_covered(
     plan: object,
 ) -> bool:
     """Validate profile declarations against machine-readable ModelPlan fields."""
-    artifacts = getattr(plan, "expected_artifacts", [])
-    artifact_kinds = {getattr(item, "kind", "") for item in artifacts}
+    artifacts = _plan_field(plan, "expected_artifacts", []) or []
+    artifact_kinds = {_plan_field(item, "kind", "") for item in artifacts}
     metric_text = " ".join(
-        f"{getattr(item, 'key', '')} {getattr(item, 'label', '')} {getattr(item, 'description', '')}"
-        for item in getattr(plan, "acceptance_metrics", [])
+        f"{_plan_field(item, 'key', '')} {_plan_field(item, 'label', '')} {_plan_field(item, 'description', '')}"
+        for item in (_plan_field(plan, "acceptance_metrics", []) or [])
     )
     method_text = " ".join(
-        [getattr(plan, "method", ""), *getattr(plan, "constraints", []), *getattr(plan, "inputs", [])]
+        [
+            str(_plan_field(plan, "method", "")),
+            *[str(item) for item in (_plan_field(plan, "constraints", []) or [])],
+            *[str(item) for item in (_plan_field(plan, "inputs", []) or [])],
+        ]
     )
     if not set(requirement.expected_artifact_kinds).issubset(artifact_kinds):
         # A coordinator may split one optimization task into a primary solve
@@ -631,7 +832,69 @@ def _structured_requirement_covered(
         return bool(method_text.strip()) and bool(metric_text.strip())
     if requirement.plugin == "physical_simulation":
         return bool(method_text.strip()) and bool(metric_text.strip())
-    return True
+    required_metric_terms = [term.lower() for term in requirement.acceptance_metric_terms]
+    return bool(method_text.strip()) and all(
+        term in metric_text.lower() for term in required_metric_terms
+    )
+
+
+def _has_structured_artifact_fields(subtasks: dict[str, object]) -> bool:
+    """Distinguish a schema-backed ModelPlan from compatibility dictionaries."""
+    return bool(subtasks) and all(
+        _plan_field(subtask, "expected_artifacts", None) is not None
+        and _plan_field(subtask, "acceptance_metrics", None) is not None
+        for subtask in subtasks.values()
+    )
+
+
+def _is_linear_programming_subtask(subtask: object) -> bool:
+    """Return whether the declared method is an LP-style optimization solve.
+
+    ``numerical`` is appropriate for discretisation/refinement diagnostics, but
+    not for a linear program merely because its solution is numeric. Keeping
+    this check on the method text avoids imposing an optimization profile on a
+    generic problem that happens to mention a resource or a profit elsewhere.
+    """
+    method = _plan_field(subtask, "method", "")
+    return isinstance(method, str) and bool(_LINEAR_PROGRAMMING_METHOD_RE.search(method))
+
+
+def _structured_diagnostic_metric_gaps(subtask: object) -> list[str]:
+    """Find explicit diagnostic requirements with no declared metric support.
+
+    This is intentionally a plan-level check: it binds a requirement to the
+    ModelPlan's metric ``key``/``label``/``description`` before Coder executes
+    anything. Runtime source-backed evidence remains the responsibility of
+    ``execution_validation.py``.
+    """
+    profile = str(_plan_field(subtask, "diagnostic_profile", "")).lower()
+    if profile not in {"simulation", "optimization"}:
+        return []
+    requirements = _plan_field(subtask, "diagnostic_requirements", [])
+    if not isinstance(requirements, list):
+        return []
+    metric_texts = [
+        " ".join(
+            str(_plan_field(metric, field, ""))
+            for field in ("key", "label", "description")
+        ).lower()
+        for metric in (_plan_field(subtask, "acceptance_metrics", []) or [])
+    ]
+    gaps: list[str] = []
+    for raw_requirement in requirements:
+        if not isinstance(raw_requirement, str) or not raw_requirement.strip():
+            continue
+        lowered_requirement = raw_requirement.lower()
+        for requirement_tokens, metric_tokens in _STRUCTURED_DIAGNOSTIC_REQUIREMENT_GROUPS:
+            if not any(token.lower() in lowered_requirement for token in requirement_tokens):
+                continue
+            if not any(
+                any(token.lower() in metric_text for token in metric_tokens)
+                for metric_text in metric_texts
+            ):
+                gaps.append(raw_requirement.strip())
+            break
+    return gaps
 
 
 def validate_modeler_plan(
@@ -651,6 +914,10 @@ def validate_modeler_plan(
     violations: list[str] = []
     missing: list[str] = []
     subtasks = _subtask_plans(plan)
+    sections = _plan_sections(plan)
+    active_question_keys = expected_question_keys or {
+        key for key in sections if re.fullmatch(r"ques[1-9]\d*", key)
+    }
     if expected_question_keys is not None:
         actual_keys = set(subtasks) if subtasks else {
             key for key in getattr(plan, "questions_solution", plan if isinstance(plan, dict) else {})
@@ -664,6 +931,37 @@ def validate_modeler_plan(
             violations.append("出现未拆解的正式问题计划: " + ", ".join(extra_keys))
     for key, subtask in subtasks.items():
         question = str((questions or {}).get(key, ""))
+        diagnostic_profile = _plan_field(subtask, "diagnostic_profile", "not_applicable")
+        if (
+            _is_linear_programming_subtask(subtask)
+            and diagnostic_profile not in {"optimization", "not_applicable", None, ""}
+        ):
+            violations.append(
+                f"{key} 的方法明确为线性规划，却声明 diagnostic_profile={diagnostic_profile!r}；"
+                "线性规划及其资源敏感性重求解必须使用 optimization，"
+                "以登记求解器状态、可行性和松弛量等诊断。"
+            )
+        for metric in _plan_field(subtask, "acceptance_metrics", []) or []:
+            label = " ".join(
+                str(_plan_field(metric, field, ""))
+                for field in ("key", "label", "description")
+            ).lower()
+            comparator = str(_plan_field(metric, "comparator", "")).lower()
+            target = _plan_field(metric, "target", None)
+            if (
+                any(term in label for term in ("守恒", "平衡", "conservation", "balance"))
+                and comparator == "eq"
+                and target in {0, 0.0, 1, 1.0}
+            ):
+                violations.append(
+                    f"{key} 将守恒/平衡诊断强制为精确 {target}；"
+                    "守恒残差必须实际落表并作为诊断报告，不能在无题面容差时充当硬验收阈值"
+                )
+        diagnostic_gaps = _structured_diagnostic_metric_gaps(subtask)
+        if diagnostic_gaps:
+            missing.append(
+                f"{key} 诊断要求缺少对应验收指标关键词：" + "；".join(diagnostic_gaps)
+            )
         forcing_metrics = _conclusion_forcing_metrics(subtask, question)
         if forcing_metrics:
             violations.append(
@@ -695,6 +993,23 @@ def validate_modeler_plan(
                     )
     for requirement in contract.required_requirements:
         if requirement.plugin and subtasks:
+            matching_keys = _matching_plan_keys(requirement, subtasks, questions)
+            uncovered = [
+                key
+                for key in matching_keys
+                if not _structured_requirement_covered(requirement, subtasks[key])
+            ]
+            if uncovered:
+                missing.append(requirement.label + "（未满足：" + ", ".join(uncovered) + "）")
+            continue
+        if (
+            subtasks
+            and _has_structured_artifact_fields(subtasks)
+            and (
+                requirement.expected_artifact_kinds
+                or requirement.acceptance_metric_terms
+            )
+        ):
             matching_keys = _matching_plan_keys(requirement, subtasks, questions)
             uncovered = [
                 key
@@ -747,10 +1062,49 @@ def validate_modeler_plan(
                 and bool(re.search(r"150\s*(?:MPa|兆帕)", normalized, re.IGNORECASE))
                 and all(re.search(rf"{second}(?:秒|s)", normalized, re.IGNORECASE) for second in (2, 5, 10))
             )
+        elif requirement.key == "q1_injection_rate_source_figure2":
+            if active_question_keys and "ques1" not in active_question_keys:
+                continue
+            q1_text = sections.get("ques1", text)
+            covered = _affirmatively_uses_figure2_for_q1_outflow(q1_text)
+            if _affirmatively_uses_attachment2_for_q1_outflow(q1_text):
+                violations.append("问题一把附件2针阀升程曲线作为喷油速率/流出流量来源；题面要求使用图2")
+        elif requirement.key == "q23_needle_lift_source_attachment2":
+            relevant_keys = [
+                key for key in ("ques2", "ques3")
+                if not active_question_keys or key in active_question_keys
+            ]
+            if not relevant_keys:
+                continue
+            q2_source_locked = _affirmatively_uses_attachment2_for_needle_lift(
+                sections.get("ques2", "")
+            )
+            uncovered_keys = []
+            for key in relevant_keys:
+                explicitly_locked = _affirmatively_uses_attachment2_for_needle_lift(
+                    sections.get(key, "")
+                )
+                inherited_from_q2 = (
+                    key == "ques3"
+                    and q2_source_locked
+                    and _q3_inherits_q2_model_source(sections.get("ques3", ""))
+                )
+                if not (explicitly_locked or inherited_from_q2):
+                    uncovered_keys.append(key)
+            covered = not uncovered_keys
+            if uncovered_keys:
+                missing.append(
+                    requirement.label + "（未满足：" + ", ".join(uncovered_keys) + "）"
+                )
+                continue
+        elif requirement.key == "q3_injector_timing_comparison":
+            if active_question_keys and "ques3" not in active_question_keys:
+                continue
+            covered = _mentions_q3_timing_comparison(sections.get("ques3", text))
         elif requirement.key.startswith("target_pressure_"):
             covered = all(term in normalized for term in requirement.evidence_terms)
         elif requirement.key == "two_injectors":
-            covered = bool(re.search(r"(?:第二个|两个|双)喷油嘴", normalized))
+            covered = bool(_TWO_INJECTOR_RE.search(normalized))
         elif requirement.key == "fixed_geometry_and_timing":
             covered = bool(
                 re.search(r"(?:L\s*=\s*)?500\s*mm", normalized, re.IGNORECASE)

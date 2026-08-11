@@ -19,7 +19,7 @@ import re
 from pathlib import Path
 
 
-_RESULT_FILE = re.compile(r"^(ques\d+)_results\.csv$", re.IGNORECASE)
+_RESULT_FILE = re.compile(r"^(ques\d+)_results?\.csv$", re.IGNORECASE)
 _STATUS_COLUMNS = {
     "是否达标",
     "是否通过",
@@ -70,7 +70,7 @@ def build_execution_quality_review(work_dir: str) -> dict:
     sources: list[dict] = []
     failed_subtasks: set[str] = set()
 
-    for path in sorted(root.glob("ques*_results.csv"), key=lambda item: item.name):
+    for path in sorted(root.glob("ques*_result*.csv"), key=lambda item: item.name):
         match = _RESULT_FILE.fullmatch(path.name)
         if match is None:
             continue

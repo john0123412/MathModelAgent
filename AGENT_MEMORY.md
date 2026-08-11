@@ -1,6 +1,98 @@
 # AGENT_MEMORY
 
+- [2026-08-11] 真实格式不足的根因是仓库公共 `cumcm2026`/`cumcm2025` profile 只能随代码和内置模板一起更新，无法安全绑定某个任务实际取得的最新中文竞赛包；把猜测的华数杯或旧 DOCX 样式写成 CUMCM 官方口径也会造成误导。当前已新增任务级模板覆盖路径：`python -m app.tools.export_cli template install --task-id <task_id> --profile cumcm2025|cumcm2026 --docx-template <official.docx> --format-contract <format.json>` 将安全 DOCX 复制到任务目录并以 SHA-256 绑定，`template show` fail closed 校验，随后必须用 `task-refresh` 在无 Provider 条件下重建 Markdown/DOCX/PDF/LaTeX、预检、视觉检查、审计和候选清单。当前用户指定的内部基线为摘要正文/正文宋体小四（12pt）、单倍行距、摘要至少两段、关键词后正文另起页、正文 10--20 页、参考文献必需；它固定标记 `official_rule=false`，不是 CUMCM 官方条款。模板/合同拒绝符号链接、外链关系、宏/嵌入对象、重复 ZIP 条目、任意 TeX 与弱化门禁；DOCX/PDF/预检/视觉检查/candidate manifest/final acceptance 必须绑定同一模板与合同 SHA-256，否则 FAIL。已补充可复制的合同示例 `docs/md/竞赛版式合同示例.json`；当前仅在临时目录完成导入/导出/审计回归，未对真实任务执行导入、刷新或 Provider 调用，不能把该路径报告为真实任务端到端验收通过。
+
 ## 当前稳定状态
+
+- [2026-08-11] 真实任务 `20260810-073046-5ad7409f50644a2211d4e67828ca043e` 在完成一次无 Provider 的版式重排后，新增 DOCX 字面 Markdown 标题门禁首次写入提交审计时把附录 B 源代码中的 `# Cell` 误判为正文泄漏，使 `submission_audit_report.json=FAIL`、最终技术状态暂为 `TECHNICAL_FAIL`。PDF 全文检查并未发现正文 `###`，冻结结果、模型数值、Markdown、DOCX、PDF均未因此改写。当前处置：将 DOCX 扫描范围限制在附录 B 源程序代码之前，添加回归后只重写审计/候选清单/最终验收报告；不得把本次误报当作论文质量通过或忽略。
+
+- [2026-08-11] 上述 2025A 版式问题已完成受控修复与重验：后处理会在代码围栏外补足 ATX 标题前的空行；PDF 全页视觉检查会拒绝正文中字面 `#`/`##`/`###` 标题，提交审计会对 DOCX 正文作同类检查并在附录 B 源程序代码处停止扫描。一次 `presentation_reflow_pending_export` 仅版式重排（不调用 Provider、不改 Writer 正文、代码、CSV/XLSX、执行证据或冻结结果）重新生成 Markdown/DOCX/PDF/LaTeX 及审计。实际复核：PDF 72 页、正文 14 页、摘要 725 字符、正文 5825 内容字符、8 图 8 表；预检、PDF 视觉、DOCX 门禁、提交审计、candidate manifest 和最终技术验收均为 `PASS` / `TECHNICAL_PASS`。该技术结论仍不替代队员对正式竞赛规则、匿名和提交版式的人工确认。
+
+- [2026-08-03] 修正 profile 与摘要后，候选论文预检已通过并写入 PASS，但全链路脚本在 DOCX 开始前停止：从候选目录调用 md_2_docx 使 common_utils 以当前目录重复拼接 project/work_dir/task_id，报 FileNotFoundError。没有生成 DOCX/PDF/LaTeX 或后续审计；已生成的 PASS 预检仍绑定当前 res.md。当前处置：保持脚本和候选内容不变，改从容器后端根 /app 调用同一脚本，使 get_work_dir 使用正确的项目根。
+
+- [2026-08-03] 隔离候选完整导出已实际进入论文预检，但在 PDF/DOCX 前被硬门禁拦截：一是调用方传入 ExportProfile.CUMCM2026 枚举对象，预检严格期望字符串 cumcm2026；二是摘要将 100 MPa、150 MPa 两个稳态开启时长并列在同一句，冻结事实匹配器将 0.258 ms 错附着到 150 MPa 指标。预检报告已写为 FAIL，未生成或覆盖 DOCX、PDF、LaTeX、视觉报告、审计或候选清单。当前处置：传入 profile.value，并把两个指标拆为各自带标签和数值的独立句，随后重新跑受控预检。
+
+- [2026-08-03] 隔离候选的完整导出脚本首次在 import 阶段停止：codex_export_pipeline.py 从 app.services.task_status 导入不存在的 update_task_status，实际公开函数为 write_task_status。该错误发生在预检之前，未生成或覆盖 paper_preflight、DOCX、PDF、LaTeX、审计或候选清单。当前处置：仅修正状态写入函数名，随后启动同一受控全链路导出。
+
+- [2026-08-03] 论文组装脚本通过 AST 编译后第三次在写文件前被自设摘要质量断言停止：从冻结指标绑定生成的摘要去空白后为 384 字，不满足本候选要求的 450–650 字。未产生 res.md/res.json，不影响冻结结果、执行证据或导出。当前处置：只补充已经由执行和独立复核支持的建模、检验过程描述，不加入新的数值或外部引用；再从冻结结果重新组装。
+
+- [2026-08-03] 同一候选在转义首个下标后第二次论文组装仍在写文件前停止：同一 f-string 的显示公式把 \frac{{\rm d}\rho}{{\rm d}P} 中的右花括号漏写为双花括号，报 SyntaxError: f-string: single '}' is not allowed。该错误仍未改变 res.md、res.json、冻结结果或任何导出产物。当前处置：停止逐个试错，先以 AST/编译检查定位本文件所有 f-string 花括号，再一次性修复后重跑。
+
+- [2026-08-03] 隔离候选 20260803-codex-mimo-2019a 的论文组装脚本首次在 Python 解析阶段退出：codex_assemble_paper.py 把 LaTeX 下标 $q_{in},q_{out},q_v$ 直接置于 f-string，未转义花括号，报 SyntaxError: f-string: expecting a valid expression after '{'。该错误发生在写入 res.md / res.json 前，既未改写冻结结果、执行证据，也未触发导出。当前处置：仅转义公式中的 LaTeX 花括号，随后从同一冻结结果重新组装论文；不修改任何数值 CSV。
+
+- [2026-08-03] 隔离候选 `20260803-codex-mimo-2019a` 的首次可信 evidence 绑定未进入任何验证逻辑即退出：从候选工作目录执行 `uv run python codex_finalize_evidence.py` 时 Python 路径不含后端包根，报 `ModuleNotFoundError: No module named 'app'`。执行器生成的 Q1/Q2/Q3 数值文件、执行 manifest、冻结结果和论文产物均尚未由该命令写入或改变，不能将此运行时入口错误报告为通过。当前处置：保留候选数值文件，改从容器 `/app` 后端项目根运行同一受控绑定器；不改写任何结果 CSV。
+
+- [2026-08-03] 上述候选从 `/app` 以脚本路径调用仍第二次在 import 前报同一 `ModuleNotFoundError`；已验证交互式 `cd /app && uv run python -c 'import app'` 能解析包，说明 `uv run python <候选脚本>` 会将脚本目录置于导入路径而非后端根。两次均未执行 `record_execution_evidence`、未写 execution manifest 或冻结结果。当前处置：停止重复该入口，使用显式 `PYTHONPATH=/app` 的差异化项目根调用；仍不修改数值结果文件。
+
+- [2026-08-03] 候选的差异化 evidence 绑定已成功进入后端 `record_execution_evidence`，但 ques1 被契约拒绝：`modeler_plan.json` 的 `eq` 在受控协议中映射为 `abs_diff_lte,tolerance=0`，而执行器结果表把两个计划指标的目标显示为 `=3`、`=2`，被严格识别为比较符不一致。未写成功 execution manifest、冻结结果或论文；数值仿真本身未被否定。当前处置：仅将这些表格目标展示改为等价的纯数值 `3`、`2`（让可信绑定器承载比较符），随后从源代码重跑所有产物并重新登记哈希。
+
+- [2026-08-03] 在临时隔离副本做源码干净重跑时，`uv run` 因 `/tmp` 不在项目树内而未加载项目依赖，在 `matplotlib` 导入前报 `ModuleNotFoundError`；候选目录和其已 PASS 的 execution manifest/frozen results 未被改写。当前处置：不再从临时目录调用自动项目发现，改用容器已验证的 `/app/.venv/bin/python` 对全新副本执行同一源码，再对数值 CSV 哈希做比较。
+
+- [2026-08-03] 同一真实任务的唯一人工 `low_cost_algorithm` 恢复也失败：恢复后的 MiMo Coder 在 Q1 中先后消耗执行额度读取/检查旧文件，仅新建参数审计 CSV，未在本轮重建 `ques1_results.csv`、时序、过渡表、绘图数据和图；随后三次 evidence 仍分别因来源未更新、来源未更新、指标/比较符/来源不可复查被拒，于 `13:32:17` 再次标记 `failed`。此恢复授权已耗尽，不能再对该任务续传。当前处置：不再尝试同一 Coder 工作流；将以隔离的新候选路径由 Codex 实际执行、记录来源和独立复核，MiMo 仅继续承担已成功的计划/后续写作协作，不把旧任务的任何中间数值移作结论。
+
+- [2026-08-03] 针对上述熔断，在用户授权的完整真题闭环范围内，Codex 以 `recovery_mode=low_cost_algorithm` 触发本任务唯一一次人工执行恢复：恢复说明明确限定 Q1/Q3 使用一次新执行重建所有契约产物和 source-backed 仿真诊断，Q2 不因该恢复被豁免，仍保留给后续执行质量复核定向返修。恢复授权已写入 checkpoint；若该有限恢复仍失败，不再对同一任务重复 Coder 续传。
+
+- [2026-08-03] 全长真实 MiMo 任务 `20260803-124001-318963165070f6fa18dc8537d894a9fe` 在系统自动定向返修 Q1 后仍连续三次被受控 evidence 拒绝，第三次理由为 simulation 未带可复核诊断要求/指标；工作流于 `13:25:29` 按连续失败熔断为 `failed`，`targeted_repair_attempts=2`，无质量复核、冻结、Writer 或最终论文产物。Q2 仍保留已知单位错误，不能将任何当前 CSV/PASS 作为可交付结论。当前处置：停止对该失败任务的同样 Coder evidence 请求；先只读定位 evidence 提交/恢复的根因，依照恢复规程在有明确、可测试的差异化方案前不再原样续传或新建重复任务。
+
+- [2026-08-03] 三问形式 evidence 汇总后的 `execution_validation_report.json` 触发自动定向返修：Q1 的本轮 evidence 重新提交被拒，因为 `ques1_plot_data.csv` 与 `ques1_pressure_control.png` 未由该轮实际执行更新；checkpoint 因此进入 `workflow_state=repairing`、`targeted_repair_attempts=1`。该失败只涉及 Q1 evidence 新鲜度，不得借自动返修报告中 Q2 未被列出而把已知的 Q2 单位错误视为解除；当前处置：允许系统只完成其 Q1 产物刷新，随后仍由 Codex 在质量复核层人工退回 Q2/Q3 的数值问题。
+
+- [2026-08-03] 同一任务的问题三在补齐控制表后首次提交正式 evidence 仍被拒：申报 `metrics[5].value=20.0` 无法由所声明 `source_path` 复查。Coder 随后补齐来源并使总 `execution_validation.json` 回到 `PASS`、保存 ques3 快照；该 PASS 不消除问题二仍含错误单位的事实，Q3 不得在问题二修复和独立复核前冻结或写入论文。
+
+- [2026-08-03] 对问题二的只读对抗复核还发现：旧代码以 `500 ms` 粗筛/末 `200 ms` 选取 `omega=0.5 r/s`，却以 `2 s`/后 `1 s` 统计写正式结果；旧粗筛均值约 `90.8236 MPa` 与正式均值 `6835.5548 MPa` 本已相互矛盾。当前参数审计表也未落盘步长、模拟时长、稳态窗口、插值设置、守恒相对残差或跨时长统计差异。当前处置：问题二返修不能只替换一个实参或沿用 `0.5 r/s`，必须在修正量纲后重跑粗筛—局部细化—长时域验证，重新选择候选并将收敛/守恒诊断写入可复查来源。
+
+- [2026-08-03] 同一任务的问题三首次主仿真已经实际运行并写出 `ques3_results.csv` 与时序 CSV（日志中的中间值约为均值 `99.2584 MPa`），但随后写控制表时引用未定义的局部变量 `prv_op` / `prv_cp`，触发 `NameError`，该执行单元未完整结束，不能作为成功的 Q3 证据或冻结来源。当前处置：允许 Coder 在同一受控反思轮中只补齐该变量定义/控制表并重新运行必要输出；问题二仍因独立单位错误而被否决，待执行质量复核时必须与其依赖结论一并定向返修。
+
+- [2026-08-03] 对同一任务问题二的返修产物进行只读复核后发现，`execution_validation.json` 虽被重新写为 `PASS`、`ques2_parameter_audit.csv` 也已补齐，但计算源代码仍是 `dVdt = chamber_volume_deriv(theta, omega_rps)`，并未按已登记的单位根因改为 `omega_rad_ms`；`ques2_results.csv` 因此仍是均值 `6835.5548 MPa`、峰值 `19852.8283 MPa` 的错误旧数值。该次“PASS”只证明文件新鲜度/证据契约通过，不能证明模型正确，且已错误启动问题三。当前处置：阻断将 ques2/Q3 作为有效结论；对同一 Coder 发出带源码定位、结果否决和重算要求的受控返修，之后必须核对源代码、文件修改时间和新数值三者同时变化，方可重新提交证据。
+
+- [2026-08-03] 同一真实任务的问题二在 Codex 单位返修指令入队后，Coder 的首次受控 evidence 提交被拒：契约要求本轮实际新建或更新 `ques2_parameter_audit.csv`，但当前仅有旧名 `ques2_input_parameter_audit.csv`，故来源新鲜度不成立；紧接着用于补齐审计文件的一次短代码执行又报错（待从容器消息记录提取具体异常）。这两项事件均发生在当前错误的 `6835.5548 MPa` 结果仍未重算之前，不能视为数值返修已完成。当前处置：先保留并读取错误上下文，要求同一 Coder 在一次可复现计算中先生成契约名参数审计文件、再以 `omega_rad_ms` 重跑全部 Q2 时序和结果，最后重新提交 evidence；未完成前不得冻结问题二或进入问题三。
+
+- [2026-08-03] 同一真实任务的问题二首次时序仿真虽无运行异常，但数值输出明显违背“尽量稳定在 100 MPa”：`ques2_results.csv` 报告均值 `6835.5548 MPa`、峰值 `19852.8283 MPa`。只读审查 notebook 后定位直接根因：`simulate_omega()` 已计算 `omega_rad_ms = omega_rps*2π/1000`，但调用 `chamber_volume_deriv(theta, omega_rps)` 时误传了转/秒，后者公式需要 rad/ms；对固定 `omega_rps` 而言使柱塞容积变化率放大 `1000/(2π)≈159.15` 倍。当前处置：禁止以该结果提交/冻结；在同一任务中仅修正该单位传参、重跑问题二的粗筛/局部细化/验证，并重新登记正式 evidence 后才允许进入问题三。
+
+- [2026-08-03] 同一问题一的第二次受控 evidence 提交亦被拒绝：`transition_schedule_rows=3` 仍不可从源文件复查，且 simulation 计划缺少可复核诊断指标。Coder 随后补齐结果行和诊断来源，第三次提交实际生成 `execution_validation.json` 且 `status=PASS`，并保存 ques1 变量快照。该 PASS 只说明当前 formal evidence 链可追溯；结果表仍报告约 `20.61%–20.73%` 的质量守恒残差，必须在后续 Codex 独立数学复核中判断或定向返修，不能据此声称物理模型已通过。
+
+- [2026-08-03] 同一真实任务 `20260803-124001-318963165070f6fa18dc8537d894a9fe` 在问题一性能返修后写出了 `ques1_results.csv`、四个时序 CSV、控制表和图，但首次受控执行证据仍被拒绝：`metrics[11].value=0.0004` 以及若干 `constraints.actual` 值未能在所声明 `source_path` 中逐项复查。该次拒绝表示数值证据的来源/可追溯性不合格，不能将现有 CSV 当作已验证结论。当前处置：保留计算产物但只允许 Coder 追加或改写对应的指标/约束源表与 evidence 记录，使每个申报值可由当前文件复算或定位；随后重新走正式 ques1 执行验证，未通过前不得冻结。
+
+- [2026-08-03] 全长 2019 CUMCM A 真实 MiMo 任务 `20260803-124001-318963165070f6fa18dc8537d894a9fe` 在 Codex 审核建模方案后，Coder 的问题一首次全量仿真于可信本机 300 秒看门狗超时并被中断，内核已从变量快照恢复。直接根因已只读确认：`dt=0.001 ms` 的时序积分在约 500 个单向阀候选开启时长以及多个 2/5/10 秒过渡工况上重复执行，并在每一步反复进行密度数值积分，导致不必要的超大计算量；未生成 ques1 正式结果、执行验证、冻结或论文产物，不能视为通过。当前处置：不新建或原样重试任务；由 Codex 向同一 Coder 注入仅返修 ques1 的“解析/插值缓存 + 分层粗筛—局部细化 + 步长收敛证据”指引，保留已验证 EDA 和快照，重跑后再检查实际结果。
+
+- [2026-08-03] 新建全长 2019 CUMCM A 真实 MiMo 任务 `20260803-124001-318963165070f6fa18dc8537d894a9fe` 已保存原题与附件1/2/3，并由 Coordinator 正确拆为三问；但 Modeler 在四次受限 schema/题面契约纠错后仍把无题面容差的守恒诊断强制为精确 `1.0` 硬阈值，且遗漏固定油管几何/喷油频率的参数表与量纲核验，任务在 Coder 前终止为 `failed`。无 notebook、执行 manifest、冻结或论文产物，不能视为验收通过。当前处置：不新建或原样重试题目；由 Codex 在同一任务的 `codex-modeling` 受控接口提交可验证、无编造阈值的结构化计划，经过正常人工审批后才进入 Coder，后续所有执行/冻结/导出门禁保持不变。
+
+- [2026-08-03] Docker 本机可信执行镜像重建验收：`docker compose build --pull` 与 `docker compose up -d --wait` 均成功，redis/backend/frontend 全部 healthy，前端首页与 `/api/docs` 均为 200，`/api/status` 为 `running`，容器内 Pandoc、XeLaTeX、Noto CJK、Ruff 和 495 项单测（1 项环境跳过）均实际通过。重建后发现 `backend/.env.dev` 的显式 `LLM_OUTBOUND_PROXY` 对四个 Agent 均报 `RemoteProtocolError`，同一受控无凭据直连探测返回 HTTP 404，说明直连路由可达而旧代理失效；`docker-compose.local-execution.yml` 现默认以空 `LLM_OUTBOUND_PROXY` 覆盖该旧值。若可信本机确需代理，只能在根目录 `.env` 显式设 `MMA_LLM_OUTBOUND_PROXY` 后重启；基础/remote Compose 保持使用 `backend/.env.dev` 的 `LLM_OUTBOUND_PROXY`。未读取或输出任何 API Key，且没有活动任务时才重建 backend。
+
+- [2026-08-03] 真实回归闭环：新隔离轻量线性规划任务 `20260803-095511-66d0d985e21b2e8d7a6adb9ffe68a4f9` 已完成并保持 `completed`。已修复三项根因：非正式 EDA 不再要求正式 execution evidence、`/tasks` 如存在持久化状态则不再错误降级为 `interrupted`、`quesN_plot` 图注会规范化为自然语言；同时修正了第10页“机器时间—利润”敏感性图与正文语义不一致的问题，未改写冻结数值或执行证据。以只复制 `notebook.ipynb` 的隔离新 Python 进程顺序编译/执行 25 个代码单元，全部成功并重新生成结果文件（镜像未安装 Jupyter，故此为等价干净进程重跑而非 Jupyter kernel 重跑）；独立顶点枚举得到 Q1 `(40,20), Z=2200`、Q2 `(140/3,50/3), Z=7100/3`、增益/影子价格 `50/3`。当前 execution validation、质量复核、preflight、语义版式、PDF visual、严格官方字体 submission audit、candidate manifest 和最终技术验收均为 PASS/`TECHNICAL_PASS`；候选主产物哈希匹配。当前源码已由本地与 Docker 的 495 项单测（各 1 项环境跳过）及 Ruff 实测通过。无外部引用可核验，未伪造文献；提交平台规则、匿名/诚信声明与最终主观排版仍由队员确认。
+
+- [2026-08-03] 新镜像上的隔离轻量线性规划真实验收任务 `20260803-095511-66d0d985e21b2e8d7a6adb9ffe68a4f9` 已完成 EDA、ques1、ques2、敏感性分析及受控执行证据，`execution_validation.json=PASS`、冻结与质量复核检查点均已生成；但 `/tasks` 将任务误显示为 `interrupted`，而任务目录的 `task_status.json` 和 `checkpoint.json` 均为 `waiting_quality_review`。根因是 `common_router.list_tasks()` 的合法状态白名单遗漏 `waiting_quality_review`，使其在无最终论文产物时被错误降级。当前处置：先补状态呈现回归测试并修复白名单，再执行质量复核与后续导出；不得将该显示误报当作真实任务失败。
+
+- [2026-08-03] 同一任务的非正式敏感性分析阶段曾出现一次代码执行错误，系统随后在受限反思轮次内自动修正并成功写出敏感性结果；未改写正式 Q1/Q2 的受控证据、执行验证或冻结结果。当前处置：在最终审批前仍须以隔离副本新内核重跑 notebook，并以当前冻结哈希复核全部正式结论。
+
+- [2026-08-03] 同一任务在首次完成导出后的 PDF 人工抽检中发现第10页图3与正文不一致：图为“机器时间—利润”局部敏感性曲线，但相邻段落仍保留 `ques2 plot` 文件名式表述并误写为可行域扩展图。自动预检、视觉扫描与提交审计当时均为 PASS，说明该问题必须由 Codex/人工语义复核补充发现。当前处置：不修改冻结数值、执行证据或源码，仅将该图的正文引用/解释改为与敏感性曲线一致的结论，然后重新生成 Markdown 后处理、DOCX、LaTeX sidecar、PDF、审计和候选清单。
+
+- [2026-08-03] 直连已验证可达后，隔离轻量线性规划任务 `20260803-093921-41bf147fae33a88373b3cdbfccea616b` 已完成 Coordinator、Codex 结构化建模复核和 7 个无错误 notebook 代码单元，并生成问题一 CSV/图；但工作流把非正式 EDA 阶段列为唯一 `required_subtasks=["eda"]`，在不存在 `execution_validation.json` 时终止为 `代码阶段 eda 未提供成功执行证据`。该任务无完成阶段、无执行 manifest、无冻结或论文产物；不能将其中间 CSV 视为通过。当前处置：不续传或重试该任务；先核对 EDA 与正式 `quesN` 的证据契约并修复回归，再新建一次受控验收。
+
+- [2026-08-03] 新镜像上的隔离轻量线性规划真实验收任务 `20260803-093534-59fde4aa60db23d2a3997d84f25127be` 在 Coordinator 首次调用阶段连续 3 次 `APIConnectionError` 后终止；任务仅留下 `task_request.json`、`problem_contract.json` 和引导审计，无 ModelPlan、代码、冻结或论文产物。Docker 服务、491 项容器回归与 Ruff 均已通过，故根因是当前 provider 出站连接而非本轮代码/镜像。当前处置：不对该任务原样重试；先走受控 Codex 接管能力或由指定决策人切换已验证 provider/路由，随后最多发起一次差异化验收。
+
+- [2026-07-28] 隔离真实任务 `20260728-103719-56e242101768fafa9a6e1386cce556cd` 的 ModelPlan 虽通过结构校验并到达 `waiting_review`，人工复核发现问题三仍将 `90–110 MPa` 写成题面外的设计范围，且以无可核验来源的“工程经验”设定 1% 质量平衡阈值。当前处置：未批准 Coder；按单次受控 `revise-modeling` 要求删除非题面阈值，只保留硬物理/题面条件和实测诊断值，修订成功后才可执行。
+
+- [2026-07-28] 真实任务 `20260728-100101-e102078e0dd6ef10ab21fa4ff20b4915` 的问题二定位到直接根因：Coder 将细步长 ODE 与大量候选参数扫描写进单次单体执行，实际运行超过本机受控 300 秒看门狗；失败单元被安全回滚，未留下可复用的成功证据。已按熔断规程停止该任务，新增 Coder 的“基准→粗筛→局部细化→证据”执行预算契约及回归测试；待镜像回归后只能以新的隔离任务重验，不能第四次续传旧任务。
+
+- [2026-07-28] 真实任务 `20260728-100101-e102078e0dd6ef10ab21fa4ff20b4915` 的问题二在本地 300 秒执行窗口内三次仍未提交成功执行证据，工作流按熔断规则终止：`execution_validation_report.json=FAIL`，仅剩问题一验证记录，不存在冻结、Writer 或最终论文产物。当前处置：禁止第四次续传；先从容器消息和问题二源码定位具体错误，修复后只能以新的隔离任务重验。
+
+- [2026-07-28] 真实任务 `20260728-100101-e102078e0dd6ef10ab21fa4ff20b4915` 的问题一大规模数值积分触发可信本地 Docker 覆盖的 120 秒看门狗；`variable_snapshot.pkl` 随后恢复 57 个变量，未冻结任何结果。当前处置：把仅用于该受控本机覆盖的单次上限调整为 300 秒（基础 remote 默认不变），再从同一 checkpoint 续传一次，避免重复相同的 120 秒失败。
+
+- [2026-07-28] 真实任务 `20260728-100101-e102078e0dd6ef10ab21fa4ff20b4915` 在批准 ModelPlan 后、任何 Coder 代码执行前被安全配置阻断：默认远程解释器未配置 `E2B_API_KEY`，且按设计不会自动降级。当前处置：仅在本机受信任 Docker 开发环境显式设定 `CODE_INTERPRETER_KIND=local` 与 `ALLOW_LOCAL_CODE_EXECUTION=true`，重建 backend 运行配置后一次受控续传该任务；这不改变生产环境默认安全策略。
+
+- [2026-07-28] 全新真实 MiMo 2019 CUMCM A 题任务 `20260728-100101-e102078e0dd6ef10ab21fa4ff20b4915` 的 Modeler 首次方案被硬校验拒绝：为 `final_pressure_deviation` 和 `average_pressure_deviation` 编造了无来源的 `0.5 MPa` 阈值。已在重试前以 `source=codex` 向 Modeler 注入“仅保留题面/附件可追溯阈值、其余记录实测诊断值”的恢复提醒；修订计划随后通过结构校验，人工复核后已放行 Coder。任务仍在真实执行，尚不可声称论文完成。
+
+- [2026-07-28] 任务 `20260728-092845-06a2a85d867083ca7c14b83e2090c34f` 的 DOCX/PDF/LaTeX/视觉检查均生成成功，但最终验收为 `TECHNICAL_FAIL`：预检和提交审计均因本地相似性扫描把多张 Markdown 图片链接截断为“重复句子”而分别给出 `CONDITIONAL_PASS` / `WARN`。当前处置：修复扫描时排除图片 Markdown，并新增回归；该调整不弱化真实正文的重复句检查。
+
+- [2026-07-28] 任务 `20260728-092845-06a2a85d867083ca7c14b83e2090c34f` 在 PDF 与 LaTeX sidecar 已成功生成后，手工 DOCX 收尾的首次调用因错误引用不存在的 `app.utils.file_utils` 而立即退出，未写入 DOCX/manifest 或改变任务状态。当前处置：改用实际定义 `md_2_docx` 的 `app.utils.common_utils` 完成一次受控收尾；不得将该路径错误报告为导出失败。
+
+- [2026-07-28] 真实 MiMo 轻量线性规划任务 `20260728-092845-06a2a85d867083ca7c14b83e2090c34f` 的 Writer 两次论文预检失败后停止相同重试：一是将“若采用遗传算法……不及线性规划”的未采用比较误作已实现算法，二是把连续线性规划的分数解直接写成“件”。当前处置：收紧算法声明识别为仅对实际采用的算法要求代码证据，并将该任务正文的分数产量改为“连续生产当量”；随后以新镜像重跑预检和完整导出验收，不伪造冻结或执行证据。
+
+- [2026-07-28] 真实 MiMo 轻量线性规划任务 `20260728-084449-540f700d636b35968bb25caf7938bed8` 已实际完成 Coordinator/Modeler 并进入 `waiting_review`，但 Codex 独立复算发现 ques2 的 ModelPlan 将 `2x+y=110, x+2y=80` 错算为 `(50,10)`、利润 2300、增量 100；正确交点为 `(140/3,50/3)`、新利润 `7100/3≈2366.67`、增量 `500/3≈166.67`。当前处置：不审批错误方案，按人工门禁经一次受控 `revise-modeling` 退回，并要求代数与顶点枚举一致后才进入 Coder。
+
+- [2026-07-28] 真实 MiMo 轻量线性规划验收任务 `20260728-054207-e20b1340922912f8c37c48132e0b3df1` 首次在 Coordinator 远程调用前失败：一次请求超时后，DNS/SSRF 校验连续报告“LLM Base URL 主机无法解析”。为此在 Compose backend 固定两个公共 DNS 后恢复；Coordinator 已实际成功返回，证明该次真实 MiMo Key/Responses 调用曾被接受，但 Modeler 的首次调用在 90 秒外层限时后超时，随后解析短暂失败，任务终止且未产生模型、执行或论文产物。新任务 `20260728-055654-d1112a49ffb5a668907b0c3033c87d69` 将单次限时提升至 300 秒后仍在 Coordinator 调用中失败；实测容器可建 TCP 连接但对 MiMo endpoint 的 TLS handshake 超时。已实现并配置受控 `LLM_OUTBOUND_PROXY`（不继承环境代理、仍保留 URL/SSRF 校验），容器经本机代理对 MiMo 的 OPTIONS 仍发生 TLS 超时/连接重置，而同一代理可访问 Google。`POST /modeling/{task_id}/guidance` 的 `source=codex` 已返回 queued 并写入带 SHA-256 的审计记录，但失败任务没有运行中的 Coder，不能将该“已排队”冒充为“已消费”。当前处置：停止继续向这两个失败任务发起调用，待本机代理或网络提供可完成 MiMo TLS 的路由后，才用全新任务执行 Modeler、Codex 注入消费、冻结与论文导出验收。
+
+- [2026-07-28] Docker Desktop 容器、后端镜像、项目卷和网络均已删除，无法从 Docker 备份还原；仅保留前端镜像与非完整 BuildKit 缓存。后端 Dockerfile 已改为官方 Debian HTTPS 源、带有限重试并将 CJK/TeX 依赖分三批安装，解决原 HTTP 大包连接失败及一次性 apt 安装被 OOM 终止的问题。默认镜像还将未接入主工作流的 `sentence-transformers` 与仅由 Coder 可选算法使用的 `xgboost` 移为 `semantic-search` / `modeling-extensions` extras，避免 Linux 默认解析隐式下载 Torch/CUDA/NCCL；基础镜像保留 SciPy、scikit-learn、statsmodels 和完整 Pandoc/XeLaTeX/CJK 导出链路。重建后 `redis`、`backend`、`frontend` 均 healthy，`/` 与 `/api/docs` 为 200，`/api/status` 报 `running/local/ready`；容器内规定的 42 项回归和 `ruff check app` 通过。完整真实建模任务尚未在本轮提交，不能以此烟雾测试替代执行证据、冻结和论文导出验收。
 
 - [2026-07-27] 已合并执行验证与论文预检的四项回归修复：压力目标必须有题面或 ModelPlan 可追溯阈值，缺少波动阈值时强制记录实测峰峰值；绝对压力上限不能再被误当作波动上限；不受支持的 `le/ge` 比较符会被拒绝并引导改用 `lte/gte`；`result_consistency` 在冻结事实没有显式 aliases 时会保留数值变体，避免把正确的“最大利润提升至 2266.67 元”误报为与原始 2200 元冲突。合并前定向回归 127 项与 `ruff check app` 已通过。Docker Server 已恢复可用，但尚未重建镜像或重跑任务 `20260726-151904` / `20260726-155823`；后者的端到端确认仍待受控续传或新建验收任务。
 
@@ -452,7 +544,7 @@
 - `backend/app/tools/pdf_visual_checker.py`
   - PDF 后验视觉检查。
   - 检查 A4、非空、文本可提取、20MB 文件大小、摘要首页、无目录、
-    正文 30 页以内、物理边缘越界和 CUMCM 2.5cm 内容边距风险
+    正文 20 页以内（当前用户指定的内部基线）、物理边缘越界和 CUMCM 2.5cm 内容边距风险
     （允许少量字形 bbox 容差），并扫描全文页的 A4 尺寸与承诺书/编号页/
     参赛队号等身份字段。
 - `backend/app/templates/export_profiles/`
@@ -744,3 +836,88 @@ uv run python scripts/smoke_pdf_export.py
 - [2026-07-22] 针对本机没有 E2B 却被显式 `-f docker-compose.yml -f docker-compose.override.yml` 命令绕过持久 local 默认的问题，已确认根目录 gitignored `.env` 保留 `COMPOSE_FILE=docker-compose.yml;docker-compose.override.yml;docker-compose.local-execution.yml`，普通 `docker compose` 现在稳定选择 `local/allowed/ready`。`docker-local-execution.ps1` 新增显式 `UseRemote`，并把旧 `RestoreRemote` 降为兼容别名；二者均在改变容器前检查 Compose 中是否存在 `E2B_API_KEY`，未配置时拒绝切换且保持 local 后端不变。远程参数同时补齐 Windows override；本地状态探针改用镜像现成 venv，避免 uv 缓存初始化差异。真实 Jupyter 探针成功计算42，子内核UID=10001并完成清理；无 E2B 的 remote 切换探针按预期返回非零，随后 `/status.code_execution` 仍为 `ready/local/local`。容器内全量467项单测通过（1项环境跳过）、Ruff通过，三服务healthy。`STARTUP.md`、`.env.example` 已同步本机默认与显式remote边界；导出/模板行为未变化，无需更新其它模板文档。
 
 - [2026-07-22] 为避免 Writer 生成 `res.md` 后只通过硬规则而漏掉 PDF 书签/标题语义问题，新增非阻断 `semantic_layout_review`：扫描代码围栏之外的 Markdown 标题，检查 CUMCM 主章节应为 H1、摘要/小节/子小节层级、重复标题、附录分页提示及空 `{}` 引用标记；结果写入任务目录 `semantic_layout_review.json/.md`，并登记到 `paper_preflight_report.checks.semantic_layout`（severity=info，不改变主预检 PASS/FAIL）。Writer 提示词加入同一套自检提醒，候选 manifest 纳入两个语义报告文件。对最终任务 `20260722-104737-41d7194bc4d66569da5d3a053149f9a7` 的实际扫描为 `WARN`、8项：二/四章误用 H2、4个假设误用 H3、附录缺分页提示、正文第19行存在空引用标记；主 preflight 仍为 PASS，说明该报告用于提示和人工复核，不替代硬门禁。新增语义审查回归后，容器全量469项单测通过（1项环境跳过）、Ruff通过，三服务 healthy。
+
+- [2026-07-28] 真实 MiMo 轻量闭环任务 `20260728-084449-540f700d636b35968bb25caf7938bed8` 的 Coder 已实际计算出正确的 Q1/Q2 结果并使全量 execution validation 暂为 PASS；但 Q2 首次受控 execution evidence 提交被拒，原因是提交时引用的 `ques2_acceptance_metrics.csv`、`ques2_results.csv`、灵敏度图及其数据文件不是该轮代码调用新建或更新的来源。当前处置：不绕过哈希/本轮来源门禁，记录后仅允许 Coder 进行一次定向重建并重新提交证据；数值独立复算为原问题 `(40,20), 2200`，机器时间110小时为 `(140/3,50/3), 7100/3`，增益 `500/3`、影子价格 `50/3`。
+
+- [2026-07-28] 同一真实 MiMo 任务的 execution validation 和 quality review 虽为 PASS，但按源码干净重跑规程，将 `notebook.ipynb` 复制到隔离目录后用全新 Jupyter 内核按 29 个代码单元顺序执行，结果为 FAIL：第5单元 `NameError: COLORS is not defined`，第16单元 `AttributeError: module 'os' has no attribute 'pathgetsize'`，第19单元 `SyntaxError: invalid character '≤'`。这表明当前冻结结果依赖历史内核/存在未可复现源码，不能批准或导出。当前处置：退回 Coder，只修复上述源代码与执行顺序问题，然后重新受控执行、刷新证据哈希、冻结与所有导出门禁。
+
+- [2026-07-28] 上述任务的质量返修后，第二次隔离副本新内核重跑仍以相同三项旧单元错误 FAIL；返修将新代码追加到 `notebook.ipynb`（代码单元由29增至38），却没有移除或替换失效单元，因此不能恢复源码可复现性。已满足同一功能连续两次失败条件：停止原样 Coder 重试和审批/导出，转而修复 notebook 作为执行日志而非可重跑源码的链路缺陷；修复后必须重新创建一次轻量真实任务做完整验证。
+
+- [2026-07-28] 已修复上述 notebook 可复现性缺陷：本地与 E2B 解释器在代码单元返回错误时仍将诊断保留在任务消息/日志，但从可重跑 `notebook.ipynb` 移除该失败单元及其部分输出，避免“先失败后修正”的历史记录污染新内核复跑；新增序列化器与本地解释器回归。容器定向单测30项和 Ruff均通过。该行为改变了执行源码记录，后续真实任务必须从新建任务开始并完成干净重跑、重新取证、冻结和全链路导出。
+
+- [2026-07-28] 修复后新建的真实 MiMo 烟雾任务 `20260728-090936-8d85076013ead3577425ac65ec82b80f` 已完成两题实际计算、56项 execution validation PASS 与冻结，但隔离新内核按23个 notebook 代码单元重跑在第17单元报 `TypeError: list indices must be integers or slices, not str`。这不是被历史失败单元污染，而是新的顺序/变量类型依赖；当前不批准质量复核、不进入 Writer。处置：定位该单元，修复执行源码及其顺序，再重建本任务的受控证据和冻结结果。
+
+- [2026-07-28] 定位后确认第17单元本身的错误已被后续修正单元覆盖，但它仍留在 notebook；进一步确认 Docker Compose 只 bind-mount work_dir、不挂载后端源码，先前仅 `restart backend` 没有加载本次 `discard_last_code_cell` 修复（容器内该方法不存在）。因此该任务不能用于验证修复；不再复用。当前处置：重新构建后端镜像并以新任务验证失败单元不会进入可重跑源码。
+
+- [2026-07-28] 后端 `docker compose up --build -d backend` 在单次5分钟受控等待内未完成并以超时退出，未得到镜像构建成功证据；未并行或重复启动构建。当前处置：先读取 Docker 当前服务与镜像状态，确认是否留下部分构建/是否可安全续建，再做一次更长但单一的构建尝试。
+
+- [2026-07-28] 运行新镜像后的最终真实 MiMo 烟雾任务 `20260728-092845-06a2a85d867083ca7c14b83e2090c34f` 首次受控 evidence 被拒，原因是 `ques1_acceptance_metrics.csv` 未记录当前 ModelPlan 所需的 `max_constraint_violation`、`optimality_gap` 及优化诊断要求；不是求解数值失败。当前处置：不绕过门禁，允许 Coder 仅补齐与计划逐项匹配的验收/诊断来源后重提。
+
+- [2026-07-28] 同一最终烟雾任务补齐后 Q1 第二次 evidence 又被拒：声明的第7个 metric 值未能在其 `source_path` 中复查。Coder 已继续把该指标写入可追溯来源，再提交；变量快照已保存且尚未进入 Q2/Writer，当前不将此中间拒绝报告为通过。
+
+- [2026-07-28] 同一最终烟雾任务已通过55项执行验证、冻结、Codex 数学复核与6单元隔离新内核重跑；Writer 生成 `res.md/res.json` 后 paper preflight 为 FAIL，硬失败为正文声称实现 `genetic_algorithm` 而冻结/代码未提供该算法证据。相似度启发式另为 CONDITIONAL（图链接重复），不是硬失败。当前处置：不改数学结果或伪造算法证据；仅将遗传算法改写为明确的未来改进建议，重跑预检及全部导出/审计。
+
+- [2026-07-28] 上述任务的第一次定向 Writer 续传后，第二份 preflight 仍将遗传算法识别为已实现，且连续产量的“46.67件/16.67件”缺少明确理论连续解语境而为 CONDITIONAL。已满足同一论文预检连续两次失败条件，停止再次原样 Writer 续传；转而检查并修复预检规则对未来扩展算法及连续产量上下文的误判，再以冻结结果为唯一数值来源重做最小受控验收。
+
+- [2026-08-08] 新建 MiMo 轻量真实任务 `20260808-032507-da0f298bb67d01de6026c1d26c99f8f2` 已实际收到 Coordinator 的 provider 响应并保存 checkpoint；随后宿主机全量单测启动了 FastAPI `TestClient` 生命周期，错误执行“遗留任务恢复”并把容器仍在运行的任务标记为 `interrupted`。这不是 MiMo、模型计划或代码执行失败。当前处置：新增 `RECOVER_STALE_TASKS_ON_STARTUP`，测试包显式关闭该副作用并加回归；重建容器后只从现有 checkpoint 续传，不重新提交任务或伪造完成状态。
+- [2026-08-08] 同一 MiMo 任务续传后，Q1 已实际登记受控执行证据并保存变量快照；Q2 三次 `record_execution_evidence` 均被拒，原因是该数值子题未把 ModelPlan 所要求的诊断要求映射为可复核指标。第三次拒绝发生在停止请求送达前，框架已自动结束该子题并将整任务标记为 `failed`；未生成冻结结果或论文产物。当前处置：不修改或伪造证据、不再重试该任务；以拒绝报告定位 Coder 提示词/计划诊断映射缺口，补回归后才允许新任务验证。
+- [2026-08-08] 新建 MiMo 轻量真实任务 `20260808-040101-dd48ab2f8f5df20f4e3425244e0660a8` 在 EDA 快照后进入 Q1；其首次正式代码包含未转义的嵌套中文引号，报 `SyntaxError: invalid syntax`。前序 EDA 代码和变量快照均成功，任务尚未进入失败状态，Coder 已收到错误并进入一次自动反思纠正。当前处置：不手工改写任务目录、不新建/重试同一题；仅观察该一次受控纠正，并以随后成功的源码、证据哈希和冻结结果为准。
+- [2026-08-08] 同一 MiMo 任务的 Q1 首次 `record_execution_evidence` 被门禁拒绝：`optimal_profit` 在结果表中把验收 target 写为 2200，而 ModelPlan 规定 target 为 0，且缺少 `max_constraint_violation`、`vertex_optimality_check` 及对应约束证据。计算代码本身成功，系统已将精确错误反馈给当前 Coder 回合并允许一次定向重建；当前处置：不手改 CSV/哈希、不更换任务，观察该一次纠正后的新来源和受控证据结果。
+- [2026-08-08] 同一 MiMo 任务的 Q2 首次 `record_execution_evidence` 被门禁拒绝：`metrics[3].value=7.58` 未能在其声明的 `source_path` 中复查。优化诊断代码和来源文件已实际生成，失败仅为逐值来源绑定缺口；当前处置：不手工补写 source/manifest，允许当前 Coder 一次定向重建后重新提交，并以新哈希为准。
+- [2026-08-08] 同一 MiMo 任务的首次全量 final validation 为 `FAIL`：Q2 缺少 ModelPlan 承诺的 `ques2_sensitivity_results.csv`，且受控 metrics 未显式提交新最优决策变量；定向回修的首个 evidence 又因复用旧的利润图而被拒。当前处置：不绕过“本轮来源”门禁，已把计划产物、图表双来源和优化决策变量要求前置给 Coder；当前任务仍在受控回修中，未宣称完成。
+- [2026-08-08] `cumcm2026` 的 AI 使用详情预检原先只检查 PDF 文件头和大小，损坏的占位文件可绕过；现改为用 PyMuPDF 实际打开并要求至少一页，新增回归覆盖“伪 PDF 拒绝、真实 PDF 通过”。该项改变了 CUMCM 预检口径，已同步到 PDF 导出说明和最终复核清单。
+- [2026-08-08] MiMo 轻量真实任务 `20260808-040101-dd48ab2f8f5df20f4e3425244e0660a8` 已完成执行验证和冻结，但 Writer 首次论文预检为 `FAIL`，工作流按硬门禁停止候选 PDF/清单导出。根因是测试请求显式传入 `export_profile=default`，而 CUMCM 流程的 profile 硬门禁要求 `cumcm2026`；`similarity_ai_risk` 仅为 conditional。不是 MiMo、数学结果或正文硬门禁缺陷。当前处置：不改弱 profile 门禁、不手改任务结果或预检报告；重建最新容器后以 API 默认的 `cumcm2026` 新建独立烟雾任务验证。
+- [2026-08-08] 新建 `cumcm2026` MiMo 烟雾任务 `20260808-044441-07d759aa269ed2296b17ddc4431ac215` 的 Q1 首次 `record_execution_evidence` 被拒，精确原因为 `metrics[4].value=1.0 无法在 source_path 中复查`；任务尚未终态失败，Coder 已进入当前回合内的定向补正。当前处置：不手改任务目录、CSV、hash 或 manifest；只接受该轮实际更新后的来源重新验收。
+- [2026-08-08] 同一 `cumcm2026` MiMo 烟雾任务的 Q2 首次 `record_execution_evidence` 亦被拒，精确原因为 `metrics[6].value=7.58 无法在 source_path 中复查`；任务仍在当前回合内定向修正，尚未终态失败。当前处置：不手改任务目录、CSV、hash 或 manifest；只观察模型按门禁反馈生成的新来源。
+
+- [2026-08-08] 新建 `cumcm2026` MiMo 轻量真实任务 `20260808-044441-07d759aa269ed2296b17ddc4431ac215` 已在 Q1/Q2 的逐值来源回修后完成，不对执行数据、CSV、冻结结果或 hash 进行手工篡改。`execution_validation.json=PASS`、`frozen_results.json` 有效，Markdown/DOCX/PDF/LaTeX sidecar、`pdf_visual_check.json=PASS`、`submission_audit_report.json=PASS`、候选清单和 `final_acceptance_report.json=TECHNICAL_PASS` 均已实际生成；候选清单 5 个核心 artifact 哈希逐项匹配。独立精确顶点枚举得到原问题 `(40,20),2200`，机器时间 110 小时得到 `(140/3,50/3),7100/3`，增益 `500/3`、影子价格 `50/3`，与冻结值一致。将完整任务复制到容器临时目录后，用全新 Jupyter 内核按 19 个代码单元顺序重放，无代码单元错误（内核关闭时仅有 `jupyter_client` 析构警告，进程退出码仍为 0）；正文无外部参考文献条目，因此记录为“无外部引用可核验”。
+
+- [2026-08-08] 该真实任务初次 preflight 虽为 PASS，语义报告仍发现“二、问题分析”误为 H2 与 2 个空 `{}` 引用标记，不能称为完美版式。`semantic_layout_review.normalize_markdown_semantics()` 现仅在代码围栏和数学行之外，保守修正明确中文主章节层级并移除空引用标记，`prepare_paper_markdown()` 将修复计数写入 `paper_preflight_report.json.fixups`。重建 Docker 后执行受控纯导出刷新（不调用模型、不改冻结结果）使该示例的语义报告变为 PASS/0 issues，并重新生成/哈希绑定 PDF、DOCX、LaTeX、视觉检查、审计和 manifest；人工抽看 PDF 第 1、6、16 页，首页摘要、正文图表/公式和代码附录均无明显裁切、重叠或乱码。说明文件已同步至 PDF 导出说明和最终复核清单；这项语义修复不改变用户启动方式、`cumcm2026` 模板资源结构或替换流程，故模板替换指南和 export profile README 无需更新。
+
+- [2026-08-10] 真实 CUMCM 2025 A 题任务 `20260810-040149-5ddb4141b1f3a545747f4809da4f1b33` 使用 `openai-responses/mimo-v2.5`、`require_model_review=true`，首次 Coordinator 请求在有效 300 s 上限触发 `TimeoutError`，内部下一次尝试随后实际写入 Coordinator checkpoint（12:10:32）。但 `task_status.json` 始终停留在 `running`，Modeler 调用尚未产生 `modeler_plan`/`modeling_decision`；为避免无界占用，根代理于 12:12:28 下发取消，终态为 `cancelled`。Docker/Redis 健康，Base URL 公网 DNS 校验实测约 0.201 s，未读取凭据；这不是已完成的模型计划或交付。后续不得原样重复提交：先针对 MiMo 响应时延、任务阶段可观测性和单任务超时策略做有界恢复，再以新任务重新进入人工模型审批门禁。
+
+- [2026-08-10] 受控恢复任务 `20260810-041711-e04a2532e6b65641a59412bc06cb4230` 已由 MiMo 实际完成 Coordinator/Modeler 和 EDA/Q1 代码执行；人工审查发现其 Q1 中间结果把“等高度”FY1 航向错误地写成含 z 分量的三维指向假目标，得到 0 s，而独立有限圆柱视线网格复算约为 1.39165 s。更关键的是，Q1 的两次 `record_execution_evidence`（05:01:04、05:02:16）均因 simulation 诊断未映射为 source-backed metric 被拒；第二次仍是同一缺陷。按连续两次失败规程，根代理在 05:02:46 取消任务，未接受冻结/论文/导出、未原样第三次重试。后续恢复必须同时修正“无人机只在水平面选航向”的物理实现，以及让状态方程、单位、T1、几何/网格诊断逐项在本轮来源表中成为可复查 metric；先完成隔离副本验证，再由用户授权的受控路径重新执行。
+
+- [2026-08-10] 针对上述 Q1 两次 execution-evidence 拒绝，已在 ModelPlan 契约校验中增加与运行时 `execution_validation` 完全同序、首组命中语义一致的 simulation/optimization 诊断—验收指标预检：计划若要求求解器状态、松弛、守恒/平衡、双喷嘴、减压阀、可行性或步长/网格，必须先声明含对应关键词的验收指标；实际 source-backed 来源绑定仍由运行时门禁复核。新增“状态方程缺指标拒绝、state_equation_audit 通过、普通文本和仅收敛文本不误拒”回归；宿主机相关 126 项单测、Ruff 与差异检查均通过。该修复只缩短失败反馈路径，不绕过执行、冻结、人工质量复核或导出门禁；下一任务仍须由 MiMo 实际执行并按新来源验证。
+
+- [2026-08-10] 新建真实 2025 CUMCM A 题任务 `20260810-051804-7ce501112efa29e830e0c8d365e82ee3` 已真实完成一次 Coordinator 调用（5题 checkpoint）和两次 MiMo Modeler 调用，但两次结构化 ModelPlan 均被 schema 拒绝：第1次缺失完整 `model_plan` 固定字段，第2次 `ques4.acceptance_metrics[2].target` 非数值。根代理于 05:29:58 取消仍准备进行第3次自动格式重试的任务，终态 `cancelled`；未生成 modeler plan、未审批、未运行 Coder/Writer、未产生冻结结果或论文。按连续两次失败规程，不再原样请求 Modeler。后续仅允许在已有 immutable checkpoint、`require_model_review=true`、无活动任务和正常契约校验的条件下，由 Codex 提交结构化方案并重新进入 waiting_review，随后仍须人工 approve 后才可调用 MiMo Coder。
+
+- [2026-08-10] 为落实上述两次 ModelPlan 格式失败后的停止规程，Modeler 的 JSON 格式修正预算现为“首轮加一次纠正”（第二次无效即终止），不再自动发起第三次 provider 调用。`/codex-modeling` 仅扩展到严格的“已取消、无任何持久 ModelPlan/执行/快照/返修/质量状态、且 require_model_review=true”的 pre-execution checkpoint；已执行或有任何恢复痕迹的取消任务仍被 409 拒绝。接管仍走完整 schema/题面契约校验，写入 waiting_review，且必须正常 approve 后才会启动 Coder。新增相应回归，宿主机相关145项单测、Ruff、差异检查通过；这为真实 2025A 任务提供有审计的人工结构化方案接管，而非绕过门禁。
+
+- [2026-08-10] 同一真实 2025 CUMCM A 题接管任务的 Q1 首次 `record_execution_evidence` 在 05:54:36 被受控门禁拒绝：提交的若干 `1.01` 数值不在声明的来源 CSV 中，且没有覆盖已批准 ModelPlan 的状态方程审计、网格加密、水平飞行高度偏差、可复查遮蔽时长和残差记录。此前 Codex 已发现并要求纠正初始三维航向，后续源码已新增水平 `(-1,0,0)` 单元并生成中间 Q1 CSV，但其 0.1 s 网格结果（1.5 s）与已写出的加密网格（1.50/1.45/1.50 s）尚不足以作为收敛结论。当前处置：不手工改 CSV、hash 或 evidence；已向 Coder 追加严格/局部遮蔽语义、0.01/0.001 或事件定位收敛、区间端点和逐项 source-backed metric 要求，只观察一次有界的受控返修，当前未冻结、未质量审批、未进入 Writer 或导出。
+
+- [2026-08-10] 上述 2025A 任务的 Q1 第二次 `record_execution_evidence` 于 05:56:20 再次被拒绝，且失败已从数值来源转为框架契约不一致：ModelPlan/题面契约允许约束比较符 `eq`，但 execution-evidence 协议仅接受 `abs_diff_lte`、`between`、`gt/gte/lt/lte`，未将精确相等转换为可带容差的来源约束。按同一功能连续两次失败规程，根代理停止 Coder 的原样第三次尝试并取消任务；不接受任何中间 CSV、快照、证据、冻结或论文。后续先以最小兼容修复和回归测试统一 ModelPlan/执行证据比较符，再由用户授权的新任务重新验证，不能用手工篡改本任务 evidence 绕过。
+
+- [2026-08-10] 比较符兼容修复加载后的新 2025A 真实任务 `20260810-060700-99a3510d30e1444fbc8cfb452f69d96b` 已由 MiMo 完成 Coordinator（5题拆分）并实际尝试 Modeler；两次 ModelPlan 均未通过契约校验，最终为 `failed`、未生成 plan/decision、未进入 Coder。最后错误为 Q1 将 `max_constraint_violation le 0` 写成无题面/数据/基线依据的经验质量阈值，以及 Q2 要求“求解器收敛/遮蔽采样点与时间步长诊断”却未对应可复查验收指标。按连续两次 Modeler 失败规程，不再向 MiMo 发第三次同类格式修复请求；后续只允许在本任务现有 immutable checkpoint 上经 `/codex-modeling` 的 schema/题面契约校验写入明确来源与诊断的结构化计划，重新回到人工审批门禁后才可调用 MiMo Coder。
+
+- [2026-08-10] 上述 2025A 任务经 Codex 结构化计划审批后，MiMo Coder 的 Q1 首次真实代码执行在 06:25:55 报 `NameError: name 't' is not defined`：`smoke_bomb_trajectory` 内部用未传入的 `t` 计算 `dt`，调用处又把 `t_burst` 误作投放/起爆两个参数。错误单元未成为可接受计算来源，未登记 evidence、冻结或论文；框架已把错误返回当前 Coder 的一次反思回合。当前处置：不手改 task notebook/CSV，不重建或取消当前任务；仅观察这一轮有界纠正，之后必须以空内核顺序重跑、可复查 Q1 轨迹和执行证据为准。
+
+- [2026-08-10] 同一 2025A Coder 在收到“Q1基线进入Q2候选池”的定向返修后，06:40:48 开始的 Q2 基线+网格+高精度局部搜索于 06:46:02 超过本地解释器300秒上限，被 watchdog 中断；内核在 06:46:10 重建且 `snapshot_restored=false`，该超时单元已从可重跑 notebook 源码移除。结合此前 Q1 `NameError`，已构成同一任务 Coder 连续两次执行失败；按规程根代理停止自动第3次尝试并取消任务。未接受此前的零值 Q2 中间 CSV，未写 execution evidence、冻结、质量审批、Writer 或导出。后续必须把严格视线优化改成有解析/向量化几何或受限候选的可证明有界算法，并在隔离副本完成时延/可行性验证后，才允许新任务；不得只增加解释器超时或原样重试。
+
+- [2026-08-10] 为防止数值仿真/优化 Coder 再把细步长计算嵌入无界参数扫描，`CODER_PROMPT` 增加通用执行预算契约：先用向量化、缓存、事件驱动或解析约化粗筛，再对明确数量的 shortlist 做高精度复算；必须记录候选数、筛选规则、网格/时域、估算与实测耗时，并在预计超过 watchdog 时改用有界筛选或等价高效求解。该提示不改变题面、执行证据、冻结、人工质量复核或导出门禁，也不设领域经验阈值。新增提示回归；宿主机 `app.tests.test_coder_prompt` 2项、Ruff 和差异检查实际通过。下一次 2025A 任务仍须由 MiMo 实际执行，且先以独立向量化基线验证算法运行时间，不能把该提示当作数学正确性证明。
+
+- [2026-08-10] 新建真实 2025 CUMCM A 题任务 `20260810-073046-5ad7409f50644a2211d4e67828ca043e` 已由 MiMo 实际完成 Coordinator，并在 Modeler 首轮和唯一一次格式纠正后均被 ModelPlan 契约拒绝，终态 `failed`，未进入 Coder、证据、冻结、质量复核、Writer 或导出。最终拒绝项为：Q2 无依据的 `proxy_model_r2>=0.8` 经验阈值、Q5 将守恒/平衡诊断伪作精确硬阈值，以及 Q1/Q2/Q5 的诊断要求未映射到可复查验收指标。当前处置：不再向 MiMo 发第三次 ModelPlan 请求；本任务保持 pre-execution 失败状态，根代理仅用已在隔离副本执行验证且经题面契约校验的结构化 Codex 计划接管到 `waiting_review`，之后仍须人工 approve 才能调用 MiMo Coder。临时副本的 CSV/XLSX 不会复制、登记或复用为本任务证据。
+
+- [2026-08-10] 同一任务经结构化计划、人工模型审批和 MiMo Coder 的真实受控执行后，5 个子题 execution validation 与冻结结果均为 PASS，但质量审批前的隔离副本新内核顺序重跑发现 notebook 仍含冗余“超精细敏感性”草稿：27 个代码单元可执行完毕，却在错误解析 Excel 字段后写出 Q2=2.996279 s（冻结为4.577434）、Q3=0（冻结为5.714546）、Q4=2.996279（冻结为10.663451）、Q5=0（冻结为17.022487）的矛盾结论。独立、不导入任务求解器的 5440 点有限圆柱闭线段几何复算则与冻结五问结果一致（最大差约0.000133 s），且速度、投放/起爆时序、爆点高度和同机间隔均通过。当前处置：任务保持 `waiting_quality_review`，不批准 Writer/导出；仅走受控质量返修，移除或替换错误草稿、保留可重跑的唯一正确源链，并重新登记执行证据、冻结和后续导出门禁。另需检查 Coder 在敏感性阶段出现的过多回合，避免提示中的执行预算契约只约束单元而未约束整阶段。
+
+- [2026-08-10] 上述质量返修的 Q3 中，Coder 将暂时不可见的 `result1.xlsx` 误当作可自行设计的空白模板，创建了非附件字段布局后才运行正式求解器。Q3 数值输出仍为有限候选并集 5.714546 s，但该 XLSX 结构不能作为题目附件模板交付或 evidence 来源。当前处置：在其提交 Q3 evidence 前阻止放行；仅通过受控代码恢复题目原始 10 列中文字段、备注行与三弹行位，再重新运行任务内正式求解器覆盖该表和 Q3 来源。不得接受该临时模板、不得手改 evidence/hash。
+
+- [2026-08-10] 同一 Q3 模板恢复的下一次受控代码已写回 10 列字段和备注，但仍将工作表命名为 `Q3策略表`；正式任务求解器固定读取附件的 `Sheet1`，因此 `run_question("ques3")` 明确报 `Worksheet Sheet1 does not exist.`，没有产生可接受的 Q3 模板/验收来源。当前处置：不将该被捕获的错误输出当作成功、不提交空表 evidence；仅在 Coder 的门禁反馈回合将现有活动表重命名为 `Sheet1` 后再运行同一正式求解器。若再次无法完成，停止本任务的同类重试并整理失败证据。
+
+- [2026-08-10] 同一 Q3 在已把活动表改为 `Sheet1` 后，Coder 第二次受控 evidence 仍被拒：它只保存了改名空模板，没有按明确指令重新执行 `run_question("ques3")`，因此缺少 `ques3_acceptance_metrics.csv` 和有效 XLSX 数值来源。连同前一次工作表名导致的 source/evidence 缺口，已构成质量返修阶段同一 Q3 的连续两次失败；工作流随即自动将任务标记为 `failed`，根代理事后发送的 cancel 请求返回“任务不存在或已完成”，没有改变终态。未批准冻结、Writer 或导出。后续仅可由指定决策人切换已验证 provider 再尝试一次，或通过受控 Codex 候选修复/独立新任务重建正确模板、正式来源和 evidence；不得继续在当前 MiMo 会话中追加指令碰运气。
+
+- [2026-08-10] 同一 2025A 任务随后经容器内受控 Codex 候选逐题重建 Q1--Q5，五条 `record_execution_evidence` 均实际通过；Q3--Q5 的 `result1/2/3.xlsx` 分别按 immutable ModelPlan 声明路径写回，并额外通过 `Sheet1`、原始中文表头、备注行和数据行数的 CSV 结构审计，`execution_validation.json=PASS`。但旧的质量返修续传实现会在候选已经写入干净 notebook 后再次清空 notebook/快照，导致全量验证仅报 `notebook_execution: notebook 没有任何代码单元`，进而错误启动第三次 MiMo `ques3_repair`。根代理在该调用尚未完成/登记证据前立即取消，任务现为 `cancelled`、无新冻结/质量批准/Writer/导出；不得把这次自动调用或任何中间代码当作通过结果。当前处置：先为候选质量返修补齐“干净源码已准备”持久状态，确保首个候选隔离旧源、后续候选追加同一链、续传不再次清空或重放旧快照；然后仅以候选通道重新登记证据和冻结，不再调用 MiMo Q3。
+
+- [2026-08-10] 上述 2025A 任务完成候选重建、全量验证、冻结和 Codex 技术质量审批后，Writer 已实际生成 `res.md/res.json`，但 `paper_preflight_report.json=FAIL`，工作流按硬门禁停止 DOCX/PDF/LaTeX/清单导出。硬失败不是数学或冻结证据：摘要 1472 字符超过 `cumcm2026` 的1200上限；正文“改进与推广”把遗传算法、粒子群优化作为命名算法提及，算法证据门禁将其识别为未实现声明（sources 为空）。当前处置：不重跑或篡改 Q1--Q5 冻结数值，不伪造算法 evidence；先以冻结 CSV/ModelPlan 为唯一依据，修正摘要长度和未来改进的算法措辞，并同时复查 Writer 对“局部精化/最优/同机间隔”等叙述是否与真实有限策略库及题面一致，然后重新走受控论文修复、预检和全部导出门禁。
+
+- [2026-08-10] 同一真实 2025 CUMCM A题任务 `20260810-073046-5ad7409f50644a2211d4e67828ca043e` 已完成可审计的 Codex 论文候选修复闭环：新增的容器内 `paper_repair_candidate` 仅在 `frozen`、当前 preflight 为 `FAIL`、完整 Writer 阶段和冻结哈希均有效时接受完整章节替换；它先在隔离任务副本预检，再同步更新 `res.json/res.md` 与 checkpoint 的 Writer hand-off，随后 `/resume` 只走预检/导出，不初始化或调用 MiMo。该候选修正了摘要超长、未实现算法表述、固定半径下沉物理口径、全采样表面遮蔽、Q3不少于1秒间隔、Q4/Q5实际高度和“有限候选库”范围，未修改代码、CSV、XLSX、evidence 或冻结结果。最终 `execution_validation=PASS`、`execution_quality_review=PASS`、`paper_preflight=PASS`、`semantic_layout=PASS`、`pdf_visual_check=PASS`（55/55页，正文9页、附录从第11页开始）、`submission_audit=PASS`、LaTeX sidecar 编译成功、`final_acceptance=TECHNICAL_PASS`、`task_status=completed`；候选清单五个核心文件哈希绑定当前产物。隔离全新进程重跑五个候选脚本得到全部 result CSV 的字节级一致结果；独立不导入求解器的 8995 点有限圆柱复算与冻结时长最大差小于0.00004 s。人工抽看 PDF 第1、6、11页，摘要、正文公式/图和附录无裁切、重叠或乱码；DOCX 包可打开且含标题、Q5数值和5个图形关系。正文无外部引用，故记录为“无外部引用可核验”。提交前仍需队员按竞赛规则确认匿名、文件命名、上传格式和是否接受55页总PDF（正文9页、其余为附录）。
+
+- [2026-08-11] 用户对上述 2025A 候选作论文质量复核后否决其“默认范文/正式论文”定位：虽然技术链完整，正文仅 9 页、有效摘要约 371 字、正文只有 5 张同构区间条形图和 1 张符号表，55 页中的大部分是代码附录。根因是预检仅检查摘要 120--1200 字、已有图表的存在/引用和正文上限，不检查摘要首屏密度、正文下限、每问结果表/证据图覆盖或图表多样性；本次 Codex 论文候选修复又只以事实一致与预检 PASS 为目标，未设论文质量验收条件。当前处置：撤销该任务的默认示例/正式提交定位；在再次导出前实现内部 editorial quality policy、由真实冻结来源生成图表/结果表、记录候选前后质量统计，并将质量门禁接入最终验收。不得把“正文至少 10 页”等内部目标冒充为竞赛官方硬规则。
+
+- [2026-08-11] 在上述 2025A 的展示资产重建中，首次运行新增的只读 CSV→图表脚本于首张图渲染时因 `Axes.scatter()` 参数位置错误退出（`TypeError: got multiple values for argument 's'`）；尚未写入任何执行证据、冻结结果或论文正文。当前处置：先修正生成脚本并在隔离/正式来源一致条件下重新生成展示资产，检查每张图的来源哈希和视觉可读性后，才允许进入受控论文编辑返修；不把该失败运行当作资产验证通过。
+
+- [2026-08-11] 修正首图后，同一展示资产脚本在 Q5 时间轴读取 `ques5_visibility_intervals.csv` 时再次退出：bomb 行的 `missile` 单元为空，脚本错误地把它当作导弹分配键（`KeyError: ''`）。前五张 presentation-only PNG 已生成，但无完整 `paper_assets_manifest.json`，未进入正文、预检、导出或结果冻结。按连续两次失败规程，停止直接在正式任务目录重复完整运行；先在隔离副本以 `ques5_result.csv` 的 strategy→missile 映射补齐该展示层关联并做一次全图自检，确认后再一次性替换正式展示资产。不得以不完整的五张图宣称修复完成。
+
+- [2026-08-11] 2025A 的第二版编辑质量论文候选在隔离预检入口被 JSON 解析器拒绝（`Expecting ',' delimiter: line 179`）；失败发生在候选文件读取阶段，未写入正式 `res.md/res.json`、未改冻结结果或导出物。当前处置：先修复候选 JSON 语法并重新在隔离副本执行完整预检；只有候选、来源哈希清单和所有硬门禁均通过，才允许使用一次编辑质量候选返修预算。
+
+- [2026-08-11] 修复 JSON 后的隔离编辑质量预检仍拒绝 2025A 候选：旧的结果资产识别词表无法识别“遮蔽区间、轨迹、短名单、网格”等真实结果图，故误报 0 图/0 表；候选也缺少显式“模型的建立与求解”主章节。未写入正式任务。当前处置：扩展内部结果资产语义词表并将五问收束到标准主章节层级，再以同一隔离预检和来源哈希清单复核；该修复不涉及 provider、冻结数值或模型重跑。

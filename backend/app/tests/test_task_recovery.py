@@ -7,7 +7,9 @@ import unittest
 from unittest import mock
 
 from fastapi import BackgroundTasks, HTTPException
+from fastapi.testclient import TestClient
 
+from app import main
 from app.core.checkpoint import CheckpointManager, TaskCheckpoint
 from app.routers import modeling_router
 from app.services.task_recovery import (
@@ -59,6 +61,14 @@ class TestStaleTaskStatusRecovery(unittest.TestCase):
         self.assertEqual(running["status"], "interrupted")
         self.assertEqual(completed["status"], "completed")
 
+    def test_testclient_lifespan_does_not_recover_shared_live_tasks(self):
+        """Unit tests must not mutate a Docker task through app startup."""
+        with mock.patch.object(main, "recover_stale_task_statuses") as recovery:
+            with TestClient(main.app):
+                pass
+
+        recovery.assert_not_called()
+
 
 class TestManualExecutionRecovery(unittest.TestCase):
     def _checkpoint(self, work_dir: str) -> CheckpointManager:
@@ -97,7 +107,7 @@ class TestManualExecutionRecovery(unittest.TestCase):
 
 class TestResumeRoute(unittest.IsolatedAsyncioTestCase):
     @staticmethod
-    def _write_checkpoint(work_dir: str) -> None:
+    def _write_checkpoint(work_dir: str, workflow_state: str = "solving") -> None:
         CheckpointManager(work_dir).save(
             TaskCheckpoint(
                 task_id="task-1",
@@ -108,6 +118,7 @@ class TestResumeRoute(unittest.IsolatedAsyncioTestCase):
                 questions={"ques_count": 1, "ques1": "问题一"},
                 ques_count=1,
                 modeler_response={},
+                workflow_state=workflow_state,
                 updated_at="2026-07-15T00:00:00",
             )
         )
@@ -161,3 +172,69 @@ class TestResumeRoute(unittest.IsolatedAsyncioTestCase):
                     await modeling_router.resume_task("task-1", BackgroundTasks())
 
         self.assertEqual(caught.exception.status_code, 409)
+
+    async def test_completed_task_with_editorial_export_only_checkpoint_can_resume(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            self._write_checkpoint(
+                work_dir,
+                workflow_state="editorial_repair_pending_export",
+            )
+            with open(
+                os.path.join(work_dir, "task_status.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump({"status": "completed", "message": "old export done"}, handle)
+            with (
+                mock.patch.object(modeling_router, "get_work_dir", return_value=work_dir),
+                mock.patch.object(
+                    modeling_router.redis_manager, "set", new_callable=mock.AsyncMock
+                ),
+                mock.patch.object(modeling_router, "write_task_status") as status_mock,
+            ):
+                background = BackgroundTasks()
+                response = await modeling_router.resume_task("task-1", background)
+
+        self.assertEqual(response.status, "resuming")
+        self.assertEqual(len(background.tasks), 1)
+        self.assertIs(background.tasks[0].func, modeling_router.run_resume_task_async)
+        status_mock.assert_called_once_with("task-1", "resuming", "从检查点受控续传中")
+
+    async def test_completed_task_with_presentation_reflow_checkpoint_can_resume(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            self._write_checkpoint(work_dir, "presentation_reflow_pending_export")
+            with (
+                mock.patch.object(modeling_router, "get_work_dir", return_value=work_dir),
+                mock.patch.object(modeling_router, "read_task_status", return_value={"status": "completed"}),
+                mock.patch.object(modeling_router.redis_manager, "set", new_callable=mock.AsyncMock),
+                mock.patch.object(modeling_router, "write_task_status") as status_mock,
+            ):
+                background = BackgroundTasks()
+                response = await modeling_router.resume_task("task-1", background)
+
+        self.assertEqual(response.status, "resuming")
+        self.assertEqual(len(background.tasks), 1)
+        self.assertIs(background.tasks[0].func, modeling_router.run_resume_task_async)
+        status_mock.assert_called_once_with("task-1", "resuming", "从检查点受控续传中")
+
+    async def test_remodelled_resume_waiting_review_does_not_finalize(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            with (
+                mock.patch.object(modeling_router, "get_work_dir", return_value=work_dir),
+                mock.patch.object(modeling_router, "write_task_status") as status_mock,
+                mock.patch.object(
+                    modeling_router.redis_manager,
+                    "publish_message",
+                    new_callable=mock.AsyncMock,
+                ),
+                mock.patch("app.routers.modeling_router.asyncio.sleep", new_callable=mock.AsyncMock),
+                mock.patch.object(modeling_router, "MathModelWorkFlow") as workflow_cls,
+                mock.patch.object(modeling_router, "_finalize_docx_and_manifest") as finalize,
+            ):
+                workflow_cls.return_value.resume = mock.AsyncMock(
+                    return_value="waiting_review"
+                )
+                await modeling_router.run_resume_task_async("unit-task")
+
+        status_mock.assert_any_call(
+            "unit-task", "waiting_review", "任务等待人工确认建模方案"
+        )
+        finalize.assert_not_called()

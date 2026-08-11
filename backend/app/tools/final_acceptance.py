@@ -38,11 +38,14 @@ _REQUIRED_REPORTS = (
     "docx_export_status.json",
     "export_status.json",
 )
-_SOURCE_HEADING_RE = re.compile(r"(?m)^###\s+B\.\d+\s+(?P<name>.+?)\s*$")
+_SOURCE_HEADING_RE = re.compile(r"(?m)^###\s+[A-Z]\.\d+\s+(?P<name>.+?)\s*$")
 _LEGACY_SOURCE_HEADING_RE = re.compile(
-    r"(?m)^###\s+B\.\d+\s+(?P<name>.+?)（SHA-256:\s*(?P<sha>[0-9a-f]{64})）\s*$"
+    r"(?m)^###\s+[A-Z]\.\d+\s+(?P<name>.+?)（SHA-256:\s*(?P<sha>[0-9a-f]{64})）\s*$"
 )
 _SOURCE_HASH_RE = re.compile(r"(?m)^SHA-256:\s*\n(?P<sha>(?:[0-9a-f]{16}\s*){4})$")
+_FORMAL_EDITORIAL_EXPORT_PROFILES = {"cumcm2025", "cumcm2026"}
+_STRICT_PDF_EDITORIAL_POLICY = "cumcm2026_strict"
+_STRICT_PREFLIGHT_EDITORIAL_POLICY = "cumcm_formal"
 
 
 def _read_json(path: str) -> dict[str, Any] | None:
@@ -130,6 +133,70 @@ def _check_artifact_freshness(work_dir: str) -> dict[str, Any]:
         else "导出产物或候选清单与当前源文件不是同一批次。",
         mismatches=mismatches,
         artifact_set_id=manifest.get("artifact_set_id"),
+    )
+
+
+def _check_editorial_quality_gate(work_dir: str) -> dict[str, Any]:
+    """Require explicit strict editorial checks for formal CUMCM artifacts.
+
+    A bare ``PASS`` status is intentionally insufficient here.  Older reports
+    were able to pass before the paper-quality policy existed, which is the
+    exact false-positive this gate prevents.  The thresholds remain internal
+    review criteria and are not represented as official competition rules.
+    """
+    export_status = _read_json(os.path.join(work_dir, "export_status.json")) or {}
+    profile = str(export_status.get("export_profile", ""))
+    if profile not in _FORMAL_EDITORIAL_EXPORT_PROFILES:
+        return _check(
+            "editorial_quality_gate",
+            True,
+            "非正式 CUMCM profile 不启用内部编辑质量硬门禁。",
+            active=False,
+            export_profile=profile,
+            official_rule=False,
+        )
+
+    preflight = _read_json(os.path.join(work_dir, "paper_preflight_report.json")) or {}
+    visual = _read_json(os.path.join(work_dir, "pdf_visual_check.json")) or {}
+    preflight_check = (
+        preflight.get("checks", {}).get("editorial_quality")
+        if isinstance(preflight.get("checks"), dict)
+        else None
+    )
+    visual_check = (
+        visual.get("checks", {}).get("editorial_quality")
+        if isinstance(visual.get("checks"), dict)
+        else None
+    )
+    preflight_ok = isinstance(preflight_check, dict) and all(
+        (
+            preflight_check.get("passed") is True,
+            preflight_check.get("quality_passed") is True,
+            preflight_check.get("enforced") is True,
+            preflight_check.get("policy") == _STRICT_PREFLIGHT_EDITORIAL_POLICY,
+            preflight_check.get("official_rule") is False,
+        )
+    )
+    visual_ok = isinstance(visual_check, dict) and all(
+        (
+            visual_check.get("passed") is True,
+            visual_check.get("blocking") is True,
+            visual_check.get("policy") == _STRICT_PDF_EDITORIAL_POLICY,
+            visual_check.get("official_rule") is False,
+        )
+    )
+    passed = preflight_ok and visual_ok
+    return _check(
+        "editorial_quality_gate",
+        passed,
+        "内部编辑质量预检与 PDF 严格复核均已通过。"
+        if passed
+        else "正式 CUMCM 候选缺少或未通过内部编辑质量硬门禁。",
+        active=True,
+        export_profile=profile,
+        official_rule=False,
+        preflight_editorial=preflight_check,
+        pdf_editorial=visual_check,
     )
 
 
@@ -222,6 +289,7 @@ def audit_final_acceptance(work_dir: str) -> dict[str, Any]:
     checks.append(_status_check(work_dir, "paper_preflight_report.json", "PASS"))
     checks.append(_status_check(work_dir, "pdf_visual_check.json", "PASS"))
     checks.append(_status_check(work_dir, "submission_audit_report.json", "PASS"))
+    checks.append(_check_editorial_quality_gate(work_dir))
     checks.append(_check_artifact_freshness(work_dir))
 
     freeze = validate_result_freeze(work_dir)
@@ -238,6 +306,25 @@ def audit_final_acceptance(work_dir: str) -> dict[str, Any]:
     )
 
     strict_audit = audit_submission(work_dir, require_official_fonts=True)
+    template_check = next(
+        (
+            item
+            for item in strict_audit.get("checks", [])
+            if item.get("id") == "template_override_integrity"
+        ),
+        None,
+    )
+    checks.append(
+        _check(
+            "template_override_chain",
+            bool(template_check and template_check.get("passed")),
+            "任务级模板覆盖与所有当前导出报告一致。"
+            if template_check and template_check.get("passed")
+            else "任务级模板覆盖链缺失、已过期或未完成全量刷新。",
+            submission_audit_status=strict_audit.get("status"),
+            template_evidence=(template_check or {}).get("evidence", {}),
+        )
+    )
     font_check = next(
         (item for item in strict_audit.get("checks", []) if item.get("id") == "pdf_fonts"),
         None,

@@ -392,9 +392,12 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
                 timeout_occurred = "本地代码执行超过" in error_message
                 logger.error(f"本地代码执行失败: error_chars={len(error_message)}")
                 text_to_gpt.append(error_message)
-                #  添加error到notebook
-                self.notebook_serializer.add_code_cell_error_to_notebook(out_str)
                 content_to_display.append(StdErrModel(msg=out_str))
+
+        if error_occurred:
+            # A failed cell is useful in task logs but must not poison a future
+            # clean-kernel source replay after the agent supplies a correction.
+            self.notebook_serializer.discard_last_code_cell()
 
         if timeout_occurred:
             restored = await self._recover_kernel_after_timeout()

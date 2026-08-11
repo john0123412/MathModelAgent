@@ -82,7 +82,8 @@ class SubtaskPlan(BaseModel):
             for item in self.expected_artifacts
         )
         metrics = "；".join(
-            f"{item.label}({item.key}) {item.comparator} {item.target}{item.unit or ''}"
+            f"{item.label}({item.key}) {item.comparator} {item.target}"
+            + (f" [{item.unit}]" if item.unit else "")
             for item in self.acceptance_metrics
         )
         return (

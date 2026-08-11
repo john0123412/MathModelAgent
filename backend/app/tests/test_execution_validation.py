@@ -99,6 +99,131 @@ def _write_manifest(
 
 
 class TestExecutionValidation(unittest.TestCase):
+    def test_q3_timing_comparison_requires_alternative_and_selection_metrics(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_notebook(work_dir)
+            _write_manifest(work_dir)
+            with open(
+                os.path.join(work_dir, "problem_contract.json"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                json.dump(
+                    {
+                        "required_requirements": [
+                            {"key": "q3_injector_timing_comparison"}
+                        ]
+                    },
+                    handle,
+                )
+
+            missing = validate_execution_artifacts(
+                work_dir, required_subtasks=["ques3"]
+            )
+            missing_check = next(
+                item
+                for item in missing["checks"]
+                if item["id"] == "ques3.injector_timing_comparison"
+            )
+            self.assertFalse(missing_check["passed"])
+
+            manifest_path = os.path.join(work_dir, MANIFEST_NAME)
+            with open(manifest_path, encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            manifest["subtasks"][0]["metrics"].extend(
+                [
+                    {
+                        "id": "phase_offset_ms",
+                        "label": "选定相位差",
+                        "value": 0.0,
+                        "unit": "ms",
+                        "explanation": "选定同步基线的双喷嘴时间差",
+                    },
+                    {
+                        "id": "alternate_phase_offset_ms",
+                        "label": "备选错相相位差",
+                        "value": 0.0,
+                        "unit": "ms",
+                        "explanation": "与同步基线比较的非零备选双喷嘴时间差",
+                    },
+                    {
+                        "id": "strategy_objective",
+                        "label": "选定策略联合目标",
+                        "value": 1.0,
+                        "unit": "1",
+                        "explanation": "压力波动与回流损失的联合评分",
+                    },
+                    {
+                        "id": "alternate_phase_objective",
+                        "label": "备选错相策略联合目标",
+                        "value": 1.2,
+                        "unit": "1",
+                        "explanation": "另一相位方案的联合评分",
+                    },
+                ]
+            )
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                json.dump(manifest, handle, ensure_ascii=False, indent=2)
+
+            same_phase = validate_execution_artifacts(
+                work_dir, required_subtasks=["ques3"]
+            )
+            same_phase_check = next(
+                item
+                for item in same_phase["checks"]
+                if item["id"] == "ques3.injector_timing_comparison"
+            )
+            self.assertFalse(same_phase_check["passed"], same_phase_check)
+
+            manifest["subtasks"][0]["metrics"][-4]["value"] = 50.0
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                json.dump(manifest, handle, ensure_ascii=False, indent=2)
+            complete = validate_execution_artifacts(
+                work_dir, required_subtasks=["ques3"]
+            )
+            complete_check = next(
+                item
+                for item in complete["checks"]
+                if item["id"] == "ques3.injector_timing_comparison"
+            )
+            self.assertTrue(complete_check["passed"], complete_check)
+
+    def test_q3_timing_comparison_rejects_single_universal_metric(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_notebook(work_dir)
+            _write_manifest(work_dir)
+            with open(
+                os.path.join(work_dir, "problem_contract.json"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                json.dump(
+                    {"required_requirements": [{"key": "q3_injector_timing_comparison"}]},
+                    handle,
+                )
+            manifest_path = os.path.join(work_dir, MANIFEST_NAME)
+            with open(manifest_path, encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            manifest["subtasks"][0]["metrics"].append(
+                {
+                    "id": "alternate_phase_strategy_objective",
+                    "label": "备选错相策略目标评分",
+                    "value": 1.0,
+                    "unit": "1",
+                    "explanation": "比较同步与错相后的策略选择依据",
+                }
+            )
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                json.dump(manifest, handle, ensure_ascii=False, indent=2)
+
+            result = validate_execution_artifacts(work_dir, required_subtasks=["ques3"])
+
+        check = next(
+            item for item in result["checks"]
+            if item["id"] == "ques3.injector_timing_comparison"
+        )
+        self.assertFalse(check["passed"], check)
+
     def test_recorded_infeasible_evidence_returns_failed_constraint_details(self):
         with tempfile.TemporaryDirectory() as work_dir:
             source_path = os.path.join(work_dir, "ques2_constraint_check.csv")
@@ -420,6 +545,122 @@ class TestExecutionValidation(unittest.TestCase):
                 manifest["subtasks"][0]["metrics"][0]["source"]["path"],
                 "ques2_fit_results.json",
             )
+
+    def test_recorder_canonicalises_plan_eq_to_zero_tolerance_evidence(self):
+        """An exact ModelPlan comparator must not be rejected by the recorder."""
+        with tempfile.TemporaryDirectory() as work_dir:
+            result_path = os.path.join(work_dir, "ques1_results.json")
+            with open(result_path, "w", encoding="utf-8") as handle:
+                json.dump({"model_fit_completed": 1.0}, handle)
+            with open(os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "model_plan": {
+                            "subtasks": {
+                                "ques1": {
+                                    "acceptance_metrics": [
+                                        {
+                                            "key": "model_fit_completed",
+                                            "comparator": "eq",
+                                            "target": 1.0,
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    handle,
+                )
+
+            recorded = record_execution_evidence(
+                work_dir,
+                subtask_id="ques1",
+                constraints=[
+                    {
+                        "id": "model_fit_completed",
+                        "actual": 1.0,
+                        "comparison": "eq",
+                        "target": 1.0,
+                        "source_path": "ques1_results.json",
+                    }
+                ],
+                metrics=[
+                    {
+                        "id": "model_fit_completed",
+                        "label": "模型拟合完成标志",
+                        "value": 1.0,
+                        "unit": "标志",
+                        "explanation": "由本次实际拟合结果读取。",
+                        "source_path": "ques1_results.json",
+                    }
+                ],
+                figures=[],
+            )
+
+            self.assertTrue(recorded["ok"], recorded)
+            self.assertTrue(recorded["feasible"])
+            with open(os.path.join(work_dir, MANIFEST_NAME), encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            constraint = manifest["subtasks"][0]["constraints"][0]
+            self.assertEqual(constraint["comparison"], "abs_diff_lte")
+            self.assertEqual(constraint["tolerance"], 0.0)
+            self.assertEqual(constraint["source"]["path"], "ques1_results.json")
+
+    def test_recorder_rejects_nonzero_tolerance_for_plan_eq(self):
+        """A non-zero tolerance must not weaken an exact ModelPlan metric."""
+        with tempfile.TemporaryDirectory() as work_dir:
+            result_path = os.path.join(work_dir, "ques1_results.json")
+            with open(result_path, "w", encoding="utf-8") as handle:
+                json.dump({"model_fit_completed": 1.0}, handle)
+            with open(os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "model_plan": {
+                            "subtasks": {
+                                "ques1": {
+                                    "acceptance_metrics": [
+                                        {
+                                            "key": "model_fit_completed",
+                                            "comparator": "eq",
+                                            "target": 1.0,
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    handle,
+                )
+
+            recorded = record_execution_evidence(
+                work_dir,
+                subtask_id="ques1",
+                constraints=[
+                    {
+                        "id": "model_fit_completed",
+                        "actual": 1.0,
+                        "comparison": "eq",
+                        "target": 1.0,
+                        "tolerance": 0.1,
+                        "source_path": "ques1_results.json",
+                    }
+                ],
+                metrics=[
+                    {
+                        "id": "model_fit_completed",
+                        "label": "模型拟合完成标志",
+                        "value": 1.0,
+                        "unit": "标志",
+                        "explanation": "由本次实际拟合结果读取。",
+                        "source_path": "ques1_results.json",
+                    }
+                ],
+                figures=[],
+            )
+
+            self.assertFalse(recorded["ok"])
+            self.assertIn("tolerance=0", " ".join(recorded["errors"]))
+            self.assertFalse(os.path.exists(os.path.join(work_dir, MANIFEST_NAME)))
 
     def test_unsupported_comparison_error_names_the_value_and_the_allowed_set(self):
         """A rejected comparison must tell the caller what to submit instead.
@@ -786,10 +1027,20 @@ class TestExecutionValidation(unittest.TestCase):
             )
             with open(frozen_path, encoding="utf-8") as handle:
                 frozen = json.load(handle)
+            with open(
+                os.path.join(work_dir, REPRODUCIBILITY_NAME), encoding="utf-8"
+            ) as handle:
+                reproducibility = json.load(handle)
             self.assertEqual(frozen["schema"], "mathmodel.result-freeze")
             self.assertEqual(frozen["version"], 1)
             self.assertEqual(frozen["metrics"][0]["label"], "平均压力")
             self.assertIn("notebook.ipynb", frozen["executed_code_sources"])
+            self.assertEqual(
+                reproducibility["byte_reproducibility"]["status"], "NOT_RUN"
+            )
+            self.assertEqual(
+                reproducibility["numerical_reproducibility"]["status"], "NOT_RUN"
+            )
 
     def test_freeze_qualifies_duplicate_metric_ids_by_subtask(self):
         with tempfile.TemporaryDirectory() as work_dir:
@@ -1337,23 +1588,36 @@ class TestExecutionValidation(unittest.TestCase):
             manifest_path = os.path.join(work_dir, MANIFEST_NAME)
             with open(manifest_path, encoding="utf-8") as handle:
                 manifest = json.load(handle)
-            manifest["subtasks"][0]["metrics"].extend(
-                [
-                    {
-                        "id": "solver_status",
-                        "label": "求解器状态",
-                        "value": 1.0,
-                        "unit": "1=optimal",
-                        "explanation": "线性规划求解器返回 optimal。",
-                    },
-                    {
-                        "id": "feasibility_check",
-                        "label": "约束可行性",
-                        "value": 1.0,
-                        "unit": "1=可行",
-                        "explanation": "求解器返回 optimal 后独立检查约束可行性。",
-                    },
-                ]
+            manifest["subtasks"][0]["metrics"].append(
+                {
+                    "id": "feasibility_check",
+                    "label": "约束可行性",
+                    "value": 1.0,
+                    "unit": "1=可行",
+                    "explanation": "独立检查约束可行性。",
+                }
+            )
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                json.dump(manifest, handle, ensure_ascii=False)
+
+            solver_missing = validate_execution_artifacts(work_dir, required_subtasks=["ques3"])
+            solver_check = next(
+                item for item in solver_missing["checks"] if item["id"] == "ques3.diagnostic_profile"
+            )
+            self.assertFalse(solver_check["passed"])
+            self.assertIn(
+                "求解器状态",
+                " ".join(solver_check["evidence"]["missing_requirements"]),
+            )
+
+            manifest["subtasks"][0]["metrics"].append(
+                {
+                    "id": "solver_status",
+                    "label": "求解器状态",
+                    "value": 1.0,
+                    "unit": "1=optimal",
+                    "explanation": "线性规划求解器返回 optimal。",
+                }
             )
             with open(manifest_path, "w", encoding="utf-8") as handle:
                 json.dump(manifest, handle, ensure_ascii=False)

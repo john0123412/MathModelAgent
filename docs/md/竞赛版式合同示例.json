@@ -1,0 +1,31 @@
+{
+  "schema_version": "mma.export-format-contract.v1",
+  "label": "用户填入的中文竞赛格式基线（示例，待人工核对）",
+  "docx": {
+    "body_font_east_asia": "SimSun",
+    "body_font_ascii": "Times New Roman",
+    "body_font_hansi": "Times New Roman",
+    "body_font_cs": "Times New Roman",
+    "body_font_size_half_points": 24,
+    "body_line_spacing_twips": 240,
+    "body_line_rule": "auto",
+    "body_start_page_break": true
+  },
+  "pdf": {
+    "variables": {
+      "papersize": "a4",
+      "fontsize": "12pt",
+      "linestretch": "1.25",
+      "geometry": "left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm",
+      "CJKmainfont": "SimSun"
+    },
+    "min_content_margin_cm": 2.5
+  },
+  "preflight": {
+    "min_abstract_paragraphs": 2,
+    "require_references": true,
+    "require_reference_style": true,
+    "body_min_pages": 8,
+    "body_max_pages": 20
+  }
+}

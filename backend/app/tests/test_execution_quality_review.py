@@ -45,6 +45,30 @@ class ExecutionQualityReviewTest(unittest.TestCase):
 
             self.assertNotEqual(first["review_id"], second["review_id"])
 
+    def test_singular_result_filename_is_scanned_without_unrelated_csvs(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            Path(work_dir, "ques1_result.csv").write_text(
+                "指标,实际值,是否达标\n质量守恒残差,8.32,否\n", encoding="utf-8"
+            )
+            Path(work_dir, "ques2_results.csv").write_text(
+                "指标,实际值,是否达标\n利润,3600,是\n", encoding="utf-8"
+            )
+            Path(work_dir, "ques3_result_backup.csv").write_text(
+                "指标,实际值,是否达标\n误报,1,否\n", encoding="utf-8"
+            )
+            Path(work_dir, "results.csv").write_text(
+                "指标,实际值,是否达标\n误报,1,否\n", encoding="utf-8"
+            )
+
+            report = write_execution_quality_review(work_dir)
+
+            self.assertEqual(
+                [source["path"] for source in report["sources"]],
+                ["ques1_result.csv", "ques2_results.csv"],
+            )
+            self.assertEqual(report["failed_subtasks"], ["ques1"])
+            self.assertEqual(len(report["findings"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

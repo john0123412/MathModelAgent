@@ -7,9 +7,13 @@ import shutil
 import datetime
 import secrets
 import tomllib
+import tempfile
+import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from app.schemas.enums import CompTemplate, ExportProfile
 from app.tools.export_profiles import get_export_profile_config
+from app.tools.export_template_override import load_export_template_override
 from app.utils.log_util import logger
 import re
 import pypandoc  # type: ignore[import-unresolved]
@@ -18,6 +22,25 @@ from app.config.setting import settings
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _INVALID_FILENAME_CHARS = {"/", "\\", ":", "\x00"}
 PANDOC_DOCX_MARKDOWN_FORMAT = "markdown+tex_math_dollars+tex_math_single_backslash"
+_DOCX_W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_DOCX_NS = {"w": _DOCX_W_NS}
+_DOCX_FORMAL_PROFILES = {ExportProfile.CUMCM2025.value, ExportProfile.CUMCM2026.value}
+_DOCX_BODY_START_RE = re.compile(r"^(?:一、)?问题重述\s*$")
+_DOCX_CODE_APPENDIX_RE = re.compile(r"^附录\s*[A-Z]\s*源程序代码\s*$", re.IGNORECASE)
+_FORMAL_CHINESE_BASELINE_CONTRACT = {
+    # This is a project/user baseline, not a claim about a future official
+    # CUMCM package.  A task-local imported format contract overrides it.
+    "source": "project_user_chinese_contest_baseline_non_official",
+    "official_rule": False,
+    "body_font_east_asia": "SimSun",
+    "body_font_ascii": "Times New Roman",
+    "body_font_hansi": "Times New Roman",
+    "body_font_cs": "Times New Roman",
+    "body_font_size_half_points": 24,
+    "body_line_spacing_twips": 240,
+    "body_line_rule": "auto",
+    "body_start_page_break": True,
+}
 
 # 所有任务工作目录的根路径约定，供 create_work_dir/get_work_dir 及路由层复用，
 # 避免各处硬编码 "project/work_dir" 字符串。
@@ -245,6 +268,157 @@ def _file_sha256(path: str) -> str | None:
     return digest.hexdigest()
 
 
+def _docx_w_tag(local_name: str) -> str:
+    return f"{{{_DOCX_W_NS}}}{local_name}"
+
+
+def _docx_paragraph_text(paragraph: ET.Element) -> str:
+    return "".join(node.text or "" for node in paragraph.findall(".//w:t", _DOCX_NS)).strip()
+
+
+def _docx_paragraph_style(paragraph: ET.Element) -> str:
+    properties = paragraph.find("w:pPr", _DOCX_NS)
+    style = properties.find("w:pStyle", _DOCX_NS) if properties is not None else None
+    return style.get(_docx_w_tag("val"), "") if style is not None else ""
+
+
+def _docx_is_heading(paragraph: ET.Element, text: str) -> bool:
+    style = _docx_paragraph_style(paragraph).lower()
+    if style.startswith("heading") or style in {"title", "subtitle"}:
+        return True
+    return bool(
+        re.match(r"^(?:[一二三四五六七八九十]+、|\d+(?:\.\d+){0,3}\s|摘要$|关键词|参考文献$|附录)", text)
+    )
+
+
+def _docx_properties(paragraph: ET.Element) -> ET.Element:
+    properties = paragraph.find("w:pPr", _DOCX_NS)
+    if properties is None:
+        properties = ET.Element(_docx_w_tag("pPr"))
+        paragraph.insert(0, properties)
+    return properties
+
+
+def _docx_run_properties(run: ET.Element) -> ET.Element:
+    properties = run.find("w:rPr", _DOCX_NS)
+    if properties is None:
+        properties = ET.Element(_docx_w_tag("rPr"))
+        run.insert(0, properties)
+    return properties
+
+
+def _set_docx_body_paragraph_format(
+    paragraph: ET.Element, format_contract: dict
+) -> bool:
+    """Apply the checked task format contract to a rendered prose paragraph."""
+    properties = _docx_properties(paragraph)
+    spacing = properties.find("w:spacing", _DOCX_NS)
+    if spacing is None:
+        spacing = ET.SubElement(properties, _docx_w_tag("spacing"))
+    spacing.set(_docx_w_tag("before"), "0")
+    spacing.set(_docx_w_tag("after"), "0")
+    spacing.set(_docx_w_tag("line"), str(format_contract["body_line_spacing_twips"]))
+    spacing.set(_docx_w_tag("lineRule"), str(format_contract["body_line_rule"]))
+
+    formatted = False
+    for run in paragraph.findall("w:r", _DOCX_NS):
+        if not run.findall(".//w:t", _DOCX_NS):
+            continue
+        run_properties = _docx_run_properties(run)
+        fonts = run_properties.find("w:rFonts", _DOCX_NS)
+        if fonts is None:
+            fonts = ET.SubElement(run_properties, _docx_w_tag("rFonts"))
+        fonts.set(_docx_w_tag("ascii"), str(format_contract["body_font_ascii"]))
+        fonts.set(_docx_w_tag("hAnsi"), str(format_contract["body_font_hansi"]))
+        fonts.set(_docx_w_tag("cs"), str(format_contract["body_font_cs"]))
+        fonts.set(_docx_w_tag("eastAsia"), str(format_contract["body_font_east_asia"]))
+        for size_tag in ("sz", "szCs"):
+            size = run_properties.find(f"w:{size_tag}", _DOCX_NS)
+            if size is None:
+                size = ET.SubElement(run_properties, _docx_w_tag(size_tag))
+            size.set(_docx_w_tag("val"), str(format_contract["body_font_size_half_points"]))
+        formatted = True
+    return formatted
+
+
+def _enforce_formal_chinese_docx_layout(
+    docx_path: str, format_contract: dict | None = None
+) -> dict:
+    """Post-process a Pandoc DOCX without changing manuscript text.
+
+    The bundled historical reference document leaves body style inheritance at
+    10.5 pt and cannot express the user-selected body contract.  This narrowly
+    patches generated prose paragraphs in ``word/document.xml`` and records
+    measurable evidence for submission audit; headings, tables, and source-code
+    appendices remain governed by their own styles.
+    """
+    try:
+        with zipfile.ZipFile(docx_path) as archive:
+            document_xml = archive.read("word/document.xml")
+    except (OSError, KeyError, zipfile.BadZipFile) as exc:
+        raise RuntimeError("无法读取 Pandoc 生成的 DOCX 主文档") from exc
+
+    try:
+        document = ET.fromstring(document_xml)
+    except ET.ParseError as exc:
+        raise RuntimeError("DOCX 主文档 XML 无法解析") from exc
+    body = document.find("w:body", _DOCX_NS)
+    if body is None:
+        raise RuntimeError("DOCX 缺少正文节点")
+
+    effective_contract = dict(_FORMAL_CHINESE_BASELINE_CONTRACT)
+    effective_contract.update(format_contract or {})
+    formatted_paragraphs = 0
+    body_start_found = False
+    code_appendix_started = False
+    for paragraph in body.findall("w:p", _DOCX_NS):
+        text = _docx_paragraph_text(paragraph)
+        if not text:
+            continue
+        if _DOCX_CODE_APPENDIX_RE.fullmatch(text):
+            code_appendix_started = True
+            continue
+        if _DOCX_BODY_START_RE.fullmatch(text):
+            body_start_found = True
+            if effective_contract["body_start_page_break"]:
+                properties = _docx_properties(paragraph)
+                if properties.find("w:pageBreakBefore", _DOCX_NS) is None:
+                    ET.SubElement(properties, _docx_w_tag("pageBreakBefore"))
+        if code_appendix_started or _docx_is_heading(paragraph, text):
+            continue
+        if _set_docx_body_paragraph_format(paragraph, effective_contract):
+            formatted_paragraphs += 1
+
+    if not body_start_found:
+        raise RuntimeError("DOCX 未找到“问题重述”正文起始标题，无法核验摘要后分页")
+
+    ET.register_namespace("w", _DOCX_W_NS)
+    rendered_xml = ET.tostring(document, encoding="utf-8", xml_declaration=True)
+    descriptor, temporary_path = tempfile.mkstemp(
+        prefix="mma-docx-layout-", suffix=".docx", dir=os.path.dirname(docx_path)
+    )
+    os.close(descriptor)
+    try:
+        with zipfile.ZipFile(docx_path) as source, zipfile.ZipFile(
+            temporary_path, "w", compression=zipfile.ZIP_DEFLATED
+        ) as target:
+            for item in source.infolist():
+                target.writestr(
+                    item,
+                    rendered_xml if item.filename == "word/document.xml" else source.read(item.filename),
+                )
+        os.replace(temporary_path, docx_path)
+    finally:
+        if os.path.exists(temporary_path):
+            os.unlink(temporary_path)
+
+    return {
+        "active": True,
+        **effective_contract,
+        "formatted_paragraphs": formatted_paragraphs,
+    }
+
+
 def md_2_docx(
     task_id: str,
     export_profile: ExportProfile | str | None = ExportProfile.DEFAULT,
@@ -273,10 +447,15 @@ def md_2_docx(
             "--standalone",
         ]
         profile_config = get_export_profile_config(export_profile)
-        if profile_config.docx_reference_doc and os.path.exists(
-            profile_config.docx_reference_doc
-        ):
-            extra_args.extend(["--reference-doc", profile_config.docx_reference_doc])
+        template_override = load_export_template_override(
+            work_dir, profile_config.key.value
+        )
+        reference_doc = (
+            template_override.get("docx_reference_doc")
+            or profile_config.docx_reference_doc
+        )
+        if reference_doc and os.path.exists(reference_doc):
+            extra_args.extend(["--reference-doc", reference_doc])
 
         pypandoc.convert_file(
             source_file=md_path,
@@ -287,6 +466,31 @@ def md_2_docx(
         )
         if not os.path.isfile(docx_path) or os.path.getsize(docx_path) <= 0:
             raise RuntimeError("Pandoc 未生成有效 DOCX 文件")
+        status["template_override"] = template_override["audit"]
+        if profile_config.key.value in _DOCX_FORMAL_PROFILES:
+            override_contract = template_override.get("format_contract", {}).get("docx", {})
+            contract = dict(_FORMAL_CHINESE_BASELINE_CONTRACT)
+            contract.update(override_contract)
+            if template_override.get("active"):
+                contract["source"] = "user_supplied_unverified"
+                contract["official_rule"] = False
+            rendered_contract = _enforce_formal_chinese_docx_layout(
+                docx_path, contract
+            )
+            if template_override.get("active"):
+                template_audit = template_override["audit"]
+                rendered_contract["template_override_format_contract_sha256"] = (
+                    template_audit["format_contract_sha256"]
+                )
+                rendered_contract["template_override_docx_contract_sha256"] = (
+                    template_audit["docx_contract_sha256"]
+                )
+            status["format_contract"] = rendered_contract
+        else:
+            status["format_contract"] = {
+                "active": False,
+                "reason": "当前导出 profile 未启用宋体小四单倍行距与摘要后正文分页合同",
+            }
         status["success"] = True
         status["output_sha256"] = _file_sha256(docx_path)
         print(f"转换完成: {docx_path}")

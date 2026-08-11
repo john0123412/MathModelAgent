@@ -290,6 +290,7 @@ async def list_tasks():
                     # 说明进程曾中断过，标记为可续传的 "interrupted"
                     if (
                         not task_info["has_result"]
+                        and not has_persisted_status
                         and task_info["status"]
                         not in {
                             "completed",

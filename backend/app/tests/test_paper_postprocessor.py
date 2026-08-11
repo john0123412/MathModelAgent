@@ -21,6 +21,7 @@ from app.tools.paper_postprocessor import (
     normalize_english_transitions,
     normalize_extra_problem_labels,
     normalize_image_captions,
+    normalize_heading_blank_lines,
     normalize_keywords,
     normalize_markdown_headings,
     normalize_submission_wording,
@@ -32,6 +33,18 @@ from app.tools.paper_postprocessor import (
     shorten_long_code_separator_lines,
     strip_unmatched_inline_references,
 )
+from app.tools.semantic_layout_review import normalize_markdown_semantics
+
+
+def _canonical_json_sha256(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 class TestNormalizeChineseReferences(unittest.TestCase):
@@ -126,7 +139,7 @@ class TestNormalizeChineseReferences(unittest.TestCase):
             "摘要\n\n"
             "本文围绕生产优化问题建立线性规划模型，结合资源约束、利润目标和敏感性分析给出可复核方案。"
             "模型通过目标函数和约束条件刻画生产过程，并比较资源变化前后的最优利润。"
-            "结果表明，机器时间变化会带来可解释的边际收益，人工资源仍可能构成关键瓶颈。\n\n"
+    "结果表明，机器时间变化会带来可解释的边际收益，人工资源仍可能构成关键瓶颈，并可通过对偶价格说明其经济含义。\n\n"
             "关键词：线性规划；敏感性分析；生产优化；资源约束\n\n"
             "# 一、问题重述"
         )
@@ -140,6 +153,43 @@ class TestNormalizeChineseReferences(unittest.TestCase):
 
         self.assertIn("## 摘要", normalized)
         self.assertTrue(report["checks"]["abstract"]["passed"])
+
+    def test_heading_blank_lines_are_repaired_without_touching_code(self):
+        markdown = (
+            "上一段正文。\n"
+            "### 6.1.2 被 Pandoc 误作正文的标题\n"
+            "标题后的正文。\n\n"
+            "```python\n"
+            "literal = '### 代码中的标题'\n"
+            "```\n"
+        )
+
+        normalized, inserted = normalize_heading_blank_lines(markdown)
+
+        self.assertEqual(inserted, 1)
+        self.assertIn("上一段正文。\n\n### 6.1.2", normalized)
+        self.assertIn("literal = '### 代码中的标题'", normalized)
+
+    def test_semantic_normalizer_repairs_only_visible_cumcm_layout_slips(self):
+        markdown = (
+            "## 二、问题分析\n\n"
+            "资源配置需要实现利润最大化{}。\n\n"
+            "公式 $A={} $ 必须保留。\n\n"
+            "```python\n"
+            "heading = '## 二、问题分析'\n"
+            "marker = '{}'\n"
+            "```\n"
+        )
+
+        updated, fixups = normalize_markdown_semantics(markdown)
+
+        self.assertIn("# 二、问题分析", updated)
+        self.assertIn("资源配置需要实现利润最大化。", updated)
+        self.assertIn("$A={} $", updated)
+        self.assertIn("heading = '## 二、问题分析'", updated)
+        self.assertIn("marker = '{}'", updated)
+        self.assertEqual(fixups["normalised_main_section_headings"], 1)
+        self.assertEqual(fixups["removed_empty_reference_markers"], 1)
 
     def test_bold_inline_keywords_are_detected(self):
         markdown = (
@@ -440,6 +490,18 @@ class TestNormalizeChineseReferences(unittest.TestCase):
         self.assertIn("![model output chart](figures/model-output-chart.png)", updated)
         self.assertIn("print('![raw_name.png](raw_name.png)')", updated)
 
+    def test_question_plot_image_caption_becomes_descriptive(self):
+        updated = normalize_image_captions(
+            "![ques1 plot](ques1_plot.png)\n![Ques2 chart](ques2_plot.png)\n"
+        )
+
+        self.assertIn(
+            "![问题1的优化结果图](ques1_plot.png)", updated
+        )
+        self.assertIn(
+            "![问题2的优化结果图](ques2_plot.png)", updated
+        )
+
     def test_english_transitions_are_normalized_outside_code(self):
         markdown = (
             "Overall，模型结果稳定。However，这一结论仍需复核。"
@@ -716,6 +778,49 @@ class TestAppendCodeAppendix(unittest.TestCase):
         self.assertTrue(report["checks"]["algorithm_evidence"]["passed"])
         self.assertEqual(report["checks"]["algorithm_evidence"]["claims"], [])
 
+    def test_preflight_does_not_treat_rejected_algorithm_comparison_as_claim(self):
+        markdown = (
+            "# 标题\n\n## 摘要\n\n本文采用线性规划。\n\n"
+            "关键词：线性规划；生产优化；资源约束\n\n"
+            "# 一、问题重述\n\n正文。\n\n# 二、问题分析\n\n"
+            "若采用启发式算法如遗传算法，虽能处理非线性问题，"
+            "但对本题线性结构的求解效率不及线性规划。\n\n"
+            "# 三、模型假设\n\n正文。\n\n# 四、符号说明\n\n正文。\n\n"
+            "# 五、模型的建立与求解\n\n正文。\n\n"
+            "# 六、模型的分析与检验\n\n正文。\n\n"
+            "# 七、模型的评价、改进与推广\n\n正文。\n\n"
+            "# 附录\n\n## 附录A 支撑材料文件列表\n\n本论文没有支撑材料。\n\n"
+            "## 附录B 源程序代码\n\n本论文没有用到程序。\n"
+        )
+
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(), markdown=markdown, code_sources=[]
+        )
+
+        self.assertTrue(report["checks"]["algorithm_evidence"]["passed"])
+        self.assertEqual(report["checks"]["algorithm_evidence"]["claims"], [])
+
+    def test_preflight_does_not_hide_actual_algorithm_claim_after_rejected_sentence(self):
+        markdown = (
+            "# 标题\n\n## 摘要\n\n本文建立可复核的离散优化模型。\n\n"
+            "关键词：优化；复核\n\n# 一、问题重述\n\n正文。\n\n"
+            "# 二、问题分析\n\n若采用遗传算法作为未来备选方案，本文此前并未采用。"
+            "本文采用遗传算法完成当前求解。\n\n# 三、模型假设\n\n正文。\n\n"
+            "# 四、符号说明\n\n正文。\n\n# 五、模型的建立与求解\n\n正文。\n\n"
+            "# 六、模型的分析与检验\n\n正文。\n\n# 七、模型的评价、改进与推广\n\n正文。\n\n"
+            "# 附录\n\n## 附录A 支撑材料文件列表\n\n本论文没有支撑材料。\n\n"
+            "## 附录B 源程序代码\n\n本论文没有用到程序。\n"
+        )
+        with tempfile.TemporaryDirectory() as work_dir:
+            report = build_preflight_report(work_dir, markdown, code_sources=[])
+
+        check = report["checks"]["algorithm_evidence"]
+        self.assertFalse(check["passed"])
+        self.assertIn(
+            {"algorithm": "genetic_algorithm", "implemented": False, "sources": []},
+            check["claims"],
+        )
+
     def test_existing_fenced_code_separator_lines_are_shortened(self):
         markdown = "```python\n" + ("=" * 80) + "\nprint('ok')\n```\n"
 
@@ -767,8 +872,8 @@ class TestPreparePaperMarkdown(unittest.TestCase):
                     "通过求解约束方程并进行敏感性分析，得到可复核的最优生产方案。结果表明，该方案能够在资源限制内提升总利润，"
                     "同时机器时间变化会对最优利润产生可解释的边际影响。\n\n"
                     "关键词：线性规划；生产优化；敏感性分析；资源约束\n\n"
-                    "# 一、问题重述\n\n正文。\n\n"
-                    "# 二、问题分析\n\n正文。\n\n"
+                    "# 一、问题重述\n\n正文{}。\n\n"
+                    "## 二、问题分析\n\n正文。\n\n"
                     "# 三、模型假设\n\n正文。\n\n"
                     "# 四、符号说明\n\n正文。\n\n"
                     "# 五、模型的建立与求解\n\n正文[^1]。\n\n"
@@ -805,6 +910,8 @@ class TestPreparePaperMarkdown(unittest.TestCase):
         self.assertEqual(saved_report["status"], "PASS")
         self.assertEqual(saved_report["source_sha256"], written_md_hash)
         self.assertIn("正文[1]。", updated)
+        self.assertIn("# 二、问题分析", updated)
+        self.assertNotIn("正文{}。", updated)
         self.assertIn("# 附录", updated)
         self.assertIn("## 附录A 支撑材料文件列表", updated)
         self.assertIn("## 附录B 源程序代码", updated)
@@ -813,6 +920,14 @@ class TestPreparePaperMarkdown(unittest.TestCase):
         self.assertTrue(saved_report["checks"]["code_appendix"]["passed"])
         self.assertTrue(saved_report["checks"]["support_materials"]["passed"])
         self.assertTrue(saved_report["checks"]["claim_trace"]["passed"])
+        semantic_issue_codes = {
+            issue["code"]
+            for issue in saved_report["checks"]["semantic_layout"].get("issues", [])
+        }
+        self.assertNotIn("main_section_level_mismatch", semantic_issue_codes)
+        self.assertNotIn("empty_reference_marker", semantic_issue_codes)
+        self.assertEqual(saved_report["fixups"]["normalised_main_section_headings"], 1)
+        self.assertEqual(saved_report["fixups"]["removed_empty_reference_markers"], 1)
         self.assertTrue(all(generated_audit_files.values()), generated_audit_files)
 
     def test_prepare_removes_missing_image_references_before_preflight(self):
@@ -2153,7 +2268,376 @@ class TestEnhancedPreflightChecks(unittest.TestCase):
         self.assertEqual(report["checks"]["images"]["severity"], "pass")
 
 
+class TestContestCriticalPreflightGates(unittest.TestCase):
+    def test_required_modeling_decision_must_have_human_approval_evidence(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            plan = {"questions_solution": {"ques1": "建立可执行模型。"}}
+            with open(
+                os.path.join(work_dir, "task_request.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump({"require_model_review": True}, handle)
+            with open(
+                os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(plan, handle)
+
+            missing = build_preflight_report(work_dir, "正文", code_sources=[])
+
+            with open(
+                os.path.join(work_dir, "modeling_decision.json"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                json.dump(
+                    {
+                        "gate_enabled": True,
+                        "status": "approved",
+                        "review": {
+                            "approved": True,
+                            "approved_at": "2026-08-07T20:00:00",
+                        },
+                        "modeler_response": plan,
+                        "modeler_plan_sha256": _canonical_json_sha256(plan),
+                    },
+                    handle,
+                )
+            with open(
+                os.path.join(work_dir, "modeling_decision.md"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                handle.write("# 建模方案人工审批\n\n已审批。\n")
+
+            approved = build_preflight_report(work_dir, "正文", code_sources=[])
+
+        self.assertFalse(missing["checks"]["modeling_decision"]["passed"])
+        self.assertTrue(approved["checks"]["modeling_decision"]["passed"])
+
+    def test_modeling_approval_is_invalid_when_current_plan_differs(self):
+        approved_plan = {"questions_solution": {"ques1": "已审批方案。"}}
+        current_plan = {"questions_solution": {"ques1": "审批后替换的另一方案。"}}
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(
+                os.path.join(work_dir, "task_request.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump({"require_model_review": True}, handle)
+            with open(
+                os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(current_plan, handle)
+            with open(
+                os.path.join(work_dir, "modeling_decision.json"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                json.dump(
+                    {
+                        "status": "approved",
+                        "gate_enabled": True,
+                        "modeler_response": approved_plan,
+                        "modeler_plan_sha256": _canonical_json_sha256(approved_plan),
+                        "review": {
+                            "approved": True,
+                            "approved_at": "2026-08-07T20:00:00",
+                        },
+                    },
+                    handle,
+                )
+            with open(
+                os.path.join(work_dir, "modeling_decision.md"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                handle.write("# 建模方案人工审批\n")
+
+            report = build_preflight_report(work_dir, "正文", code_sources=[])
+
+        check = report["checks"]["modeling_decision"]
+        self.assertFalse(check["passed"])
+        self.assertFalse(check["approved_plan_matches_current"])
+
+    def test_modeling_approval_is_invalid_when_declared_hash_is_corrupt(self):
+        plan = {"questions_solution": {"ques1": "已审批方案。"}}
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(
+                os.path.join(work_dir, "task_request.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump({"require_model_review": True}, handle)
+            with open(
+                os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(plan, handle)
+            with open(
+                os.path.join(work_dir, "modeling_decision.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(
+                    {
+                        "status": "approved",
+                        "gate_enabled": True,
+                        "modeler_response": plan,
+                        "modeler_plan_sha256": "0" * 64,
+                        "review": {
+                            "approved": True,
+                            "approved_at": "2026-08-07T20:00:00",
+                        },
+                    },
+                    handle,
+                )
+            with open(
+                os.path.join(work_dir, "modeling_decision.md"), "w", encoding="utf-8"
+            ) as handle:
+                handle.write("# 建模方案人工审批\n")
+
+            report = build_preflight_report(work_dir, "正文", code_sources=[])
+
+        check = report["checks"]["modeling_decision"]
+        self.assertFalse(check["passed"])
+        self.assertFalse(check["declared_hash_matches_approved_payload"])
+
+    def test_approved_high_pressure_plan_is_rechecked_against_current_contract(self):
+        problem = (
+            "高压油管问题1中喷油嘴B处向外喷油的速率如图2所示。"
+            "问题2中一个喷油周期内针阀升程与时间的关系由附件2给出。"
+            "问题3增加第二个喷油嘴，并调整喷油器和供油策略。"
+        )
+        plan = {
+            "questions_solution": {
+                "ques1": "问题一使用题面图2喷油速率。",
+                "ques2": "问题二使用附件2针阀升程计算喷嘴有效面积。",
+                "ques3": "沿用问题2所有参数及模型，两个喷油嘴默认同步。",
+            }
+        }
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(
+                os.path.join(work_dir, "task_request.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump(
+                    {"require_model_review": True, "ques_all": problem},
+                    handle,
+                    ensure_ascii=False,
+                )
+            for filename, payload in (
+                ("modeler_plan.json", plan),
+                (
+                    "modeling_decision.json",
+                    {
+                        "status": "approved",
+                        "gate_enabled": True,
+                        "modeler_response": plan,
+                        "modeler_plan_sha256": _canonical_json_sha256(plan),
+                        "review": {
+                            "approved": True,
+                            "approved_at": "2026-08-07T20:00:00",
+                        },
+                    },
+                ),
+            ):
+                with open(
+                    os.path.join(work_dir, filename), "w", encoding="utf-8"
+                ) as handle:
+                    json.dump(payload, handle, ensure_ascii=False)
+            with open(
+                os.path.join(work_dir, "modeling_decision.md"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                handle.write("# 建模方案人工审批\n")
+
+            report = build_preflight_report(work_dir, "正文", code_sources=[])
+
+        check = report["checks"]["modeling_decision"]
+        self.assertFalse(check["passed"])
+        self.assertTrue(check["approved_plan_matches_current"])
+        self.assertFalse(check["current_plan_contract_valid"])
+        self.assertTrue(
+            any("同步/错相" in item for item in check["plan_missing_requirements"])
+        )
+
+    def test_cumcm_ai_disclosure_requires_position_pdf_and_support_listing(self):
+        markdown = (
+            "## AI工具使用声明\n\n"
+            "本任务使用AI辅助，最终提交前由参赛队员复核。\n\n"
+            "## 参考文献\n\n"
+            "[1] 文献。\n\n"
+            "| 文件名 | 类型 |\n"
+            "| --- | --- |\n"
+            "| AI工具使用详情.pdf | AI工具使用详情 |\n"
+        )
+        with tempfile.TemporaryDirectory() as work_dir:
+            missing_pdf = build_preflight_report(
+                work_dir,
+                markdown,
+                code_sources=[],
+                export_profile="cumcm2026",
+            )
+            with open(
+                os.path.join(work_dir, "AI工具使用详情.pdf"), "wb"
+            ) as handle:
+                handle.write(b"%PDF-1.4\n" + b"x" * 200)
+            invalid_pdf = build_preflight_report(
+                work_dir,
+                markdown,
+                code_sources=[],
+                export_profile="cumcm2026",
+            )
+            import fitz
+
+            valid_pdf_path = os.path.join(work_dir, "AI工具使用详情.pdf")
+            document = fitz.open()
+            page = document.new_page()
+            page.insert_text((72, 72), "AI usage details")
+            document.save(valid_pdf_path)
+            document.close()
+            complete = build_preflight_report(
+                work_dir,
+                markdown,
+                code_sources=[],
+                export_profile="cumcm2026",
+            )
+
+        self.assertFalse(missing_pdf["checks"]["ai_disclosure"]["passed"])
+        self.assertFalse(invalid_pdf["checks"]["ai_disclosure"]["passed"])
+        self.assertTrue(complete["checks"]["ai_disclosure"]["passed"])
+
+    def test_reproducibility_claims_require_current_hash_bound_replay_report(self):
+        markdown = "隔离副本独立重跑后逐字节一致，数值复现PASS。"
+        with tempfile.TemporaryDirectory() as work_dir:
+            result_path = os.path.join(work_dir, "result.csv")
+            with open(result_path, "wb") as handle:
+                handle.write(b"x,y\n1,2\n")
+            digest = hashlib.sha256(b"x,y\n1,2\n").hexdigest()
+
+            missing = build_preflight_report(work_dir, markdown, code_sources=[])
+            with open(
+                os.path.join(work_dir, "independent_replay_report.json"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                json.dump(
+                    {
+                        "byte_reproducibility": {"status": "PASS"},
+                        "numerical_reproducibility": {"status": "PASS"},
+                        "files": [
+                            {
+                                "path": "result.csv",
+                                "reference_sha256": digest,
+                                "byte_match": True,
+                                "numerical_match": True,
+                            }
+                        ],
+                    },
+                    handle,
+                )
+            current = build_preflight_report(work_dir, markdown, code_sources=[])
+            with open(result_path, "ab") as handle:
+                handle.write(b"2,3\n")
+            stale = build_preflight_report(work_dir, markdown, code_sources=[])
+
+        self.assertFalse(missing["checks"]["reproducibility_claims"]["passed"])
+        self.assertTrue(current["checks"]["reproducibility_claims"]["passed"])
+        self.assertFalse(stale["checks"]["reproducibility_claims"]["passed"])
+
+    def test_numerical_reproducibility_claim_rejects_stale_reference_file(self):
+        markdown = "数值复现PASS，最大绝对差为0。"
+        with tempfile.TemporaryDirectory() as work_dir:
+            result_path = os.path.join(work_dir, "result.csv")
+            original = b"x,y\n1,2\n"
+            with open(result_path, "wb") as handle:
+                handle.write(original)
+            digest = hashlib.sha256(original).hexdigest()
+            with open(
+                os.path.join(work_dir, "independent_replay_report.json"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                json.dump(
+                    {
+                        "byte_reproducibility": {"status": "FAIL"},
+                        "numerical_reproducibility": {"status": "PASS"},
+                        "files": [
+                            {
+                                "path": "result.csv",
+                                "reference_sha256": digest,
+                                "byte_match": False,
+                                "numerical_match": True,
+                            }
+                        ],
+                    },
+                    handle,
+                )
+            current = build_preflight_report(work_dir, markdown, code_sources=[])
+            with open(result_path, "ab") as handle:
+                handle.write(b"2,3\n")
+            stale = build_preflight_report(work_dir, markdown, code_sources=[])
+
+        self.assertTrue(current["checks"]["reproducibility_claims"]["passed"])
+        self.assertFalse(stale["checks"]["reproducibility_claims"]["passed"])
+
+
 class TestProblemAlignmentGate(unittest.TestCase):
+    def test_high_pressure_sections_enforce_source_and_phase_alignment(self):
+        problem = (
+            "高压油管问题1中喷油嘴B处向外喷油的速率如图2所示。"
+            "问题2中针阀升程与时间的关系由附件2给出。"
+            "问题3增加第二个喷油嘴，并调整喷油器和供油策略。"
+        )
+        wrong_markdown = (
+            "## 5.1 问题一\n\n使用附件2针阀升程计算喷油流量。\n\n"
+            "## 5.2 问题二\n\n使用附件2针阀升程计算有效面积。\n\n"
+            "## 5.3 问题三\n\n两个喷油嘴默认同步运行。\n"
+        )
+        correct_markdown = (
+            "## 5.1 问题一\n\n问题一的喷油流出速率Q_out读取题面图2。\n\n"
+            "## 5.2 问题二\n\n使用附件2针阀升程计算喷嘴有效面积。\n\n"
+            "## 5.3 问题三\n\n沿用问题二所有参数及模型，比较同步与50 ms错相方案，并按联合目标值选择策略。\n"
+        )
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(
+                os.path.join(work_dir, "task_request.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump({"ques_all": problem}, handle, ensure_ascii=False)
+            wrong = build_preflight_report(work_dir, wrong_markdown, code_sources=[])
+            correct = build_preflight_report(work_dir, correct_markdown, code_sources=[])
+
+        wrong_check = wrong["checks"]["problem_alignment"]
+        self.assertFalse(wrong_check["passed"])
+        self.assertIn(
+            "5.1 把附件2针阀升程曲线作为问题一喷油速率来源，违反题面图2数据源约束。",
+            wrong_check["issues"],
+        )
+        self.assertIn(
+            "5.3 未比较同步与至少一种错相/错峰双喷嘴时序策略，也未给出可复核的选择依据。",
+            wrong_check["issues"],
+        )
+        self.assertTrue(
+            correct["checks"]["problem_alignment"]["passed"],
+            correct["checks"]["problem_alignment"]["issues"],
+        )
+
+    def test_high_pressure_alignment_rejects_negated_or_substituted_sources(self):
+        problem = (
+            "高压油管问题1中喷油嘴B处向外喷油的速率如图2所示。"
+            "问题2中针阀升程与时间的关系由附件2给出。"
+            "问题3增加第二个喷油嘴，并调整喷油器和供油策略。"
+        )
+        markdown = (
+            "## 5.1 问题一\n\n图2不采用，Q_out喷油流量由拟合外推。\n\n"
+            "## 5.2 问题二\n\n附件2不使用，针阀升程由自建曲线计算有效面积。\n\n"
+            "## 5.3 问题三\n\n附件2未使用，喷嘴流量改由经验式给出；比较同步与50 ms错相方案。\n"
+        )
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(
+                os.path.join(work_dir, "task_request.json"), "w", encoding="utf-8"
+            ) as handle:
+                json.dump({"ques_all": problem}, handle, ensure_ascii=False)
+            report = build_preflight_report(work_dir, markdown, code_sources=[])
+
+        check = report["checks"]["problem_alignment"]
+        self.assertFalse(check["passed"])
+        self.assertIn("5.1 未明确把题面图2作为问题一喷油流出速率的数据源。", check["issues"])
+        self.assertIn("5.2 未明确使用附件2针阀升程计算喷嘴流量/有效面积。", check["issues"])
+        self.assertIn("5.3 未明确使用附件2针阀升程模型，或正向继承已锁定的问题二模型。", check["issues"])
+
     def test_optical_sections_must_follow_problem_order_and_sample_relationship(self):
         problem = (
             "问题1 如果考虑只有一次反射、透射，建立模型。"
@@ -2303,6 +2787,332 @@ class TestEscapePipesInTableMathCells(unittest.TestCase):
                 code_sources=[],
             )
         self.assertTrue(report["checks"]["markdown_structure"]["passed"])
+
+
+class TestEditorialQualityPreflight(unittest.TestCase):
+    """Internal editorial policy is opt-in and explicitly non-official."""
+
+    def test_abstract_count_excludes_following_keywords(self):
+        markdown = (
+            "## 摘要\n\n"
+            + "甲" * 119
+            + "\n\n关键词：线性规划；敏感性；生产；优化\n\n"
+            + "# 一、问题重述\n\n正文。\n"
+        )
+
+        report = build_preflight_report(
+            tempfile.gettempdir(), markdown, code_sources=[]
+        )
+
+        abstract = report["checks"]["abstract"]
+        self.assertEqual(abstract["char_count"], 119)
+        self.assertFalse(abstract["passed"])
+
+    def test_require_references_cannot_be_bypassed_by_disabling_style_check(self):
+        report = build_preflight_report(
+            tempfile.gettempdir(),
+            "## 摘要\n\n正文。\n\n关键词：甲；乙；丙\n\n# 一、问题重述\n\n正文。",
+            code_sources=[],
+            editorial_policy={
+                "base": "cumcm_formal",
+                "min_body_chars": 0,
+                "min_result_figures": 0,
+                "min_result_tables": 0,
+                "min_result_figures_per_question": 0,
+                "min_result_tables_per_question": 0,
+                "require_asset_source_trace": False,
+                "min_abstract_paragraphs": 0,
+                "require_references": True,
+                "require_reference_style": False,
+            },
+        )
+
+        editorial = report["checks"]["editorial_quality"]
+        self.assertFalse(editorial["passed"])
+        self.assertIn("参考文献缺失、编号顺序或格式不符合要求", editorial["failures"])
+
+    def test_formal_editorial_policy_requires_result_assets_per_question(self):
+        markdown = (
+            "## 摘要\n\n" + "甲" * 120 + "\n\n"
+            "关键词：线性规划；敏感性；生产；优化\n\n"
+            "# 一、问题重述\n\n题目包含两个问题。\n\n"
+            "## 问题一结果分析\n\n图1 展示问题一的优化结果。\n\n"
+            "![问题一优化结果图](q1_result.png)\n\n"
+            "表1 问题一优化结果\n\n"
+            "| 指标 | 结果 |\n| --- | --- |\n| 利润 | 2200 |\n"
+        )
+
+        report = build_preflight_report(
+            tempfile.gettempdir(),
+            markdown,
+            code_sources=[],
+            declared_problem_count=2,
+            editorial_policy={
+                "base": "cumcm_formal",
+                "min_body_chars": 0,
+                "min_abstract_paragraphs": 0,
+                "require_references": False,
+                "require_reference_style": False,
+            },
+        )
+
+        editorial = report["checks"]["editorial_quality"]
+        self.assertFalse(editorial["passed"])
+        self.assertTrue(editorial["enforced"])
+        self.assertFalse(editorial["official_rule"])
+        self.assertEqual(editorial["result_assets"]["figure_count"], 1)
+        self.assertEqual(editorial["result_assets"]["table_count"], 1)
+        self.assertEqual(editorial["missing_questions"], [2])
+        self.assertEqual(editorial["severity"], "fail")
+
+    def test_formal_editorial_policy_flags_missing_result_figure_and_table(self):
+        markdown = (
+            "## 摘要\n\n" + "甲" * 120 + "\n\n"
+            "关键词：线性规划；敏感性；生产；优化\n\n"
+            "# 一、问题重述\n\n题目包含一个问题。\n\n"
+            "## 问题一结果分析\n\n仅给出文字结论，没有图表。\n"
+        )
+
+        report = build_preflight_report(
+            tempfile.gettempdir(),
+            markdown,
+            code_sources=[],
+            declared_problem_count=1,
+            editorial_policy={
+                "base": "cumcm_formal",
+                "min_body_chars": 0,
+                "min_abstract_paragraphs": 0,
+                "require_references": False,
+                "require_reference_style": False,
+            },
+        )
+
+        editorial = report["checks"]["editorial_quality"]
+        self.assertEqual(editorial["result_assets"]["figure_count"], 0)
+        self.assertEqual(editorial["result_assets"]["table_count"], 0)
+        self.assertEqual(editorial["missing_figure_questions"], [1])
+        self.assertEqual(editorial["missing_table_questions"], [1])
+
+    def test_smoke_policy_reports_gaps_without_failing_editorial_gate(self):
+        markdown = "## 摘要\n\n" + "甲" * 120 + "\n\n关键词：甲；乙；丙\n"
+
+        report = build_preflight_report(
+            tempfile.gettempdir(),
+            markdown,
+            code_sources=[],
+            declared_problem_count=2,
+            editorial_policy="smoke",
+        )
+
+        editorial = report["checks"]["editorial_quality"]
+        self.assertTrue(editorial["passed"])
+        self.assertFalse(editorial["quality_passed"])
+        self.assertFalse(editorial["enforced"])
+        self.assertEqual(editorial["severity"], "info")
+
+    def test_formal_editorial_policy_requires_source_hash_manifest(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            image_path = os.path.join(work_dir, "q1_result.png")
+            with open(image_path, "wb") as handle:
+                handle.write(b"not a rendered image; editorial trace fixture")
+            markdown = (
+                "## 摘要\n\n" + "甲" * 120 + "\n\n"
+                "关键词：线性规划；敏感性；生产；优化\n\n"
+                "## 问题一结果分析\n\n"
+                "![问题一结果图](q1_result.png)\n\n"
+                "表1 问题一结果\n\n"
+                "| 指标 | 结果 |\n| --- | --- |\n| 利润 | 2200 |\n"
+            )
+            report = build_preflight_report(
+                work_dir,
+                markdown,
+                code_sources=[],
+                declared_problem_count=1,
+                editorial_policy={
+                    "base": "cumcm_formal",
+                    "min_body_chars": 0,
+                    "min_abstract_paragraphs": 0,
+                    "require_references": False,
+                    "require_reference_style": False,
+                },
+            )
+
+        trace = report["checks"]["editorial_quality"]["asset_source_trace"]
+        self.assertFalse(trace["passed"])
+        self.assertIn("缺少 paper_assets_manifest.json", trace["errors"])
+
+    def test_formal_editorial_policy_accepts_matching_asset_source_hashes(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            image_path = os.path.join(work_dir, "q1_result.png")
+            source_path = os.path.join(work_dir, "ques1_result.csv")
+            with open(image_path, "wb") as handle:
+                handle.write(b"not a rendered image; editorial trace fixture")
+            with open(source_path, "w", encoding="utf-8") as handle:
+                handle.write("metric,value\nduration,1.0\n")
+            with open(source_path, "rb") as handle:
+                source_hash = hashlib.sha256(handle.read()).hexdigest()
+            with open(
+                os.path.join(work_dir, "paper_assets_manifest.json"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                json.dump(
+                    {
+                        "figures": [{
+                            "path": "q1_result.png",
+                            "questions": ["ques1"],
+                            "source_paths": ["ques1_result.csv"],
+                            "source_sha256": {"ques1_result.csv": source_hash},
+                        }],
+                        "tables": [{
+                            "id": "table_q1",
+                            "questions": ["ques1"],
+                            "source_paths": ["ques1_result.csv"],
+                            "source_sha256": {"ques1_result.csv": source_hash},
+                        }],
+                    },
+                    handle,
+                )
+            markdown = (
+                "## 摘要\n\n" + "甲" * 120 + "\n\n"
+                "关键词：线性规划；敏感性；生产；优化\n\n"
+                "## 问题一结果分析\n\n"
+                "![问题一结果图](q1_result.png)\n\n"
+                "表1 问题一结果\n\n"
+                "| 指标 | 结果 |\n| --- | --- |\n| 利润 | 2200 |\n"
+            )
+            report = build_preflight_report(
+                work_dir,
+                markdown,
+                code_sources=[],
+                declared_problem_count=1,
+                editorial_policy={
+                    "base": "cumcm_formal",
+                    "min_body_chars": 0,
+                    "min_abstract_paragraphs": 0,
+                    "require_references": False,
+                    "require_reference_style": False,
+                },
+            )
+
+        editorial = report["checks"]["editorial_quality"]
+        self.assertTrue(editorial["asset_source_trace"]["passed"])
+        self.assertTrue(editorial["passed"], editorial["failures"])
+
+    def test_formal_editorial_policy_rejects_changed_asset_source_hash(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            image_path = os.path.join(work_dir, "q1_result.png")
+            source_path = os.path.join(work_dir, "ques1_result.csv")
+            with open(image_path, "wb") as handle:
+                handle.write(b"not a rendered image; editorial trace fixture")
+            with open(source_path, "w", encoding="utf-8") as handle:
+                handle.write("metric,value\nduration,changed\n")
+            with open(
+                os.path.join(work_dir, "paper_assets_manifest.json"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                json.dump(
+                    {
+                        "figures": [{
+                            "path": "q1_result.png",
+                            "questions": ["ques1"],
+                            "source_paths": ["ques1_result.csv"],
+                            "source_sha256": {"ques1_result.csv": "0" * 64},
+                        }],
+                        "tables": [{
+                            "id": "table_q1",
+                            "questions": ["ques1"],
+                            "source_paths": ["ques1_result.csv"],
+                            "source_sha256": {"ques1_result.csv": "0" * 64},
+                        }],
+                    },
+                    handle,
+                )
+            markdown = (
+                "## 摘要\n\n" + "甲" * 120 + "\n\n"
+                "关键词：线性规划；敏感性；生产；优化\n\n"
+                "## 问题一结果分析\n\n"
+                "![问题一结果图](q1_result.png)\n\n"
+                "表1 问题一结果\n\n"
+                "| 指标 | 结果 |\n| --- | --- |\n| 利润 | 2200 |\n"
+            )
+            report = build_preflight_report(
+                work_dir,
+                markdown,
+                code_sources=[],
+                declared_problem_count=1,
+                editorial_policy={
+                    "base": "cumcm_formal",
+                    "min_body_chars": 0,
+                    "min_abstract_paragraphs": 0,
+                    "require_references": False,
+                    "require_reference_style": False,
+                },
+            )
+
+        trace = report["checks"]["editorial_quality"]["asset_source_trace"]
+        self.assertFalse(trace["passed"])
+        self.assertTrue(any("来源哈希失配" in error for error in trace["errors"]))
+
+    def test_editorial_asset_binding_handles_question_four_before_chinese_noun(self):
+        """``问题四三机`` must not be misread as a nonexistent question 43."""
+        with tempfile.TemporaryDirectory() as work_dir:
+            image_path = os.path.join(work_dir, "q4_result.png")
+            source_path = os.path.join(work_dir, "ques4_result.csv")
+            with open(image_path, "wb") as handle:
+                handle.write(b"editorial question binding fixture")
+            with open(source_path, "w", encoding="utf-8") as handle:
+                handle.write("metric,value\nduration,1.0\n")
+            with open(source_path, "rb") as handle:
+                source_hash = hashlib.sha256(handle.read()).hexdigest()
+            with open(
+                os.path.join(work_dir, "paper_assets_manifest.json"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                json.dump(
+                    {
+                        "figures": [{
+                            "path": "q4_result.png",
+                            "questions": ["ques4"],
+                            "source_paths": ["ques4_result.csv"],
+                            "source_sha256": {"ques4_result.csv": source_hash},
+                        }],
+                        "tables": [{
+                            "id": "table_q4",
+                            "questions": ["ques4"],
+                            "source_paths": ["ques4_result.csv"],
+                            "source_sha256": {"ques4_result.csv": source_hash},
+                        }],
+                    },
+                    handle,
+                )
+            markdown = (
+                "## 摘要\n\n" + "甲" * 120 + "\n\n"
+                "关键词：线性规划；敏感性；生产；优化\n\n"
+                "## 问题四：三机协同结果\n\n"
+                "![问题四三机遮蔽区间](q4_result.png)\n\n"
+                "表4 问题四三机遮蔽结果\n\n"
+                "| 指标 | 结果 |\n| --- | --- |\n| 时长 | 1.0 |\n"
+            )
+            report = build_preflight_report(
+                work_dir,
+                markdown,
+                code_sources=[],
+                declared_problem_count=4,
+                editorial_policy={
+                    "base": "cumcm_formal",
+                    "min_body_chars": 0,
+                    "min_abstract_paragraphs": 0,
+                    "require_references": False,
+                    "require_reference_style": False,
+                },
+            )
+
+        assets = report["checks"]["editorial_quality"]["question_assets"]
+        self.assertEqual(assets["4"]["figures"], ["figure_1"])
+        self.assertEqual(assets["4"]["tables"], ["table_1"])
 
 
 if __name__ == "__main__":

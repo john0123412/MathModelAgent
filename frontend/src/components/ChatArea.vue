@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useStickyScroll } from "@/composables/useStickyScroll";
 import { useTaskStore } from "@/stores/task";
 import type { Message } from "@/utils/response";
 import { Send } from "lucide-vue-next";
@@ -19,6 +20,10 @@ const inputValue = ref("");
 const inputRef = ref<HTMLInputElement | null>(null);
 const scrollRef = ref<HTMLDivElement | null>(null);
 
+// Keep live task messages at the newest item unless the user is reading older
+// content. Scrolling back near the bottom re-enables automatic following.
+const { onScroll } = useStickyScroll(scrollRef, () => props.messages);
+
 // ---- Methods ----
 
 /** 发送消息：本地回显，并通过 WebSocket 实时干预正在运行的任务 */
@@ -33,7 +38,7 @@ const sendMessage = () => {
 
 <template>
   <div class="flex h-full flex-col p-3">
-    <div ref="scrollRef" class="flex-1 overflow-y-auto">
+    <div ref="scrollRef" class="flex-1 overflow-y-auto" @scroll="onScroll">
       <template v-for="message in props.messages" :key="message.id">
         <div class="mb-3">
           <!-- 用户消息 -->

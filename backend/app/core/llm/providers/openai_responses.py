@@ -20,6 +20,8 @@ class OpenAIResponsesProvider(BaseProvider):
         tool_choice: str | None = None,
         max_tokens: int | None = None,
         top_p: float | None = None,
+        thinking: bool = True,
+        response_format: dict | None = None,
     ) -> StandardResponse:
         async with llm_http_client(settings.LLM_REQUEST_TIMEOUT_SECONDS) as http_client:
             client = AsyncOpenAI(
@@ -121,5 +123,7 @@ class OpenAIResponsesProvider(BaseProvider):
             # supplied tools.  A function object is only valid when it also
             # names the specific function; {"type": "function"} is rejected
             # by compatible gateways as an incomplete tool selection.
+            return "required"
+        if tool_choice == "any":
             return "required"
         return tool_choice

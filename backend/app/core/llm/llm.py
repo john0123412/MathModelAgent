@@ -28,6 +28,10 @@ DEFAULT_LLM_MAX_RETRIES = 3
 _TRANSIENT_BASE_URL_VALIDATION_ERROR = "LLM Base URL 主机无法解析"
 
 
+class LLMConfigError(RuntimeError):
+    """LLM 模型或 API Key 缺失时抛出，避免被 JSON 修复循环捕获。"""
+
+
 def _record_token_usage_best_effort(
     task_id: str,
     agent_name: str,
@@ -79,9 +83,9 @@ class LLM:
     def _validate_config(self, agent_name: str) -> None:
         """验证 LLM 配置是否完整。"""
         if not self.model or not str(self.model).strip():
-            raise ValueError(f"{agent_name} 未配置模型 ID，请设置对应的 *_MODEL")
+            raise LLMConfigError(f"{agent_name} 未配置模型 ID，请设置对应的 *_MODEL")
         if not self.api_key or not str(self.api_key).strip():
-            raise ValueError(f"{agent_name} 未配置 API Key，请设置对应的 *_API_KEY")
+            raise LLMConfigError(f"{agent_name} 未配置 API Key，请设置对应的 *_API_KEY")
         self.base_url = validate_llm_base_url(
             self.base_url,
             allow_private_hosts=settings.ALLOW_PRIVATE_LLM_BASE_URLS,
@@ -106,6 +110,8 @@ class LLM:
         max_retries: int | None = None,
         retry_delay: float = 1.0,
         top_p: float | None = None,
+        thinking: bool = True,
+        response_format: dict | None = None,
         agent_name: str = "SystemAgent",
         sub_title: str | None = None,
     ) -> StandardResponse:
@@ -132,23 +138,31 @@ class LLM:
                 self._validate_config(agent_name)
                 # Providers also set their HTTP client timeout, but this outer bound
                 # prevents SDK retry policies from extending a single LLM attempt.
+                provider_kwargs = {
+                    "messages": messages,
+                    "model": self.model,
+                    "api_key": self.api_key,
+                    "base_url": self.base_url,
+                    "tools": tools,
+                    "tool_choice": tool_choice,
+                    "max_tokens": self.max_tokens,
+                    "top_p": top_p,
+                    "thinking": thinking,
+                }
+                if response_format is not None:
+                    provider_kwargs["response_format"] = response_format
                 response = await asyncio.wait_for(
-                    self.provider.call(
-                        messages=messages,
-                        model=self.model,  # type: ignore[arg-type]
-                        api_key=self.api_key,  # type: ignore[arg-type]
-                        base_url=self.base_url,
-                        tools=tools,
-                        tool_choice=tool_choice,
-                        max_tokens=self.max_tokens,
-                        top_p=top_p,
-                    ),
+                    self.provider.call(**provider_kwargs),
                     timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS,
                 )
                 logger.info(
                     "API 响应已接收: "
                     f"content_chars={len(response.content or '')}, "
-                    f"tool_calls={len(response.tool_calls)}"
+                    f"reasoning_chars={len(response.reasoning_content or '')}, "
+                    f"tool_calls={len(response.tool_calls)}, "
+                    f"finish_reason={response.finish_reason or 'unknown'}, "
+                    f"completion_tokens={response.usage.completion_tokens}, "
+                    f"reasoning_tokens={response.usage.reasoning_tokens}"
                 )
                 self.chat_count += 1
                 _record_token_usage_best_effort(
@@ -160,6 +174,10 @@ class LLM:
                 await self.send_message(response, agent_name, sub_title)
                 return response
             except Exception as e:
+                # 配置错误在每次调用前都会被检查；它不是网络瞬态错误，
+                # 也不能落入 Coordinator/Modeler 的 JSON 修复循环。
+                if isinstance(e, LLMConfigError):
+                    raise
                 attempt += 1
                 logger.error(f"第{attempt}次重试: {type(e).__name__}")
                 if isinstance(e, ValueError) and not self._is_retryable_config_error(e):

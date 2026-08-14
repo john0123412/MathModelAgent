@@ -16,6 +16,7 @@ from app.utils.log_util import logger
 from app.config.setting import settings
 import json
 from app.tools.base_interpreter import BaseCodeInterpreter
+from app.tools.matplotlib_setup import build_matplotlib_init_code
 
 
 class E2BCodeInterpreter(BaseCodeInterpreter):
@@ -48,8 +49,10 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
                 api_key=settings.E2B_API_KEY, timeout=timeout
             )
             logger.info("沙箱环境初始化成功")
-            await self._pre_execute_code()
             await self._upload_all_files()
+            # 字体文件在初始化脚本扫描前必须已上传到 /home/user；否则
+            # font_manager.addfont 只能看到空目录，中文回退链不会生效。
+            await self._pre_execute_code()
         except Exception as exc:
             logger.error(f"初始化沙箱环境失败: {type(exc).__name__}")
             raise
@@ -86,29 +89,8 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
             raise
 
     async def _pre_execute_code(self):
-        init_code = (
-            # 加载中文字体，确保图表中文正常显示（跨平台兼容）
-            "import os\n"
-            "import matplotlib\n"
-            "import matplotlib.pyplot as plt\n"
-            "from matplotlib import font_manager\n"
-            "import pathlib as _pl, glob as _glob\n"
-            "_cache_dir = _pl.Path(matplotlib.get_cachedir())\n"
-            "for _cache_file in _glob.glob(str(_cache_dir / 'fontlist*.json')):\n"
-            "    _pl.Path(_cache_file).unlink(missing_ok=True)\n"
-            "font_manager.fontManager.__init__()\n"
-            "_font_dir = '/home/user'\n"
-            "_loaded = False\n"
-            "for _f in os.listdir(_font_dir):\n"
-            "    if _f.lower().endswith(('.ttf', '.otf', '.ttc')):\n"
-            "        _fp = os.path.join(_font_dir, _f)\n"
-            "        font_manager.fontManager.addfont(_fp)\n"
-            "        _loaded = True\n"
-            "if _loaded:\n"
-            "    print(f'中文字体已加载，可用字体数: {len(font_manager.fontManager.ttflist)}')\n"
-            "plt.rcParams['font.sans-serif'] = ['SimHei', 'Heiti SC', 'STHeiti', 'PingFang SC', 'Noto Sans CJK SC', 'Noto Sans SC', 'WenQuanYi Micro Hei', 'Microsoft YaHei', 'sans-serif']\n"
-            "plt.rcParams['axes.unicode_minus'] = False\n"
-            "plt.rcParams['font.family'] = 'sans-serif'\n"
+        init_code = build_matplotlib_init_code(
+            "/home/user", font_dir="/home/user", setup_chdir=True
         )
         await self.execute_code(init_code)
 

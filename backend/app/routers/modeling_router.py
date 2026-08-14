@@ -64,17 +64,33 @@ def _finalize_docx_and_manifest(
 
     任一步失败都会向调用方抛出异常，任务不得提前标记为 completed。
     """
-    md_2_docx(task_id, export_profile=export_profile)
     work_dir = get_work_dir(task_id)
-    # Final acceptance validates the manifest hashes, so write a current
-    # manifest before the submission audit.  The audit then cross-binds that
-    # manifest with the template identity used by DOCX/PDF/preflight/visual
-    # reports; refresh once more to include report filenames.
-    write_candidate_manifest(work_dir, task_id)
-    write_submission_audit_report(work_dir)
-    report = write_final_acceptance_report(work_dir)
-    write_candidate_manifest(work_dir, task_id)
-    return report
+    manifest_path = os.path.join(work_dir, "candidate_manifest.json")
+    # A previous candidate must not survive a failed refresh and masquerade as
+    # the current DOCX/audit result. The audit needs a provisional manifest, so
+    # remove it again if any later finalization step fails.
+    try:
+        os.remove(manifest_path)
+    except FileNotFoundError:
+        pass
+
+    try:
+        md_2_docx(task_id, export_profile=export_profile)
+        # Final acceptance validates the manifest hashes, so write a current
+        # manifest before the submission audit.  The audit then cross-binds that
+        # manifest with the template identity used by DOCX/PDF/preflight/visual
+        # reports; refresh once more to include report filenames.
+        write_candidate_manifest(work_dir, task_id)
+        write_submission_audit_report(work_dir)
+        report = write_final_acceptance_report(work_dir)
+        write_candidate_manifest(work_dir, task_id)
+        return report
+    except Exception:
+        try:
+            os.remove(manifest_path)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 async def _apply_final_acceptance_status(task_id: str, report: dict) -> bool:

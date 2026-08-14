@@ -23,6 +23,11 @@
 >   （`backend/project/work_dir/<task_id>/`）更方便，适合"直接补一份默认排版
 >   PDF"这种最简场景。
 
+> **代码图表字体**：本地/E2B 代码解释器启动时会清理 Matplotlib 字体缓存，先注册任务目录中
+> 的 `.ttf/.otf/.ttc` 字体，再按 CJK 开源字体链回退，并注入统一的 `COLORS`/`FIG_*` 绘图常量。
+> 这只影响论文中的代码生成图表，不改变 PDF 正文的 XeLaTeX 字体门禁；正式提交仍须按上文检查
+> PDF 实际命中的字体。
+
 ## 当前推荐流程
 
 Docker 后端默认负责完成建模主流程，并生成：
@@ -505,6 +510,7 @@ LibreOffice / `soffice`。如必须走 DOCX 转 PDF，需要额外安装 LibreOf
 1. **新鲜度**
    - `export_status.json` 记录 PDF 的 `source_sha256` / `output_sha256`；`docx_export_status.json` 对 DOCX 记录同类字段。
    - 重导开始前先删除旧 `res.pdf` / `res.docx`。导出失败时不得继续把旧文件当成当前候选。
+   - DOCX、submission audit、final acceptance 或候选清单的最终刷新任一步失败时，路由层会撤销 `candidate_manifest.json`；此时清单缺失是防止旧候选冒充当前结果的保护行为，必须修复失败后完整重跑最终刷新。
    - `submission_audit_report.json` 会核对当前 Markdown、PDF 与预检/视觉报告的哈希；`final_acceptance_report.json` 还会核对 manifest 中的主产物哈希。
 
 2. **视觉覆盖**

@@ -272,6 +272,7 @@ uv run python -m app.tools.export_cli task-refresh `
 
 - [ ] `docx_export_status.json.success=true`，其 `source_sha256` 等于当前 `res.md`，`output_sha256` 等于当前 `res.docx`。
 - [ ] `export_status.json` 的 PDF 源/输出哈希与当前文件一致；失败重导后目录中不存在冒充当前结果的旧 PDF。
+- [ ] DOCX、submission audit、final acceptance 或候选清单刷新若曾失败，确认当时的 `candidate_manifest.json` 已被撤销；修复后已完整重跑最终刷新并重新生成当前清单，不能复用失败前的旧清单。
 - [ ] `candidate_manifest.json.schema_version=1.2`，`submission_file`、`artifact_set_id` 与主产物哈希已生成且一致。
 - [ ] 如生成支撑材料，`support_materials_manifest.json` / ZIP 已通过成员、大小和 SHA-256 审核，且明确不作为主论文上传文件。
 - [ ] 若使用 `cumcm2026`，`AI工具使用详情.pdf` 可由 PDF 解析器打开且至少有一页；仅有 `%PDF-` 文件头的伪文件不能通过预检。

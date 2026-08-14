@@ -507,6 +507,8 @@ class CoderAgent(Agent):
         evidence_failure_count = 0
         last_closeout_warning_remaining: int | None = None
         consecutive_agent_exceptions = 0
+        no_tool_response_count = 0
+        saw_tool_calls = False
 
         while True:
             if self.max_retries is not None and retry_count >= self.max_retries:
@@ -541,6 +543,12 @@ class CoderAgent(Agent):
 
             active_tools = tools
             active_tool_choice = "auto"
+            # Keep every formal-subtask tool turn in the same DeepSeek mode.
+            # The forced first turn disables thinking and therefore has no
+            # reasoning_content to round-trip.  Re-enabling thinking after its
+            # tool result would make DeepSeek reject that assistant tool-call
+            # history with BadRequestError (400).
+            active_thinking = formal_subtask_id is None
             if evidence_commit_required:
                 # A code-run limit is a circuit breaker, not proof that the
                 # formal subtask is complete.  At this boundary expose only the
@@ -555,7 +563,24 @@ class CoderAgent(Agent):
                         == "record_execution_evidence"
                     )
                 ]
-                active_tool_choice = "required"
+                # Use the internal ``any`` contract, exposing only the
+                # recorder so every provider has one deterministic action.
+                active_tool_choice = "any"
+            elif formal_subtask_id is not None:
+                if successful_tool_calls == 0:
+                    # A formal question cannot be considered complete without
+                    # at least one executed code cell.  Offer only the
+                    # executable action for its first turn so the forced
+                    # ``any`` contract cannot select stale evidence.
+                    active_tools = [
+                        tool
+                        for tool in tools
+                        if (
+                            tool.get("name") == "execute_code"
+                            or tool.get("function", {}).get("name") == "execute_code"
+                        )
+                    ]
+                    active_tool_choice = "any"
 
             self.current_chat_turns += 1
             logger.info(f"当前对话轮次: {self.current_chat_turns}")
@@ -565,12 +590,15 @@ class CoderAgent(Agent):
                     history=self.chat_history,
                     tools=active_tools,
                     tool_choice=active_tool_choice,
+                    thinking=active_thinking,
                     agent_name=self.__class__.__name__,
                 )
                 consecutive_agent_exceptions = 0
 
                 # 如果有工具调用
                 if response.tool_calls:
+                    saw_tool_calls = True
+                    no_tool_response_count = 0
                     logger.info("检测到工具调用")
                     if len(response.tool_calls) != 1:
                         # The legacy loop handled only the first call but still
@@ -1189,6 +1217,29 @@ class CoderAgent(Agent):
                             }
                         )
                         continue
+                    if (
+                        formal_subtask_id is not None
+                        and successful_tool_calls == 0
+                        and not saw_tool_calls
+                    ):
+                        # Keep a bounded recovery path for providers that
+                        # still ignore ``tool_choice=required``.  Returning a
+                        # successful-looking plain-text response here would
+                        # make the workflow report a formal question as done
+                        # without any current execution evidence.
+                        no_tool_response_count += 1
+                        if no_tool_response_count < _EVIDENCE_FAILURE_LIMIT:
+                            await self.append_chat_history(
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        f"正式问题 {formal_subtask_id} 尚未执行代码。"
+                                        "必须先调用 execute_code 实际生成并更新本题结果文件；"
+                                        "不要只回复文字或复用旧文件。"
+                                    ),
+                                }
+                            )
+                            continue
                     if formal_subtask_id is not None and successful_tool_calls:
                         evidence_commit_required = True
                         await self.append_chat_history(

@@ -23,6 +23,8 @@ class AnthropicProvider(BaseProvider):
         tool_choice: str | None = None,
         max_tokens: int | None = None,
         top_p: float | None = None,
+        thinking: bool = True,
+        response_format: dict | None = None,
     ) -> StandardResponse:
         auth_kwargs = self._build_auth_kwargs(api_key, base_url)
         async with llm_http_client(settings.LLM_REQUEST_TIMEOUT_SECONDS) as http_client:
@@ -137,7 +139,7 @@ class AnthropicProvider(BaseProvider):
             return {"type": "auto"}
         if tool_choice == "none":
             return {"type": "none"}
-        if tool_choice == "required":
+        if tool_choice in {"required", "any"}:
             return {"type": "any"}
         return {"type": "auto"}
 

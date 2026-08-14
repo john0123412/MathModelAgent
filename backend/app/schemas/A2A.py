@@ -38,7 +38,7 @@ class AcceptanceMetric(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    key: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    key: str = Field(pattern=r"^[a-z][a-z0-9_.]*$")
     label: str = Field(min_length=2)
     comparator: Literal["le", "lt", "ge", "gt", "eq", "within"]
     target: float = Field(allow_inf_nan=False)

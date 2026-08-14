@@ -987,6 +987,83 @@ class TestStructuredModelPlan(unittest.TestCase):
         )
         self.assertTrue(supported.valid, supported.model_dump_json())
 
+    def test_empirical_consistency_threshold_accepts_question_text_basis(self):
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(
+                key="n_consistency",
+                label="样本一致性偏差",
+                comparator="eq",
+                target=1,
+                description="两组样本量完全一致时记为 1。",
+            )
+        ]
+        unsupported = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertFalse(unsupported.valid)
+        self.assertIn("n_consistency", " ".join(unsupported.violations))
+        self.assertIn("目标值依据", " ".join(unsupported.violations))
+
+        plan.subtasks["ques1"].acceptance_metrics[0].description = (
+            "n_consistency=1 的目标值依据：题目原文规定两组样本必须一一对应。"
+        )
+        supported = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertTrue(supported.valid, supported.model_dump_json())
+
+    def test_empirical_threshold_basis_prompt_examples_match_validator(self):
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(
+                key="n_consistency",
+                label="样本一致性偏差",
+                comparator="eq",
+                target=1,
+                description=(
+                    "n_consistency=1 的阈值依据：题目原文规定两组样本必须一一对应。"
+                ),
+            ),
+            AcceptanceMetric(
+                key="p_value",
+                label="显著性 p 值",
+                comparator="le",
+                target=0.05,
+                description="p_value 的判据依据：文献标准采用的 0.05 显著性水平。",
+            ),
+            AcceptanceMetric(
+                key="rmse_test",
+                label="测试集均方根误差",
+                comparator="le",
+                target=1,
+                description=(
+                    "rmse_test 的容差依据：数据统计中训练/测试划分的交叉验证惯例。"
+                ),
+            ),
+            AcceptanceMetric(
+                key="r2_test",
+                label="测试集拟合优度",
+                comparator="ge",
+                target=0.8,
+                description=(
+                    "r2_test 的阈值依据：交叉验证中预先设定的拟合优度基线。"
+                ),
+            ),
+        ]
+
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+
+        self.assertTrue(result.valid, result.model_dump_json())
+
     def test_vague_problem_wording_cannot_be_recast_as_numeric_quality_threshold(self):
         plan = self._linear_plan()
         plan.subtasks["ques1"].acceptance_metrics = [

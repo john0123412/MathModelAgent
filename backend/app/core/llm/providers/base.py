@@ -18,6 +18,8 @@ class BaseProvider(ABC):
         tool_choice: str | None = None,
         max_tokens: int | None = None,
         top_p: float | None = None,
+        thinking: bool = True,
+        response_format: dict | None = None,
     ) -> StandardResponse:
         """调用 LLM 并返回标准化响应。
 
@@ -30,6 +32,8 @@ class BaseProvider(ABC):
             tool_choice: 工具选择策略。
             max_tokens: 最大生成 token 数。
             top_p: 采样温度参数。
+            thinking: 是否保留兼容端点的思考模式。
+            response_format: 可选的结构化输出格式；不支持的 provider 可忽略。
 
         Returns:
             标准化响应。

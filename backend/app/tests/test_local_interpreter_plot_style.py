@@ -29,6 +29,8 @@ class TestLocalInterpreterPlotStyle(unittest.TestCase):
         self.assertIn("_mma_savefig_with_style", init_code)
         self.assertIn("plt.savefig = _mma_savefig_with_style", init_code)
         self.assertIn("matplotlib.figure.Figure.savefig = _mma_figure_savefig_with_style", init_code)
+        self.assertIn("COLOR_MAP = dict(COLORS)", init_code)
+        self.assertIn("FIG_SINGLE =", init_code)
 
 
 if __name__ == "__main__":

@@ -108,11 +108,6 @@ const validationResults = ref({
 
 // ---- Computed ----
 
-/** 判断所有验证是否都通过 */
-const allValid = computed(() => {
-	return Object.values(validationResults.value).every((result) => result.valid);
-});
-
 /** 模型配置列表 */
 const modelConfigs = computed(() => [
 	{ key: "coordinator", label: "协调者模型配置" },
@@ -139,26 +134,24 @@ const saveToStore = async () => {
 	apiKeyStore.setCoderConfig(form.value.coder);
 	apiKeyStore.setWriterConfig(form.value.writer);
 	apiKeyStore.setOpenalexEmail(form.value.openalex_email);
-	if (allValid.value) {
-		try {
-			const result = await saveApiConfig({
-				coordinator: form.value.coordinator,
-				modeler: form.value.modeler,
-				coder: form.value.coder,
-				writer: form.value.writer,
-				openalex_email: form.value.openalex_email,
+	try {
+		const result = await saveApiConfig({
+			coordinator: form.value.coordinator,
+			modeler: form.value.modeler,
+			coder: form.value.coder,
+			writer: form.value.writer,
+			openalex_email: form.value.openalex_email,
+		});
+		if (result.data?.success) {
+			toast({
+				title: "配置已应用",
+				description: result.data.persisted
+					? result.data.message
+					: "配置已应用到当前后端进程；后端重启后需重新配置或写入 .env.dev。",
 			});
-			if (result.data?.success) {
-				toast({
-					title: "配置已应用",
-					description: result.data.persisted
-						? result.data.message
-						: "配置已应用到当前后端进程；后端重启后需重新配置或写入 .env.dev。",
-				});
-			}
-		} catch (error) {
-			console.error("应用运行时配置失败:", getSafeErrorMessage(error));
 		}
+	} catch (error) {
+		console.error("应用运行时配置失败:", getSafeErrorMessage(error));
 	}
 };
 

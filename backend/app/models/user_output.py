@@ -209,7 +209,8 @@ class UserOutput:
             content = footnote["content"]
             # 保留中文参考文献的全角句号；英文条目仍沿用半角句号。
             if content and not content.rstrip().endswith((".", "。")):
-                content = content.rstrip() + "。"
+                terminal_mark = "。" if re.search(r"[\u3400-\u9fff]", content) else "."
+                content = content.rstrip() + terminal_mark
             text += f"\n\n[{footnote['number']}] {content}"
         return text
 

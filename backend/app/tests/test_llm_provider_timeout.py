@@ -1,9 +1,10 @@
 import asyncio
 import unittest
 from unittest import mock
+from types import SimpleNamespace
 
 from app.config.setting import settings
-from app.core.llm.llm import LLM
+from app.core.llm.llm import LLM, LLMConfigError
 from app.core.llm.providers.openai_chat import OpenAIChatProvider
 from app.core.llm.providers.openai_responses import OpenAIResponsesProvider
 from app.core.llm.types import StandardResponse, Usage
@@ -15,6 +16,36 @@ class ProviderTimeoutTest(unittest.IsolatedAsyncioTestCase):
         provider = OpenAIResponsesProvider()
 
         self.assertEqual(provider._convert_tool_choice("required"), "required")
+        self.assertEqual(provider._convert_tool_choice("any"), "required")
+
+    def test_openai_chat_any_tool_choice_forces_the_single_tool(self):
+        provider = OpenAIChatProvider()
+        tools = [
+            {
+                "type": "function",
+                "function": {"name": "execute_code", "parameters": {}},
+            }
+        ]
+
+        self.assertEqual(
+            provider._convert_tool_choice("any", tools),
+            {"type": "function", "function": {"name": "execute_code"}},
+        )
+
+    def test_openai_chat_any_tool_choice_warns_and_falls_back_for_multiple_tools(self):
+        provider = OpenAIChatProvider()
+        tools = [
+            {"type": "function", "function": {"name": "execute_code"}},
+            {
+                "type": "function",
+                "function": {"name": "record_execution_evidence"},
+            },
+        ]
+
+        with mock.patch("app.core.llm.providers.openai_chat.logger.warning") as warning:
+            self.assertEqual(provider._convert_tool_choice("any", tools), "auto")
+
+        warning.assert_called_once()
 
     async def test_openai_chat_provider_uses_configured_timeout(self):
         provider = OpenAIChatProvider()
@@ -31,6 +62,8 @@ class ProviderTimeoutTest(unittest.IsolatedAsyncioTestCase):
                     model="test-model",
                     api_key="test-key",
                     base_url="https://example.test/v1",
+                    thinking=False,
+                    response_format={"type": "json_object"},
                 )
 
         self.assertEqual(
@@ -38,6 +71,78 @@ class ProviderTimeoutTest(unittest.IsolatedAsyncioTestCase):
             settings.LLM_REQUEST_TIMEOUT_SECONDS,
         )
         self.assertEqual(client_cls.call_args.kwargs["max_retries"], 0)
+        self.assertEqual(
+            client.chat.completions.create.call_args.kwargs["extra_body"],
+            {"thinking": {"type": "disabled"}},
+        )
+        self.assertEqual(
+            client.chat.completions.create.call_args.kwargs["response_format"],
+            {"type": "json_object"},
+        )
+
+    async def test_openai_chat_provider_preserves_completion_metadata(self):
+        provider = OpenAIChatProvider()
+        raw_response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    finish_reason="length",
+                    message=SimpleNamespace(
+                        content=None,
+                        reasoning_content="not logged by the provider",
+                        tool_calls=[],
+                    ),
+                )
+            ],
+            usage=SimpleNamespace(
+                prompt_tokens=12,
+                completion_tokens=8192,
+                completion_tokens_details=SimpleNamespace(reasoning_tokens=8170),
+            ),
+        )
+
+        with mock.patch(
+            "app.core.llm.providers.openai_chat.AsyncOpenAI"
+        ) as client_cls:
+            client = client_cls.return_value
+            client.chat.completions.create = mock.AsyncMock(
+                return_value=raw_response
+            )
+            response = await provider.call(
+                messages=[{"role": "user", "content": "return JSON"}],
+                model="test-model",
+                api_key="test-key",
+                base_url="https://example.test/v1",
+            )
+
+        self.assertIsNone(response.content)
+        self.assertEqual(response.finish_reason, "length")
+        self.assertEqual(response.usage.completion_tokens, 8192)
+        self.assertEqual(response.usage.reasoning_tokens, 8170)
+
+    async def test_llm_chat_forwards_thinking_to_provider(self):
+        class CapturingProvider:
+            def __init__(self):
+                self.kwargs = None
+
+            async def call(self, **kwargs):
+                self.kwargs = kwargs
+                return StandardResponse(content="ok", usage=Usage())
+
+        model = LLM(api_key="test-key", model="test-model")
+        provider = CapturingProvider()
+        model.provider = provider
+        with (
+            mock.patch.object(model, "_validate_config"),
+            mock.patch.object(model, "send_message", new=mock.AsyncMock()),
+        ):
+            await model.chat(
+                thinking=False,
+                response_format={"type": "json_object"},
+                max_retries=1,
+            )
+
+        self.assertFalse(provider.kwargs["thinking"])
+        self.assertEqual(provider.kwargs["response_format"], {"type": "json_object"})
 
     async def test_openai_responses_provider_uses_configured_timeout(self):
         provider = OpenAIResponsesProvider()
@@ -128,6 +233,23 @@ class ProviderTimeoutTest(unittest.IsolatedAsyncioTestCase):
                 await model.chat(max_retries=3, retry_delay=0)
 
         self.assertEqual(validate.call_count, 1)
+
+    async def test_llm_chat_missing_api_key_raises_config_error_immediately(self):
+        model = LLM(
+            api_key="",
+            model="test-model",
+            base_url="https://example.test/v1",
+        )
+        model.provider.call = mock.AsyncMock()
+
+        with self.assertRaisesRegex(LLMConfigError, "未配置 API Key"):
+            await model.chat(
+                max_retries=3,
+                retry_delay=0,
+                agent_name="ModelerAgent",
+            )
+
+        model.provider.call.assert_not_awaited()
 
     async def test_llm_http_client_only_uses_explicit_proxy_setting(self):
         with mock.patch("app.utils.outbound_http.httpx.AsyncClient") as client_cls:

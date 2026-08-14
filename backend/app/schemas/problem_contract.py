@@ -175,7 +175,7 @@ _THRESHOLD_TERM = (
     r"threshold|target|bound|limit|tolerance|criterion)"
 )
 _THRESHOLD_SOURCE = (
-    r"(?:题面|题设|附件|数据(?:统计|分布|分位数|噪声)|样本统计|训练集|验证集|"
+    r"(?:题目原文|题面|题设|附件|数据(?:统计|分布|分位数|噪声)|样本统计|训练集|验证集|"
     r"交叉验证|基线|对照|文献|论文|标准|规范|"
     r"problem statement|attachment|data (?:statistic|distribution|quantile|noise)|"
     r"training set|validation set|cross-validation|baseline|reference|literature|standard)"

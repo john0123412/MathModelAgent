@@ -378,6 +378,41 @@ class FakeEvidenceRecordModel:
         )
 
 
+class FakeNoToolThenExecuteModel:
+    """A compatible provider that ignores the first required tool turn."""
+
+    api_type = ApiType.ANTHROPIC
+
+    def __init__(self):
+        self.calls = 0
+        self.tool_choices = []
+        self.offered_tool_names = []
+        self.thinking = []
+
+    async def chat(self, history, **kwargs):
+        self.calls += 1
+        self.tool_choices.append(kwargs.get("tool_choice"))
+        self.thinking.append(kwargs.get("thinking"))
+        self.offered_tool_names.append(
+            {
+                tool.get("name") or tool.get("function", {}).get("name")
+                for tool in kwargs.get("tools", [])
+            }
+        )
+        if self.calls == 1:
+            return StandardResponse(content="I have finished the calculation.")
+        if self.calls == 2:
+            return StandardResponse(
+                content="Execute the calculation.",
+                tool_calls=[
+                    ToolCall(id="forced-code", name="execute_code", arguments='{"code":"print(2200)"}')
+                ],
+            )
+        if self.calls == 3:
+            return _evidence_response("forced-evidence", "ques1", "ques1_results.json")
+        return StandardResponse(content="Evidence recorded.")
+
+
 class FakeNonFormalStaleEvidenceModel:
     """Simulate a provider returning a recorder call that was not offered."""
 
@@ -757,6 +792,43 @@ class CoderAgentToolHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(manifest["generated_by"], "trusted_record_execution_evidence")
             self.assertEqual(manifest["subtasks"][0]["id"], "ques1")
             self.assertTrue(manifest["subtasks"][0]["feasible"])
+
+    async def test_formal_subtask_recovers_from_plain_text_without_execution(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            model = FakeNoToolThenExecuteModel()
+            interpreter = ResultWritingInterpreter(
+                work_dir, "ques1_results.json", {"profit": 2200.0}
+            )
+            agent = CoderAgent(
+                task_id="t1",
+                model=model,
+                work_dir=work_dir,
+                max_chat_turns=6,
+                code_interpreter=interpreter,
+            )
+
+            with patch(
+                "app.core.agents.coder_agent.redis_manager.publish_message",
+                new=AsyncMock(),
+            ):
+                result = await agent.run("solve", "ques1")
+
+            self.assertTrue(result.execution_succeeded)
+            self.assertEqual(interpreter.executed_code, ['print(2200)'])
+            self.assertEqual(model.tool_choices[:2], ["any", "any"])
+            self.assertEqual(model.thinking[:3], [False, False, False])
+            self.assertEqual(model.offered_tool_names[:2], [{"execute_code"}, {"execute_code"}])
+            self.assertEqual(
+                model.offered_tool_names[2],
+                {"execute_code", "record_execution_evidence"},
+            )
+            self.assertTrue(
+                any(
+                    message.get("role") == "user"
+                    and "尚未执行代码" in message.get("content", "")
+                    for message in agent.chat_history
+                )
+            )
 
     async def test_unsupported_tool_call_gets_feedback_instead_of_looping(self):
         agent = CoderAgent(

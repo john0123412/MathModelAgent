@@ -18,6 +18,7 @@ class Usage:
 
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    reasoning_tokens: int = 0
 
 
 @dataclass
@@ -31,3 +32,6 @@ class StandardResponse:
     reasoning_content: str | None = None
     tool_calls: list[ToolCall] = field(default_factory=list)
     usage: Usage = field(default_factory=Usage)
+    # Keep response metadata available to role-level recovery without logging
+    # or persisting the chain-of-thought itself.
+    finish_reason: str | None = None

@@ -27,7 +27,7 @@ from app.schemas.A2A import (
 from app.schemas.enums import CompTemplate, ExportProfile, FormatOutPut
 from app.schemas.request import Problem
 from app.schemas.problem_contract import ProblemContract
-from app.core.llm.types import StandardResponse
+from app.core.llm.types import StandardResponse, Usage
 
 
 class _InvalidModelerLLM:
@@ -39,6 +39,18 @@ class _InvalidModelerLLM:
     async def chat(self, **_kwargs):
         self.calls += 1
         return StandardResponse(content="{}")
+
+
+class _SequencedModelerLLM:
+    """Return deterministic Modeler responses and retain call contracts."""
+
+    def __init__(self, responses: list[StandardResponse]):
+        self.responses = list(responses)
+        self.calls: list[dict] = []
+
+    async def chat(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.responses.pop(0)
 
 
 def _valid_codex_plan() -> ModelPlan:
@@ -92,6 +104,116 @@ class TestModelerRepairBudget(unittest.IsolatedAsyncioTestCase):
             if message.get("role") == "user" and "固定协议" in message.get("content", "")
         ]
         self.assertEqual(len(corrections), 1)
+
+    async def test_modeler_recovers_a_blank_response_in_nonthinking_json_mode(self):
+        valid_plan = json.dumps(_valid_codex_plan().model_dump(), ensure_ascii=False)
+        model = _SequencedModelerLLM(
+            [
+                StandardResponse(
+                    content=None,
+                    reasoning_content="partial reasoning is intentionally not replayed",
+                    finish_reason="length",
+                    usage=Usage(completion_tokens=8192, reasoning_tokens=8192),
+                ),
+                StandardResponse(content=valid_plan, finish_reason="stop"),
+            ]
+        )
+        agent = ModelerAgent(task_id="unit-modeler", model=model)
+        coordinator = CoordinatorToModeler(
+            questions={"ques_count": 1, "ques1": "完成建模"},
+            ques_count=1,
+            problem_contract=ProblemContract(),
+        )
+
+        result = await agent.run(coordinator)
+
+        self.assertIn("ques1", result.model_plan.subtasks)
+        self.assertEqual(len(model.calls), 2)
+        self.assertEqual(
+            [call["thinking"] for call in model.calls], [False, False]
+        )
+        self.assertEqual(
+            [call["response_format"] for call in model.calls],
+            [{"type": "json_object"}, {"type": "json_object"}],
+        )
+        self.assertFalse(
+            any("reasoning_content" in message for message in agent.chat_history)
+        )
+
+    async def test_modeler_applies_targeted_basis_description_patch(self):
+        plan = _valid_codex_plan()
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(
+                key="n_consistency",
+                label="样本一致性偏差",
+                comparator="eq",
+                target=1,
+                description="两组样本量一致时记为 1。",
+            )
+        ]
+        model = _SequencedModelerLLM(
+            [
+                StandardResponse(
+                    content=json.dumps(plan.model_dump(), ensure_ascii=False),
+                    finish_reason="stop",
+                ),
+                StandardResponse(
+                    content=json.dumps(
+                        {
+                            "description_updates": [
+                                {
+                                    "subtask": "ques1",
+                                    "key": "n_consistency",
+                                    "description": (
+                                        "n_consistency=1 的目标值依据：题目原文规定样本必须一一对应。"
+                                    ),
+                                }
+                            ]
+                        },
+                        ensure_ascii=False,
+                    ),
+                    finish_reason="stop",
+                ),
+            ]
+        )
+        agent = ModelerAgent(task_id="unit-modeler", model=model)
+        coordinator = CoordinatorToModeler(
+            questions={"ques_count": 1, "ques1": "完成建模"},
+            ques_count=1,
+            problem_contract=ProblemContract(),
+        )
+
+        result = await agent.run(coordinator)
+
+        self.assertEqual(len(model.calls), 2)
+        self.assertTrue(all(call["thinking"] is False for call in model.calls))
+        self.assertEqual(
+            result.model_plan.subtasks["ques1"].acceptance_metrics[0].description,
+            "n_consistency=1 的目标值依据：题目原文规定样本必须一一对应。",
+        )
+        repair_prompt = agent.chat_history[-1]["content"]
+        self.assertIn("description_updates", repair_prompt)
+        self.assertIn("不要重新输出整份 ModelPlan", repair_prompt)
+
+    async def test_modeler_bounds_two_blank_responses_without_a_third_call(self):
+        model = _SequencedModelerLLM(
+            [
+                StandardResponse(content=None, finish_reason="length"),
+                StandardResponse(content="", finish_reason="stop"),
+            ]
+        )
+        agent = ModelerAgent(task_id="unit-modeler", model=model)
+        coordinator = CoordinatorToModeler(
+            questions={"ques_count": 1, "ques1": "完成建模"},
+            ques_count=1,
+            problem_contract=ProblemContract(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "连续返回不合格.*返回内容为空"):
+            await agent.run(coordinator)
+
+        self.assertEqual(len(model.calls), 2)
+        self.assertTrue(all(call["thinking"] is False for call in model.calls))
 
 
 class TestHumanModelingGateArtifacts(unittest.TestCase):

@@ -26,3 +26,13 @@ skills/5writing/templates/**/*.out
 skills/5writing/templates/**/missfont.log
 # LaTeX 模板编译生成的 PDF（保留 huaweibei 的 logo.pdf 和 title.pdf 模板资源）
 skills/5writing/templates/**/main.pdf
+
+# === 跑题/Agent 遗留产物与缓存（非业务代码，不纳入版本控制）===
+__pycache__/
+*.pyc
+.claude/handoff/
+.codex-2025a-bounded-solver.py
+.codex-2025a-codex-plan.json
+contest_inputs/
+paper-assets-isolated-*
+pdf-review-2025a-*

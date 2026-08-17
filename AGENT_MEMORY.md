@@ -1,5 +1,12 @@
 # AGENT_MEMORY
 
+- [2026-08-17] 完成阶段二完善任务：Coordinator 拆题 JSON 程序化容错与提示词加固：
+  1. 新增纯函数工具库 `backend/app/tools/json_repair.py`（`repair_json`），针对大模型输出的未闭合引号截断、前后夹带解释性文字、Markdown 标记包装、悬挂逗号、未闭合括号及不可见控制字符提供标准库实现的确定性解析修复通道。
+  2. 修改 `CoordinatorAgent`：引入 `repair_json` 作为 `json.loads` 失败时的前置程序化救回层，大幅降低简单语法格式错误对重试次数的消耗；将最大重试次数 `MAX_JSON_REPAIR_ATTEMPTS` 提升至 5；第 4 次起启用极简降级 Prompt。
+  3. 微调 `COORDINATOR_PROMPT` 硬约束：明确要求直接输出 JSON、禁止未转义引号，并显式提示 reasoning 模型避免冗长推演以防止耗尽 completion tokens。
+  4. 新增单测 `test_json_repair.py`（20 项用例全部通过），全量回归通过（663 测试通过，1 跳过），Ruff 检查通过，Docker 容器构建及健康检查通过。
+  5. 真实任务 `20260817-053048-3a54593cd8d0a3a7374f2223bd10bf6d` 验证通过：Coordinator 成功拆题，`problem_contract.json` 与 `checkpoint.json` 顺利落盘，成功进入下游工作流。
+
 - [2026-08-17] 完成阶段二项目级系统架构加固与工程缺陷根治（新建分支 `feat/phase2-architecture-hardening`）：
   1. 规划层：`ProblemContract` 新增 `boundary_conditions` 强类型拓扑契约，显式声明各轴周期/极板截断；放宽 `_structured_diagnostic_metric_gaps` 多概念要求匹配容差，消除 Modeler 因逐词不一致导致的连续报错；增强 `_conclusion_forcing_metrics` 拦截未计算先定性（如导通/连通预置布尔值）的验收硬编码。
   2. 提示词层：`coder.py` 注入 MC 增量落盘标准代码模板（断点续跑、`append_to_csv`）、Preflight $N=3$ 耗时预算预估协议（超 60s 强制采用空间分箱/批处理），并严格禁止裸 $O(N^2)$ 与 $>10^6$ 密集网格参照。

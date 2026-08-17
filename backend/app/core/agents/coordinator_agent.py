@@ -9,8 +9,9 @@ import json
 import re
 from app.utils.log_util import logger
 from app.schemas.A2A import CoordinatorToModeler
+from app.tools.json_repair import repair_json
 
-MAX_JSON_REPAIR_ATTEMPTS = 3
+MAX_JSON_REPAIR_ATTEMPTS = 5
 
 # 正式问题键形如 ques1、ques2...（ques_count 不匹配该模式）
 _QUES_KEY_RE = re.compile(r"ques(\d+)")
@@ -159,7 +160,30 @@ class CoordinatorAgent(Agent):
                 try:
                     payload = json.loads(json_str)
                 except json.JSONDecodeError as exc:
-                    issues.append(f"JSON 解析失败: {exc}")
+                    # 程序化修复：截断/夹带文字/控制字符等常见畸形
+                    repaired = repair_json(raw_content)
+                    if repaired is not None:
+                        try:
+                            payload = json.loads(repaired)
+                        except json.JSONDecodeError:
+                            payload = None
+                        if payload is not None:
+                            logger.info(
+                                "repair_json 自动修复成功（原始错误: {}）",
+                                exc,
+                            )
+                        else:
+                            issues.append(
+                                f"JSON 解析失败且自动修复未能恢复: {exc}"
+                            )
+                    else:
+                        issues.append(
+                            f"JSON 解析失败且无可修复的 JSON 结构: {exc}"
+                        )
+                    if payload is not None:
+                        issues = _validate_questions_payload(payload)
+                        if not issues:
+                            questions = payload
                 else:
                     issues = _validate_questions_payload(payload)
                     if not issues:
@@ -191,14 +215,23 @@ class CoordinatorAgent(Agent):
             if response.reasoning_content:
                 retry_msg["reasoning_content"] = response.reasoning_content
             await self.append_chat_history(retry_msg)
+
+            # 前 3 次保持逐项修正反馈；第 4 次起用极简降级 prompt
+            if attempt < 4:
+                correction_content = (
+                    "你上一次的输出存在以下问题: "
+                    + "; ".join(issues)
+                    + "。注意无需复杂数学推演或冗长思考，请直接输出修正后的完整 JSON，"
+                    "不要输出任何解释文字。"
+                )
+            else:
+                correction_content = (
+                    "输出格式多次错误。请直接输出最小合法 JSON，"
+                    '格式为 {"title": "...", "background": "...", '
+                    '"ques_count": N, "ques1": "...", ...}，'
+                    "禁止冗长思考分析、禁止任何解释文字、禁止 Markdown 标记。"
+                )
+
             await self.append_chat_history(
-                {
-                    "role": "user",
-                    "content": (
-                        "你上一次的输出存在以下问题: "
-                        + "; ".join(issues)
-                        + "。请逐项修正后，只输出修正后的完整 JSON，"
-                        "不要输出任何解释文字。"
-                    ),
-                }
+                {"role": "user", "content": correction_content}
             )

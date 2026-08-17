@@ -154,6 +154,7 @@ class CoordinatorAgent(Agent):
 
             issues: list[str] = []
             questions: dict | None = None
+            payload: dict | None = None
             if not json_str:
                 issues.append("返回内容为空，未包含任何 JSON")
             else:
@@ -180,11 +181,7 @@ class CoordinatorAgent(Agent):
                         issues.append(
                             f"JSON 解析失败且无可修复的 JSON 结构: {exc}"
                         )
-                    if payload is not None:
-                        issues = _validate_questions_payload(payload)
-                        if not issues:
-                            questions = payload
-                else:
+                if payload is not None:
                     issues = _validate_questions_payload(payload)
                     if not issues:
                         questions = payload

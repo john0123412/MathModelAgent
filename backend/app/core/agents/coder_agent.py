@@ -22,6 +22,7 @@ from app.utils.common_utils import get_current_files
 from app.core.prompts import get_reflection_prompt
 from app.core.functions import coder_tools, coder_tools_anthropic
 from app.tools.execution_validation import record_execution_evidence
+from app.tools.json_repair import repair_json
 from app.tools.result_integrity import validate_result_freeze
 
 # TODO: 时间等待过久，stop 进程
@@ -109,14 +110,29 @@ def _formal_evidence_checklist(work_dir: str, subtask_id: str | None) -> str:
         comparator = metric.get("comparator")
         target = metric.get("target")
         if isinstance(key, str) and isinstance(comparator, str):
-            lines.append(f"- `{key}`: `{comparator} {target}`")
+            evidence_comp = {
+                "eq": "abs_diff_lte",
+                "le": "lte",
+                "lte": "lte",
+                "ge": "gte",
+                "gte": "gte",
+                "gt": "gt",
+                "lt": "lt",
+            }.get(comparator, comparator)
+            extra_field = ", tolerance: 0.0" if comparator == "eq" else ""
+            lines.append(
+                f"- `{key}`: `{comparator} {target}` "
+                f"（调用 record_execution_evidence 时在 constraints 填写 id: `{key}`, comparison: `{evidence_comp}`, target: `{target}`{extra_field}）"
+            )
     sections = []
     if lines:
         sections.append(
-            "【本题不可省略的 ModelPlan 验收指标】\\n"
-            + "\\n".join(lines)
-            + "\\n每一项都必须写入本题新建/更新的数值结果或验收表，并作为 "
-            "record_execution_evidence 的 metrics 提交；缺项会直接失败。"
+            "【本题不可省略的 ModelPlan 验收指标】\n"
+            + "\n".join(lines)
+            + "\n注意：上述每一项都必须写入本题新建/更新的数值结果文件或验收表，并在调用 record_execution_evidence 时完整包含在 constraints 数组中（包含 id、actual、comparison、target、source_path）；缺项或 direction/target 篡改会直接失败。"
+            "推荐同时生成标准验收表 `"
+            + (f"{subtask_id}_acceptance_metrics.csv" if subtask_id else "quesN_acceptance_metrics.csv")
+            + "`（表头：`指标ID,指标名称,数值,单位,目标值,是否达标`）。"
         )
     artifact_lines = []
     for artifact in expected_artifacts:
@@ -731,12 +747,18 @@ class CoderAgent(Agent):
                         ]
                         await self.append_chat_history(assistant_msg)
                         try:
-                            arguments = json.loads(tool_call.arguments)
-                            submitted_subtask_id = (
-                                arguments.get("subtask_id")
-                                if isinstance(arguments, dict)
-                                else None
-                            )
+                            arguments = None
+                            if isinstance(tool_call.arguments, dict):
+                                arguments = tool_call.arguments
+                            elif isinstance(tool_call.arguments, str):
+                                try:
+                                    arguments = json.loads(tool_call.arguments)
+                                except Exception:
+                                    arguments = json.loads(repair_json(tool_call.arguments))
+                            if not isinstance(arguments, dict):
+                                raise TypeError("arguments 必须是 JSON 对象")
+
+                            submitted_subtask_id = arguments.get("subtask_id")
                             if (
                                 formal_subtask_id is not None
                                 and submitted_subtask_id != formal_subtask_id
@@ -767,13 +789,22 @@ class CoderAgent(Agent):
                                         ],
                                     }
                                 else:
+                                    allowed_keys = {"subtask_id", "constraints", "metrics", "figures"}
+                                    filtered_args = {k: v for k, v in arguments.items() if k in allowed_keys}
+                                    if "subtask_id" not in filtered_args:
+                                        filtered_args["subtask_id"] = formal_subtask_id or ""
+                                    if "constraints" not in filtered_args or not isinstance(filtered_args["constraints"], list):
+                                        filtered_args["constraints"] = []
+                                    if "metrics" not in filtered_args or not isinstance(filtered_args["metrics"], list):
+                                        filtered_args["metrics"] = []
                                     result = record_execution_evidence(
-                                        self.work_dir, **arguments
+                                        self.work_dir, **filtered_args
                                     )
-                        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                        except Exception as exc:
+                            logger.warning(f"证据记录参数处理异常: {exc}")
                             result = {
                                 "ok": False,
-                                "errors": [f"证据记录参数无效：{type(exc).__name__}。"],
+                                "errors": [f"证据记录参数无效：{exc}。请检查 subtask_id、constraints、metrics、figures 结构。"],
                             }
                         await self.append_chat_history(
                             {

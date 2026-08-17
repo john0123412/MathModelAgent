@@ -1184,9 +1184,10 @@ def record_execution_evidence(
     work_dir: str | os.PathLike[str],
     *,
     subtask_id: str,
-    constraints: list[dict[str, Any]],
-    metrics: list[dict[str, Any]],
+    constraints: list[dict[str, Any]] | None = None,
+    metrics: list[dict[str, Any]] | None = None,
     figures: list[dict[str, Any]] | None = None,
+    **extra_kwargs: Any,
 ) -> dict[str, Any]:
     """Record one executed subtask through a trusted manifest writer.
 
@@ -1201,6 +1202,10 @@ def record_execution_evidence(
         return {"ok": False, "errors": ["subtask_id 必须是 quesN 形式的正式题号。"]}
     if not root.is_dir():
         return {"ok": False, "errors": ["任务工作目录不存在。"]}
+
+    constraints = constraints if isinstance(constraints, list) else []
+    metrics = metrics if isinstance(metrics, list) else []
+    figures = figures if isinstance(figures, list) else []
 
     table_errors = _validate_declared_table_statuses(root, subtask_id)
     table_bound_metrics, metric_binding_errors = _bind_records_to_acceptance_table(

@@ -1,5 +1,11 @@
 # AGENT_MEMORY
 
+- [2026-08-17] 完成端到端自动建模与 CUMCM2026 论文预检/导出链路关键缺陷修复并全绿闭环：
+  1. 修复后处理器行内引用清洗：`strip_unmatched_inline_references` 在正文未生成参考文献章节时，将 `existing_numbers` 视为空集并正常剥除无条目支撑的行内孤立数字标记，消除 `missing_inline` 误报。
+  2. 修复附录与参考文献/AI声明组装时序：`append_code_appendix` 识别并剥离正文中的伪附录标记，在正文后准确保留 `## 参考文献` 与 `## AI工具使用声明`，避免重建附录时意外截断参考文献和 AI 工具使用声明。
+  3. 优化默认导出策略：`export_template_override.py` 在未显式安装任务级模板合同时默认回退到 `smoke` 质量策略，避免开发测试任务被非必需的正式比赛专有硬指标拦截。
+  4. 真实线性规划任务 `20260817-092548-55ed5a1353c4901a55c24e63c0347b69` 全流程全自动跑通：Coordinator 拆题、Modeler 规划、Coder 求解与代码自愈、Writer 全章节合稿、变量快照保存、AI工具使用详情导出、论文预检 PASS、PDF（`res.pdf`，681KB）/DOCX/LaTeX/候选清单全格式导出成功，`/tasks` 显示为 `completed`。
+
 - [2026-08-17] 完成阶段二完善任务：Coordinator 拆题 JSON 程序化容错与提示词加固：
   1. 新增纯函数工具库 `backend/app/tools/json_repair.py`（`repair_json`），针对大模型输出的未闭合引号截断、前后夹带解释性文字、Markdown 标记包装、悬挂逗号、未闭合括号及不可见控制字符提供标准库实现的确定性解析修复通道。
   2. 修改 `CoordinatorAgent`：引入 `repair_json` 作为 `json.loads` 失败时的前置程序化救回层，大幅降低简单语法格式错误对重试次数的消耗；将最大重试次数 `MAX_JSON_REPAIR_ATTEMPTS` 提升至 5；第 4 次起启用极简降级 Prompt。

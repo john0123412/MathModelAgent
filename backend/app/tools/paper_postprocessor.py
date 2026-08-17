@@ -55,6 +55,11 @@ CODE_APPENDIX_HEADING_RE = re.compile(r"(?m)^#{1,6}\s*附录[A-Z]\s+源程序代
 AI_USAGE_DECLARATION_RE = re.compile(
     r"(?mi)^#{1,6}\s*AI\s*工具使用声明\s*$"
 )
+AI_USAGE_DECLARATION = (
+    "## AI工具使用声明\n\n"
+    "本参赛队在竞赛过程中使用了AI工具，主要用于建模方案审阅、代码调试、"
+    "论文语言与版式整理，详细使用情况见附录。"
+)
 AI_USAGE_DETAILS_FILENAME = "AI工具使用详情.pdf"
 NO_PROGRAM_RE = re.compile(r"本论文没有用到程序")
 NO_SUPPORT_MATERIAL_RE = re.compile(r"本论文没有支撑材料")
@@ -434,10 +439,9 @@ def strip_unmatched_inline_references(markdown: str) -> tuple[str, list[int]]:
     """Remove inline numeric references that do not have bibliography entries."""
     has_reference_section = REFERENCE_HEADING_RE.search(markdown) is not None
     body, reference_text = _reference_body_parts(markdown)
-    if not has_reference_section:
-        return markdown, []
-
-    existing_numbers = _reference_numbers(reference_text)
+    existing_numbers = (
+        _reference_numbers(reference_text) if has_reference_section else set()
+    )
     removed: set[int] = set()
 
     def replace(match: re.Match[str]) -> str:
@@ -1285,14 +1289,23 @@ def append_code_appendix(markdown: str, work_dir: str) -> tuple[str, list[str]]:
     """
     sources = collect_code_sources(work_dir)
     materials = collect_support_materials(work_dir)
-    appendix_match = APPENDIX_HEADING_RE.search(markdown)
+    body_before_refs, reference_text = _reference_body_parts(markdown)
+    appendix_match = APPENDIX_HEADING_RE.search(body_before_refs)
     if appendix_match:
-        markdown = markdown[: appendix_match.start()].rstrip()
+        body_clean = body_before_refs[: appendix_match.start()].rstrip()
+    else:
+        body_clean = body_before_refs.rstrip()
 
     ai_usage_lines = _ai_usage_appendix_lines(work_dir)
+    if ai_usage_lines and not AI_USAGE_DECLARATION_RE.search(body_clean):
+        body_clean = body_clean + "\n\n" + AI_USAGE_DECLARATION
+
+    if reference_text.strip():
+        body_clean = body_clean + "\n\n## 参考文献\n\n" + reference_text.strip()
+
     support_label = "B" if ai_usage_lines else "A"
     code_label = "C" if ai_usage_lines else "B"
-    lines = [markdown.rstrip(), "", "# 附录", ""]
+    lines = [body_clean.rstrip(), "", "# 附录", ""]
     if ai_usage_lines:
         lines.extend(ai_usage_lines)
     lines.extend([f"## 附录{support_label} 支撑材料文件列表", ""])

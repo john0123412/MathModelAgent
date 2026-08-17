@@ -179,7 +179,7 @@ class LLM:
                 if isinstance(e, LLMConfigError):
                     raise
                 attempt += 1
-                logger.error(f"第{attempt}次重试: {type(e).__name__}")
+                logger.error(f"第{attempt}次重试: {type(e).__name__}: {e}")
                 if isinstance(e, ValueError) and not self._is_retryable_config_error(e):
                     raise
                 if attempt >= max_attempts:

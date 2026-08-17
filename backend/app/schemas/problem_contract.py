@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -29,12 +30,28 @@ class ContractRequirement(BaseModel):
     acceptance_metric_terms: list[str] = Field(default_factory=list)
 
 
+class BoundaryCondition(BaseModel):
+    axis: Literal["x", "y", "z", "radial", "other"]
+    boundary_type: Literal[
+        "periodic",
+        "clamped_electrode",
+        "absorbing",
+        "reflecting",
+        "fixed_value",
+        "open",
+        "not_applicable",
+    ] = "not_applicable"
+    description: str = ""
+    is_periodic: bool = False
+
+
 class ProblemContract(BaseModel):
     """从原始题面提取的结构化硬约束。"""
 
     schema_version: str = "mathmodel.problem-contract.v1"
     immutable_parameters: list[ContractParameter] = Field(default_factory=list)
     required_requirements: list[ContractRequirement] = Field(default_factory=list)
+    boundary_conditions: list[BoundaryCondition] = Field(default_factory=list)
 
     def to_prompt(self) -> str:
         lines = ["【题面参数契约：以下事实不可改写】"]
@@ -54,6 +71,13 @@ class ProblemContract(BaseModel):
                     details.append("指标=" + "/".join(item.acceptance_metric_terms))
                 suffix = f"（{'；'.join(details)}）" if details else ""
                 lines.append(f"- {item.label}{suffix}。")
+        if self.boundary_conditions:
+            lines.append("【边界与拓扑契约】")
+            for bc in self.boundary_conditions:
+                periodic_str = "周期边界" if bc.is_periodic or bc.boundary_type == "periodic" else "非周期/独立边界"
+                lines.append(
+                    f"- 坐标轴 {bc.axis}: {bc.boundary_type} ({periodic_str})；说明: {bc.description or '无'}。"
+                )
         return "\n".join(lines)
 
 
@@ -99,6 +123,15 @@ _ATTACHMENT_ANGLE_SAMPLE_PAIR = re.compile(
     re.IGNORECASE,
 )
 
+_SAMPLE_THICKNESS_PAIR = re.compile(
+    r"(?:同一(?:块|片|个)?([^，。；\n]{1,24}?)(?:的)?|样品[^，。；\n]{0,12}?)"
+    r"厚度(?:分别)?(?:为|是)?\s*"
+    r"(\d+(?:\.\d+)?)\s*(?:nm|微米|μm|um|mm)"
+    r"(?:和|与|、|及)\s*"
+    r"(\d+(?:\.\d+)?)\s*(?:nm|微米|μm|um|mm)",
+    re.IGNORECASE,
+)
+
 _SAME_SAMPLE = re.compile(r"同一(?:块|片|个)?[^。；]{0,10}?(?:晶圆|样品)")
 _INDEPENDENT_SAMPLE = re.compile(
     r"(?:(?:不同|独立|分别的)(?:碳化硅|硅)?(?:晶圆片?|样品)"
@@ -107,8 +140,6 @@ _INDEPENDENT_SAMPLE = re.compile(
     r"|(?:晶圆片?|样品)(?:彼此|相互|各自|分别)?"
     r"(?:为|是|均为|视为|作为)?(?:不同|独立))"
 )
-# 方案常把契约禁令原样写进约束（如“不得改写为不同样品”），这属于遵守而非违规；
-# 与 _OVERRIDE_NEGATION 同思路，仅当独立样品表述前没有近距离否定词时才算改写。
 _INDEPENDENT_SAMPLE_NEGATION = re.compile(
     r"(?:不得|不能|不可|不应|不要|禁止|避免|拒绝|切勿|而不是|而非|不将|不视为|不当作|不改写)"
 )
@@ -131,12 +162,11 @@ _OVERRIDE_NEGATION = re.compile(
     r"(?:不|不得|禁止|避免|拒绝|不能|不可|不应|无需)[^。；]{0,16}"
     r"(?:(?<![\d.])0(?:\.0+)?\s*[°度]|垂直入射|法向入射|正入射)"
 )
-# 负向断言须同时排除数字与小数点：否则 10.0°/15.0度 里的 “.0°” 会被误认成 0°。
 _ZERO_DEGREE = re.compile(r"(?<![\d.])0(?:\.0+)?\s*[°度]")
 
 _OPEN_ENDED_DECISION_QUESTION = re.compile(
-    r"(?:(?:判断|判定|检验|验证|确定|研究|分析).{0,24}(?:是否|有无)"
-    r"|(?:是否|有无).{0,24}(?:存在|发生|显著|必要|影响|改善|提升)"
+    r"(?:是否|能否|有无|何种|哪个|更优|最优|最佳|哪一种|哪种|选择|判断|评估|比较|权衡|"
+    r"是否存在|是否达到|是否显著|是否可行|是否合理|是否导通|是否连通"
     r"|\bwhether\b)",
     re.IGNORECASE,
 )
@@ -149,7 +179,7 @@ _SIGNIFICANCE_OUTCOME_METRIC = re.compile(
     re.IGNORECASE,
 )
 _BOOLEAN_OUTCOME_METRIC = re.compile(
-    r"(?:existence|occurrence|detected|存在性|是否存在|发生标志|效果标志)",
+    r"(?:existence|occurrence|detected|conduction|conductive|存在性|是否存在|发生标志|效果标志|导通|是否导通|连通|是否连通)",
     re.IGNORECASE,
 )
 _EMPIRICAL_QUALITY_METRIC = re.compile(
@@ -219,13 +249,46 @@ _SOURCE_NEGATION_RE = re.compile(
 # ``execution_validation.py``.  A requirement only activates its first group;
 # ordinary prose such as "记录输出轨迹和单位" therefore remains compatible.
 _STRUCTURED_DIAGNOSTIC_REQUIREMENT_GROUPS = (
-    (("求解器", "solver", "状态", "status"), ("求解器", "solver", "状态", "status")),
-    (("松弛", "slack"), ("松弛", "slack")),
-    (("质量", "守恒", "balance", "residual"), ("质量", "守恒", "balance", "residual")),
-    (("双喷嘴", "双喷油器", "injector"), ("双喷嘴", "双喷油器", "injector")),
-    (("减压阀", "溢流阀", "relief"), ("减压阀", "溢流阀", "relief")),
-    (("可行性", "feasible"), ("可行性", "feasible")),
-    (("步长", "网格", "step", "grid"), ("步长", "网格", "step", "grid")),
+    (
+        ("求解器", "solver", "状态方程", "state_equation", "state equation"),
+        ("求解器", "solver", "状态", "status", "最优性", "optimality", "收敛", "convergence"),
+    ),
+    (
+        ("松弛", "slack"),
+        ("松弛", "slack", "约束", "constraint", "边界", "bound", "violation"),
+    ),
+    (
+        ("质量", "守恒", "balance", "residual"),
+        ("质量", "守恒", "balance", "residual", "残差", "能量", "energy", "误差", "error"),
+    ),
+    (
+        ("双喷嘴", "双喷油器", "injector"),
+        ("双喷嘴", "双喷油器", "injector", "喷嘴", "nozzle"),
+    ),
+    (
+        ("减压阀", "溢流阀", "relief"),
+        ("减压阀", "溢流阀", "relief", "阀门", "valve"),
+    ),
+    (
+        ("可行性", "feasible"),
+        ("可行性", "feasible", "连通", "connectivity", "导通", "conduction", "相交", "intersection"),
+    ),
+    (
+        ("步长", "网格", "step", "grid", "mesh", "加密", "refinement"),
+        ("步长", "网格", "step", "grid", "mesh", "加密", "refinement", "分辨率", "resolution", "采样", "sample"),
+    ),
+    (
+        ("蒙特卡洛", "monte carlo", "mc"),
+        ("蒙特卡洛", "monte carlo", "mc", "方差", "variance", "置信区间", "confidence", "采样", "sample"),
+    ),
+    (
+        ("敏感性分析", "灵敏度分析", "sensitivity_analysis"),
+        ("敏感性", "灵敏度", "sensitivity", "鲁棒性", "robustness"),
+    ),
+    (
+        ("几何碰撞", "相交距离", "geometric_collision"),
+        ("几何", "geometry", "距离", "distance", "碰撞", "collision", "截断", "truncation", "镜像", "mirror", "周期", "periodic"),
+    ),
 )
 
 
@@ -885,15 +948,22 @@ def _structured_diagnostic_metric_gaps(subtask: object) -> list[str]:
         if not isinstance(raw_requirement, str) or not raw_requirement.strip():
             continue
         lowered_requirement = raw_requirement.lower()
-        for requirement_tokens, metric_tokens in _STRUCTURED_DIAGNOSTIC_REQUIREMENT_GROUPS:
-            if not any(token.lower() in lowered_requirement for token in requirement_tokens):
-                continue
-            if not any(
+        matching_groups = [
+            (req_tokens, metric_tokens)
+            for req_tokens, metric_tokens in _STRUCTURED_DIAGNOSTIC_REQUIREMENT_GROUPS
+            if any(token.lower() in lowered_requirement for token in req_tokens)
+        ]
+        if not matching_groups:
+            continue
+        is_covered = any(
+            any(
                 any(token.lower() in metric_text for token in metric_tokens)
                 for metric_text in metric_texts
-            ):
-                gaps.append(raw_requirement.strip())
-            break
+            )
+            for _, metric_tokens in matching_groups
+        )
+        if not is_covered:
+            gaps.append(raw_requirement.strip())
     return gaps
 
 

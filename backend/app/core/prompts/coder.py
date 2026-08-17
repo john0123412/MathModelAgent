@@ -371,10 +371,60 @@ print("=" * 60)
   geometry, interval, residual, comparison, or sensitivity fact; do not fill
   coverage by repeating one generic chart under several captions.
 
-# PERFORMANCE CRITICAL
-- Prefer vectorized operations over loops
-- Use efficient data structures (csr_matrix for sparse data)
-- Release unused resources immediately
+# PERFORMANCE CRITICAL & SPATIAL GEOMETRY STANDARDS
+- Prefer vectorized operations over loops; use efficient data structures (csr_matrix, spatial indexing).
+- Release large temporary arrays immediately via `del` and `gc.collect()`.
+- **空间几何与圆柱/胶囊体距离计算标准**：
+  - 两个有限圆柱/胶囊体（底半径 r1, r2，轴段 P1P2 与 Q1Q2）之间的表面间隙距离必须使用 `max(0.0, d_seg - r1 - r2)`，其中 `d_seg` 为有限线段间的最短欧氏距离（严格处理端点夹紧与退化单点）。严禁粗暴使用“轴线距离 - (r1+r2)”冒充空间非平行平端帽圆柱体最短距离。
+  - **独立交叉复算（Crosscheck）必须真实独立**：独立复算表中的两个算法必须采用完全不同的数学机理（例如：算法 A 为封闭解析几何，算法 B 为一维数值黄金分割搜索或离散点云采样优化）。严禁仅调换入参（如 `dist(a,b)` 与 `dist(b,a)`）或重复调用相同函数冒充独立复算。
+
+# INCREMENTAL PERSISTENCE & RESUME PROTOCOL (MANDATORY FOR MONTE CARLO / SWEEPS)
+所有涉及多样本、蒙特卡洛（MC）模拟、批量随机试验或参数大扫描的任务，**必须采用逐样本/分批增量落盘与断点续跑机制**：
+```python
+from pathlib import Path
+import pandas as pd
+
+mc_csv = Path("ques2_mc_samples.csv")
+# 1. 检查磁盘已有进度，支持断点无缝续跑
+if mc_csv.exists():
+    existing_df = pd.read_csv(mc_csv)
+    completed_seeds = set(existing_df["sample_id"].unique())
+else:
+    completed_seeds = set()
+
+# 2. 仅计算未完成的样本，并逐批/逐样本追加落盘 (mode='a')
+for sample_id in range(total_samples):
+    if sample_id in completed_seeds:
+        continue
+    result_record = run_single_simulation(sample_id)
+    # 即时追加写入磁盘，确保即使超时被中断，已计算的样本 100% 保留
+    df_row = pd.DataFrame([result_record])
+    df_row.to_csv(mc_csv, mode="a", header=not mc_csv.exists(), index=False)
+```
+
+# PREFLIGHT TIME BUDGET ESTIMATOR (MANDATORY PROTOCOL)
+在启动任何总轮数 > 10 的循环或模拟前，**必须先执行前置小规模耗时测算**：
+```python
+import time
+
+# 预先试跑 3 次测算平均耗时
+t0 = time.perf_counter()
+for test_id in range(3):
+    _ = run_single_simulation(test_id)
+t_sample = (time.perf_counter() - t0) / 3.0
+t_total_est = t_sample * total_samples
+print(f"[BUDGET] 单样本平均耗时: {{t_sample:.3f}}s, 预计总耗时 ({{total_samples}}次): {{t_total_est:.1f}}s")
+
+if t_total_est > 60.0:
+    print("[BUDGET ALERT] 预估时间较长，必须采用空间分箱 (Uniform Grid) / 向量化或拆分批次执行！")
+```
+
+# PROHIBITED NUMERICAL PITFALLS (ANTI-OOM & ANTI-TIMEOUT RULES)
+1. **严禁裸 $O(N^2)$ 全对暴力循环**：当实体数量 $N > 100$ 时，禁止直接做双重循环计算全部 $N(N-1)/2$ 对距离；必须使用空间网格分箱（Uniform Grid）或包围盒（AABB）进行宽相粗筛，仅对同一网格内的候选对计算精确距离。
+2. **严禁申请超大密集网格**：禁止构造 $>10^6$ 元素的稠密网格矩阵（例如 $2000 \times 401 \times 401$ 或 $20001 \times 20001$）作为“参照”或“离散化搜索”，这会导致内存爆满（OOM）和内核崩溃被杀。
+3. **严格核对量纲推导**：
+   - 纳米到立方纳米的体积：10000 nm -> V = 10000^3 = 10^12 nm^3 (1e12 nm^3)（切勿笔误写成 1e15）。
+   - 纳米立方到微米立方换算：1 μm^3 = 10^9 nm^3 (1e9 nm^3)。成本以元/μm^3 给定时，nm^3 体积必须显式除以 1e9。
 
 # EXECUTION-BUDGET CONTRACT (MANDATORY FOR NUMERICAL SIMULATION / SEARCH)
 - For simulation/optimization tasks, apply this staged contract explicitly:

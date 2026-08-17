@@ -179,6 +179,35 @@ xelatex 需跑两遍解决目录和交叉引用。
 
 编译失败必须修复语法、路径、图片引用或模板问题后重跑。编译通过后确认输出 PDF 非空。
 
+### Step 7b: 提交前匿名与关键词合规门禁（集成自 mathmodel-latex-skill）
+
+编译通过、PDF 非空后，竞赛提交前必须做两项自动扫描。脚本已随本 skill 一并提供于 `scripts/`：
+
+**1) 匿名/身份信息泄漏扫描（仅 LaTeX 引擎需要 PDF，国赛强制匿名）**
+
+```bash
+# 严格模式：命中身份关键词直接 FAIL
+python "<本 skill 目录>/scripts/check_pdf_anon.py" "$OUTPUT_PDF" \
+  --identity-mode strict --max-pages 20 --max-size-mb 20
+```
+
+默认身份关键词见脚本内 `DEFAULT_IDENTITY_KEYWORDS`（学校/学院/大学/队员/姓名/学号/指导教师/赛区/Email/Phone/队号/身份证/院系/班级等中英文）。
+对参考文献或数据来源中已人工确认的误报，用 `--ignore-keyword University --ignore-keyword 大学` 临时忽略。
+若比赛不要求匿名（如部分英文赛仅要求去除校名页眉），改用 `--identity-mode warn` 仅预警、不判 FAIL。
+
+**2) 摘要关键词术语合规（仅 LaTeX 引擎，CUMCM 风格）**
+
+```bash
+python "<本 skill 目录>/scripts/check_latex_keywords.py" "$MAIN_FILE"
+```
+
+脚本校验关键词是否建模术语（优化模型/回归分析/聚类分析/层次分析法/TOPSIS/蒙特卡洛模拟/灵敏度分析等），而非题目对象或行业背景词（如“农作物种植策略”“乡村农业”）。
+命中题目词时输出建议修订，默认判 `WARN`；若比赛规则明确要求关键词必须为建模术语，写入 `VERIFY_REPORT.md` 并人工确认接受，否则保持 `WARN`。
+
+Typst 引擎论文无 PDF 文本层关键词可扫时，`check_pdf_anon.py` 会回退到文本字节提取；若 Typst 论文确需匿名检查，优先用 Windows 本地导出（`backend/app/tools/export_cli.py`）生成真实 PDF 后再扫。
+
+两项扫描结论写入 `VERIFY_REPORT.md` 的“证据链/提交门禁”小节；`check_pdf_anon.py` 在 strict 模式命中身份关键词时，本阶段结论不得写 `PASS`。
+
 ### Step 8: PDF 视觉检查
 
 如果模型有视觉能力，必须把编译后的 PDF 每页导出为 PNG 并逐页查看。这个步骤用于发现纯文本扫描和编译器无法发现的版式错误。
@@ -264,6 +293,7 @@ PASS / FAIL
 - 编译器可用但论文编译失败。
 - 编译后的 PDF 为空、缺页、页数异常或页面尺寸异常且无法解释。
 - 视觉检查发现正文、表格、图片、公式、页眉页脚、页码等关键元素重叠、裁切、越界或乱码。
+- 已启用提交前匿名门禁（LaTeX 引擎 + 国赛类需匿名比赛）且 `check_pdf_anon.py --identity-mode strict` 命中身份关键词，未人工确认忽略即判 FAIL；匿名扫描为 FAIL 时不得写 `PASS`。
 
 ## 警告标准
 

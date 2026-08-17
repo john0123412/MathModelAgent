@@ -20,6 +20,7 @@ services:
       context: ./backend # Dockerfile 的上下文路径
       dockerfile: Dockerfile # Dockerfile 文件名
     container_name: mathmodelagent_backend
+    init: true
     restart: unless-stopped
     # Docker Desktop's inherited resolver can fail to resolve MiMo Token Plan
     # hosts even when the Windows host succeeds. Use two reachable public

@@ -53,6 +53,7 @@ allowed-tools: Bash(*), Read, Write, Edit, Grep, Glob, Agent, WebSearch, WebFetc
 
 workflow:
    step      skills
+0. 选题路由（多题比较） - `0topic-selection`   # 仅当赛题未定时
 1. 赛题分析与建模设计 - `2analysis-modeling`
 2. 方法 PoC 验证与人工选型 - `2a-method-validation`
 3. 编程实现和图表生成 - `3coding-visual`
@@ -104,6 +105,7 @@ workflow:
 ```markdown
 # 待办事项
 
+- [ ] 0. 选题路由（多题比较） - `0topic-selection`   # 仅当赛题未定时
 - [ ] 1. 赛题分析与建模设计 - `2analysis-modeling`
 - [ ] 2. 方法 PoC 验证与人工选型 - `2a-method-validation`
 - [ ] 3. 编程实现和图表生成 - `3coding-visual`
@@ -132,6 +134,7 @@ python "<1start-mathmodel skill 目录>/scripts/workflow_guard.py" --workspace .
 
 | 阶段 | Skill | 作用 | 主要产物 |
 | --- | --- | --- | --- |
+| 选题路由（多题比较） | `0topic-selection` | 赛题已发布、尚未决定做哪一道时，对 A/B/C 等多题横向比较建模路线、可行性、反驳条件与竞争力，阻塞式人工选题。 | `reports/TOPIC_SELECTION.md`, `reports/TOPIC_DECISION.md` |
 | 赛题分析与建模设计 | `2analysis-modeling` | 解析题意、识别变量/约束/数据/评价指标，并建立数学模型、目标函数、约束条件和求解策略。 | `ANALYSIS_MODELING_REPORT.md` |
 | 方法 PoC 验证与人工选型 | `2a-method-validation` | 用小型可复查 PoC 比较候选方法；由人工记录最终选型理由。 | `METHOD_VALIDATION.md`, `METHOD_SELECTION.md`, `code/poc/` |
 | 编程实现和图表生成 | `3coding-visual` | 实现可复现代码，运行实验，生成结果表和多种多样的图表。 | `code/`, `results/` ,  `RESULTS_REPORT.md`, `figures/图表` |

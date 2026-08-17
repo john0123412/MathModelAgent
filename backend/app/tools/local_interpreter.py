@@ -582,15 +582,37 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         finally:
             if watchdog is not None:
                 watchdog.cancel()
-            # If execution timed out, keep the PID-bound watchdog alive while the
-            # caller tears down the old kernel.  It then becomes a last-resort kill
-            # path rather than being cancelled before its SIGKILL phase.
             if (
                 watchdog_process is not None
                 and not returned_after_timeout
-                and watchdog_process.poll() is None
             ):
-                watchdog_process.terminate()
+                try:
+                    if watchdog_process.poll() is None:
+                        if os.name == "posix" and hasattr(os, "getpgid") and hasattr(os, "killpg"):
+                            try:
+                                pid = getattr(watchdog_process, "pid", None)
+                                if isinstance(pid, int):
+                                    os.killpg(os.getpgid(pid), 15)
+                            except (OSError, TypeError):
+                                pass
+                        watchdog_process.terminate()
+                        try:
+                            watchdog_process.wait(timeout=1.0)
+                        except (subprocess.TimeoutExpired, OSError):
+                            if os.name == "posix" and hasattr(os, "getpgid") and hasattr(os, "killpg"):
+                                try:
+                                    pid = getattr(watchdog_process, "pid", None)
+                                    if isinstance(pid, int):
+                                        os.killpg(os.getpgid(pid), 9)
+                                except (OSError, TypeError):
+                                    pass
+                            watchdog_process.kill()
+                            try:
+                                watchdog_process.wait(timeout=1.0)
+                            except (subprocess.TimeoutExpired, OSError):
+                                pass
+                except Exception:
+                    pass
 
         all_output: list[tuple[str, str]] = []
         for iopub_msg in msg_list:

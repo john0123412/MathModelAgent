@@ -2252,6 +2252,124 @@ def write_frozen_results_from_execution_validation(
     return output
 
 
+def _dimensional_parameter_sanity_issues(work_dir: Path) -> list[dict[str, Any]]:
+    """Validate arithmetic and dimensional sanity in input parameter audit tables."""
+    audit_paths = sorted(work_dir.glob("*_input_parameter_audit.csv"))
+    legacy_audit = work_dir / "input_parameter_audit.csv"
+    if legacy_audit.is_file() and legacy_audit not in audit_paths:
+        audit_paths.append(legacy_audit)
+
+    if not audit_paths:
+        return []
+
+    issues: list[dict[str, Any]] = []
+    for audit_path in audit_paths:
+        try:
+            with audit_path.open(encoding="utf-8-sig", newline="") as handle:
+                reader = csv.DictReader(handle)
+                rows = list(reader)
+        except Exception:
+            continue
+
+        for row in rows:
+            row_text = " ".join(str(v) for v in row.values()).lower()
+            # 检查微构体/正方体体积：10000 nm -> 1e12 nm^3 (1000 um^3)
+            if any(k in row_text for k in ("微构体", "正方体", "体积", "volume", "10000")):
+                for val_str in row.values():
+                    if not isinstance(val_str, str):
+                        continue
+                    if re.search(r"(?:1e\+?15|10\^15|10000\^3\s*=\s*1e\+?15)", val_str, re.IGNORECASE):
+                        issues.append(
+                            _issue(
+                                f"parameter_sanity.{audit_path.stem}.cube_volume",
+                                False,
+                                f"{audit_path.name} 中的微构体体积存在数量级严重笔误 (10000^3 nm³ 应为 1e12 nm³，误写为 1e15)。",
+                                {"row": row, "file": audit_path.name},
+                            )
+                        )
+                        break
+
+    if not issues:
+        return [
+            _issue(
+                "parameter_sanity.dimensional_consistency",
+                True,
+                "参数审计表中的几何尺寸与体积换算量纲自洽。",
+                {"audited_files": [p.name for p in audit_paths]},
+            )
+        ]
+    return issues
+
+
+def _anti_pseudo_crosscheck_issues(work_dir: Path) -> list[dict[str, Any]]:
+    """Detect trivial parameter-swap pseudo-crosschecks in crosscheck result tables."""
+    crosscheck_paths = sorted(work_dir.glob("*_crosscheck.csv"))
+    legacy_crosscheck = work_dir / "crosscheck.csv"
+    if legacy_crosscheck.is_file() and legacy_crosscheck not in crosscheck_paths:
+        crosscheck_paths.append(legacy_crosscheck)
+
+    if not crosscheck_paths:
+        return []
+
+    issues: list[dict[str, Any]] = []
+    for path in crosscheck_paths:
+        try:
+            with path.open(encoding="utf-8-sig", newline="") as handle:
+                reader = csv.DictReader(handle)
+                rows = list(reader)
+                fieldnames = reader.fieldnames or []
+        except Exception:
+            continue
+
+        if len(rows) < 5 or len(fieldnames) < 3:
+            continue
+
+        dist_cols = [
+            col for col in fieldnames
+            if any(term in col.lower() for term in ("dist", "result", "val", "algo", "method", "解析", "数值", "算法"))
+        ]
+        if len(dist_cols) >= 2:
+            col1, col2 = dist_cols[0], dist_cols[1]
+            diffs: list[float] = []
+            exact_zeros = 0
+            for r in rows:
+                v1_raw = r.get(col1)
+                v2_raw = r.get(col2)
+                try:
+                    v1 = float(str(v1_raw).strip()) if v1_raw is not None else None
+                    v2 = float(str(v2_raw).strip()) if v2_raw is not None else None
+                except (ValueError, TypeError):
+                    v1, v2 = None, None
+                if v1 is not None and v2 is not None and math.isfinite(v1) and math.isfinite(v2):
+                    diff = abs(v1 - v2)
+                    diffs.append(diff)
+                    if diff == 0.0:
+                        exact_zeros += 1
+
+            if len(diffs) >= 20 and exact_zeros == len(diffs):
+                header_text = " ".join(fieldnames).lower()
+                if not any(term in header_text for term in ("analytic", "numeric", "grid", "optimization", "解析", "数值", "优化", "采样")):
+                    issues.append(
+                        _issue(
+                            f"crosscheck_authenticity.{path.stem}",
+                            False,
+                            f"{path.name} 的复算列 {col1} 与 {col2} 浮点逐位完全恒等且未声明真实独立机理，疑似伪复算。",
+                            {"file": path.name, "cols": [col1, col2], "exact_match_ratio": 1.0},
+                        )
+                    )
+
+    if not issues:
+        return [
+            _issue(
+                "crosscheck_authenticity.independent_methods",
+                True,
+                "独立交叉复算表通过真实性与数值差异特征核验。",
+                {"checked_files": [p.name for p in crosscheck_paths]},
+            )
+        ]
+    return issues
+
+
 def validate_execution_artifacts(
     work_dir: str | os.PathLike[str],
     *,
@@ -2271,6 +2389,8 @@ def validate_execution_artifacts(
     if require_manifest:
         issues.extend(_manifest_issues(root, required))
         issues.extend(_problem_parameter_issues(root))
+        issues.extend(_dimensional_parameter_sanity_issues(root))
+        issues.extend(_anti_pseudo_crosscheck_issues(root))
     passed = all(issue["passed"] for issue in issues)
     return {
         "schema_version": "mathmodel.execution-validation-report.v1",

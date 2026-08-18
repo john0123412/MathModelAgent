@@ -1,5 +1,10 @@
 # AGENT_MEMORY
 
+- [2026-08-18] **工作区防污染与任务脚本存储规范加固**：
+  1. **`.gitignore` 防御强化**：追加 `scripts/tmp_*`、`scripts/test_*`、`scripts/temp_*`、`scripts/*.scratch.*`、`*.tmp.py`、`tmp_*.py`、`scratch/` 通配忽略规则，杜绝 Agent/临时测试脚本意外污染 Git 版本库。
+  2. **`AGENTS.md` 规则固化**：明确规定所有任务专属的计算、绘图、清洗脚本与草稿必须且只能保存在 `backend/project/work_dir/<task_id>/` 目录下（受控隔离、自动纳入附录与支撑材料）；一次性调试脚本必须保存在 `scratch/`；`scripts/` 仅限公共运维脚本；强制使用固定的 `backend/.venv` 环境执行；每次提交前强制 `git status --short --branch` 自检。
+
+
 - [2026-08-18] **LaTeX 模板编译与图表/代码字体优化闭环**（任务 ID `20260817-163525-f2715db564e250aec38490e2c03e8a68`）：
   1. **LaTeX 模板 `calc` 宏包与代码字体修复**：在 `tex_project_exporter.py` 的全部导出模板（`_MAIN_TEX_TEMPLATE`、`_CUMCM2025`、`_CUMCM2026`、`_HUASHUBEI`）中补全 `\usepackage{calc}` 依赖，彻底解决 Pandoc 转换符号说明表时因相对列宽计算缺失 `\real` 导致的 `Missing number, treated as zero` 致命错误；通过 `\IfFontExistsTF{{Consolas}}` 为代码环境注入清晰的标准等宽字体 `Consolas` / `Courier New`。
   2. **图表字体及乱码根除**：针对三张关键结果图（`ques3_P_phi_curve.png`、`ques4_figure_P_contour.png`、`ques4_figure_cost_probability.png`），强制配置 Matplotlib 中文字体栈 `['SimHei', 'Microsoft YaHei', 'SimSun']` 重绘，彻底根除方框（▯/tofu）乱码并优化标题/图例/坐标轴字号规范；同步更新 `frozen_results.json` 对应图表 SHA-256 指纹。

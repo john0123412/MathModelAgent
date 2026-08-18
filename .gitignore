@@ -36,3 +36,11 @@ __pycache__/
 contest_inputs/
 paper-assets-isolated-*
 pdf-review-2025a-*
+scripts/tmp_*
+scripts/temp_*
+scripts/test_*
+scripts/*.scratch.*
+*.tmp.py
+tmp_*.py
+scratch/
+

@@ -18,6 +18,17 @@
 - 不要擅自提交、推送、合并、删分支或清理 worktree，除非用户明确要求。
 - 验证结论必须基于实际运行结果；未运行就明确写“未验证”。
 
+## 任务脚本与临时文件存放规范（工作区防污染铁律）
+
+- **任务级脚本隔离**：所有针对具体建模任务的独立求解脚本（`*_solver.py`）、数据清洗脚本、绘图重绘脚本、草稿文件，**必须且只能保存在对应的任务目录 `backend/project/work_dir/<task_id>/` 下**。
+  - 严禁向仓库根目录、`scripts/` 目录或 `backend/` 源码目录写入任务级脚本。
+  - 任务目录下的 `.py` 脚本会被论文后处理器自动提取为附录源程序，并自动打包进 `support_materials.zip`；且因 `work_dir` 处于 Git 忽略状态，绝不会污染仓库。
+- **一次性调试脚本**：仅供一次性排查/测试的临时代码，必须保存在 IDE 的 `scratch/` 目录或临时目录中，不得散落在仓库代码树内。
+- **`scripts/` 目录范围**：`scripts/` 目录仅限存放经过 Code Review 的全项目通用运维/部署脚本（如 `docker-local-execution.ps1`）。严禁在此创建临时测试或绘图脚本。
+- **Python 执行环境固定**：执行 Python 代码时，必须使用固定的虚拟环境（Windows 本地使用 `backend\.venv\Scripts\python.exe`，Docker 容器使用 `docker compose exec backend uv run python`），严禁使用系统全局 Python。
+- **Git 状态自检**：每次修改或汇报前必须执行 `git status --short --branch`，确保工作区无未预期的 `?? scripts/` 或根目录未跟踪文件。
+
+
 ## 任务收尾与记忆同步
 
 每次完成功能修复、风险修复、导出链路调整、模板调整、验证流程调整后，提交前必须检查是否需要同步更新以下文件：

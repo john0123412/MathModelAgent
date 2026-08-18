@@ -587,7 +587,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     refresh_parser.add_argument(
         "--profile",
         required=True,
-        choices=[ExportProfile.CUMCM2025.value, ExportProfile.CUMCM2026.value],
+        choices=[p.value for p in ExportProfile],
     )
     refresh_parser.add_argument(
         "--local",

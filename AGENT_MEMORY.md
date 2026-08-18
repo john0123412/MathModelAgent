@@ -1,5 +1,12 @@
 # AGENT_MEMORY
 
+- [2026-08-18] **LaTeX 模板编译与图表/代码字体优化闭环**（任务 ID `20260817-163525-f2715db564e250aec38490e2c03e8a68`）：
+  1. **LaTeX 模板 `calc` 宏包与代码字体修复**：在 `tex_project_exporter.py` 的全部导出模板（`_MAIN_TEX_TEMPLATE`、`_CUMCM2025`、`_CUMCM2026`、`_HUASHUBEI`）中补全 `\usepackage{calc}` 依赖，彻底解决 Pandoc 转换符号说明表时因相对列宽计算缺失 `\real` 导致的 `Missing number, treated as zero` 致命错误；通过 `\IfFontExistsTF{{Consolas}}` 为代码环境注入清晰的标准等宽字体 `Consolas` / `Courier New`。
+  2. **图表字体及乱码根除**：针对三张关键结果图（`ques3_P_phi_curve.png`、`ques4_figure_P_contour.png`、`ques4_figure_cost_probability.png`），强制配置 Matplotlib 中文字体栈 `['SimHei', 'Microsoft YaHei', 'SimSun']` 重绘，彻底根除方框（▯/tofu）乱码并优化标题/图例/坐标轴字号规范；同步更新 `frozen_results.json` 对应图表 SHA-256 指纹。
+  3. **137页完整交付产物逐页审计**：对 `res.pdf` 进行逐页解析审计，确认摘要单页规范无越界、正文（第1-20页）公式/图表/表格排版完整且物理量采用斜体、无任何身份泄露违规词；附录（第21-137页）完整包含求解器与 Notebook 源码且代码字体清晰等宽。
+  4. **门禁与测试全绿闭环**：`task-refresh` 重新构建通过，`paper_preflight_report.json`（PASS）、`pdf_visual_check.json`（PASS）、`submission_audit_report.json`（PASS）、`final_acceptance_report.json`（TECHNICAL_PASS）；后端 47 项单元测试及 Ruff 检查全部通过。
+
+
 - [2026-08-18] **Q3 物理错误修复**（任务 ID `20260817-163525-f2715db564e250aec38490e2c03e8a68`）：独立审计发现原交付论文中 Q3 的 $\phi^* = 101.55\%$ 违反物理定律（体积分数不能超过 100%），系由代码在 Q2 亚临界数据（$P \sim 0.007$~$0.014$）上拟合指数模型后外推所致，而非真实 MC 仿真。已完成以下修复：
   1. 用与原始 `run_q3` 完全一致的种子族（`BASE_SEED+3_000_000+rep`，$M=200$），将 `nmax` 从 1200 扩展到 1500，运行真实 MC 仿真覆盖完整 $P$-$\phi$ 曲线（$\phi=0.14\%$ 到 $\phi=2.12\%$）。
   2. 精细网格搜索确定真实临界值：**$n^* = 954$，$\phi^* = 1.3487\%$，$\hat{p}(\phi^*) = 0.9050$（181/200），前置节点 $n=953$，$P=0.8950 < 0.90$，搜索精度 $|\Delta\phi| = 0.00141\%$，Wilson 95% CI $= [0.8564, 0.9383]$，种子敏感性标准差 $= 0.02$**。

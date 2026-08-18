@@ -1709,6 +1709,52 @@ class TestExecutionValidation(unittest.TestCase):
             )
             self.assertTrue(recorded["ok"], recorded)
 
+    def test_exact_diagnostic_profile_accepts_reproducibility_and_coverage_metrics(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            source_path = os.path.join(work_dir, "ques1_results.csv")
+            with open(source_path, "w", encoding="utf-8") as handle:
+                handle.write("id,value\ncompleteness,1.0\ncoverage,1.0\nreproducibility,1.0\n")
+            with open(os.path.join(work_dir, "modeler_plan.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "model_plan": {
+                            "subtasks": {
+                                "ques1": {
+                                    "diagnostic_profile": "exact",
+                                    "diagnostic_requirements": [
+                                        "用独立算法（如并查集）复算连通性结果确保一致",
+                                    ],
+                                }
+                            }
+                        }
+                    },
+                    handle,
+                    ensure_ascii=False,
+                )
+
+            recorded = record_execution_evidence(
+                work_dir,
+                subtask_id="ques1",
+                constraints=[{
+                    "id": "completeness",
+                    "actual": 1.0,
+                    "comparison": "eq",
+                    "target": 1.0,
+                    "source_path": "ques1_results.csv",
+                }],
+                metrics=[
+                    {
+                        "id": "reproducibility_check",
+                        "label": "结果可复现性",
+                        "value": 1.0,
+                        "unit": "布尔值",
+                        "explanation": "交叉验证——对每组数据用独立算法复算一致",
+                        "source_path": "ques1_results.csv",
+                    },
+                ],
+            )
+            self.assertTrue(recorded["ok"], recorded)
+
 
 class PressureTargetEvidenceTest(unittest.TestCase):
     """题面给出压力目标时，必须留下可复核的实际压力偏差证据。

@@ -1160,6 +1160,108 @@ class TestStructuredModelPlan(unittest.TestCase):
         )
         self.assertTrue(result.valid, result.model_dump_json())
 
+    # -- Regression tests for expanded _NEUTRAL_COMPLETION_METRIC and
+    #    _ALGORITHM_DIAGNOSTIC_METRIC whitelist (gate fix X) --
+
+    def test_result_structure_complete_is_conclusion_neutral(self):
+        """'result_structure_complete eq 1' is a process completeness check."""
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(
+                key="result_structure_complete",
+                label="结果结构完整性",
+                comparator="eq",
+                target=1,
+                description="所有结果文件均已生成且结构验证通过时记为 1",
+            )
+        ]
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+            questions={"ques1": "判断是否存在最优方案并求解。"},
+        )
+        self.assertTrue(result.valid, result.model_dump_json())
+
+    def test_bisection_iterations_is_algorithm_diagnostic_not_empirical_threshold(self):
+        """'bisection_iterations le 20' records algorithm config, not quality."""
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(
+                key="bisection_iterations",
+                label="二分迭代次数",
+                comparator="le",
+                target=20,
+                description="二分搜索的迭代次数不超过 20",
+            )
+        ]
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertTrue(result.valid, result.model_dump_json())
+
+    def test_phi_precision_format_is_conclusion_neutral(self):
+        """'phi_precision_format eq 1' is a format validation flag."""
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(
+                key="phi_precision_format",
+                label="黄金分割精度格式",
+                comparator="eq",
+                target=1,
+                description="黄金分割比精度输出格式验证通过时记为 1",
+            )
+        ]
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertTrue(result.valid, result.model_dump_json())
+
+    def test_conduction_eq_1_still_rejected_as_forced_conclusion(self):
+        """Preset scientific conclusion 'conduction eq 1' must still be blocked."""
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(
+                key="conduction",
+                label="是否导通",
+                comparator="eq",
+                target=1,
+                description="导通时记为 1",
+            )
+        ]
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+            questions={"ques1": "判断电路是否导通。"},
+        )
+        self.assertFalse(result.valid)
+        self.assertIn("conduction", " ".join(result.violations))
+
+    def test_rmse_without_basis_still_rejected_as_unsupported_threshold(self):
+        """'rmse le 0.5' without stated basis must still be blocked."""
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(
+                key="rmse_prediction",
+                label="预测均方根误差",
+                comparator="le",
+                target=0.5,
+                description="均方根误差由预测结果直接计算",
+            )
+        ]
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertFalse(result.valid)
+        self.assertIn("rmse_prediction", " ".join(result.violations))
+
     def test_generic_profiles_are_selected_by_problem_language(self):
         data_contract = build_problem_contract("附件给出样本数据，请清洗数据并建立回归预测模型。")
         physics_contract = build_problem_contract("研究流量和压力随时间演化的物理仿真系统。")

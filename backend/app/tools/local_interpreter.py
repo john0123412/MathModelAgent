@@ -380,10 +380,10 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         if timeout_occurred:
             restored = await self._recover_kernel_after_timeout()
             recovery_message = (
-                "超时后的本地内核已重启，并从最近变量快照恢复；"
-                "此前定义的函数不会恢复，后续代码必须以低开销方式重新定义必要函数。"
+                "超时后的本地内核已重启，并恢复了前序代码与变量状态；"
+                "请务必大幅降低计算复杂度（如将蒙特卡洛抽样次数 N 降低到 100~500、粗化网格、向量化计算），以低开销方式完成计算。"
                 if restored
-                else "超时后的本地内核重启或变量快照恢复失败；本次执行保持失败，不能继续使用旧内核。"
+                else "超时后的本地内核重启或状态恢复失败；本次执行保持失败，不能继续使用旧内核。"
             )
             error_message = f"{error_message}\n{recovery_message}"
             text_to_gpt.append(recovery_message)
@@ -439,6 +439,18 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
             restored = bool(
                 snapshot.exists() and self.kc is not None and await snapshot.load(self.kc)
             )
+            if not restored:
+                code_cells = self.notebook_serializer.get_code_cells()
+                # 当前超时的单元格在执行前已被加入 notebook，超时恢复时仅重放此前的前序有效单元格
+                replayable_cells = code_cells[:-1] if len(code_cells) > 1 else []
+                if replayable_cells:
+                    logger.info(
+                        "无变量快照，正在从 notebook 历史代码重放恢复状态: cells={}",
+                        len(replayable_cells),
+                    )
+                    for cell_code in replayable_cells:
+                        await self.replay_code(cell_code)
+                    restored = True
             logger.info("超时后本地内核已重建: snapshot_restored={}", restored)
             return restored
         except Exception as exc:

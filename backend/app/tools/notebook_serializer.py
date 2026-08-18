@@ -102,6 +102,14 @@ class NotebookSerializer:
         self.write_to_notebook()
         return True
 
+    def get_code_cells(self) -> list[str]:
+        """返回当前 notebook 中所有有效的代码单元格源码列表。"""
+        return [
+            cell.source
+            for cell in self.nb.get("cells", [])
+            if cell.get("cell_type") == "code" and cell.get("source")
+        ]
+
     def add_image_to_notebook(self, image, mime_type):
         image_output = nbf.new_output(
             output_type="display_data", data={mime_type: image}

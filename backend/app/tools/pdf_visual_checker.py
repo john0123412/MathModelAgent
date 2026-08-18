@@ -427,11 +427,14 @@ def check_pdf_visual(
         ) or not 1.0 <= float(min_content_margin_cm) <= 5.0:
             raise ValueError("min_content_margin_cm 必须在 1.0 至 5.0 之间")
     effective_body_max = MAX_CUMCM_BODY_PAGES if body_max_pages is None else body_max_pages
-    effective_margin = (
-        CUMCM_MIN_CONTENT_MARGIN_PT
-        if min_content_margin_cm is None
-        else float(min_content_margin_cm) / 2.54 * 72
-    )
+    if min_content_margin_cm is None:
+        effective_margin = (
+            CUMCM_MIN_CONTENT_MARGIN_PT
+            if export_profile in ("cumcm2025", "cumcm2026")
+            else 2.0 / 2.54 * 72
+        )
+    else:
+        effective_margin = float(min_content_margin_cm) / 2.54 * 72
     report = {
         "enabled": False,
         "success": False,

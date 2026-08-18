@@ -109,6 +109,9 @@ def _formal_evidence_checklist(work_dir: str, subtask_id: str | None) -> str:
         key = metric.get("key")
         comparator = metric.get("comparator")
         target = metric.get("target")
+        label = metric.get("label") or key
+        unit = metric.get("unit") or ""
+        desc = metric.get("description") or ""
         if isinstance(key, str) and isinstance(comparator, str):
             evidence_comp = {
                 "eq": "abs_diff_lte",
@@ -120,17 +123,23 @@ def _formal_evidence_checklist(work_dir: str, subtask_id: str | None) -> str:
                 "lt": "lt",
             }.get(comparator, comparator)
             extra_field = ", tolerance: 0.0" if comparator == "eq" else ""
-            lines.append(
-                f"- `{key}`: `{comparator} {target}` "
-                f"（调用 record_execution_evidence 时在 constraints 填写 id: `{key}`, comparison: `{evidence_comp}`, target: `{target}`{extra_field}）"
-            )
+        desc_info = (
+            f"（{label}，单位：{unit}，说明：{desc}）"
+            if desc
+            else (f"（{label}，单位：{unit}）" if (unit or label != key) else "")
+        )
+        lines.append(
+            f"- `{key}`{desc_info}: `{comparator} {target}` "
+            f"（调用 record_execution_evidence 时在 constraints 填写 id: `{key}`, comparison: `{evidence_comp}`, target: `{target}`{extra_field}）"
+        )
     sections = []
     if lines:
         sections.append(
             "【本题不可省略的 ModelPlan 验收指标】\n"
             + "\n".join(lines)
-            + "\n注意：上述每一项都必须写入本题新建/更新的数值结果文件或验收表，并在调用 record_execution_evidence 时完整包含在 constraints 数组中（包含 id、actual、comparison、target、source_path）；缺项或 direction/target 篡改会直接失败。"
-            "推荐同时生成标准验收表 `"
+            + "\n注意：上述每一项都必须写入本题新建/更新的数值结果文件或验收表，并在调用 record_execution_evidence 时完整包含在 constraints 数组中（包含 id、actual、comparison、target、source_path）；缺项或 direction/target 篡改会直接失败。\n"
+            + "特别提醒：对于 precision、error、se、tolerance、step 等精度/误差/步长类指标（如 phi_precision、mc_se），actual 请填入实际计算得到的精度/误差数值（如 0.001、0.01 等），必须满足目标比较关系（如 <= 0.005 或 <= 0.02），绝不能误填为主结果数值（如 18.0）！\n"
+            + "推荐同时生成标准验收表 `"
             + (f"{subtask_id}_acceptance_metrics.csv" if subtask_id else "quesN_acceptance_metrics.csv")
             + "`（表头：`指标ID,指标名称,数值,单位,目标值,是否达标`）。"
         )
@@ -166,6 +175,27 @@ def _formal_evidence_checklist(work_dir: str, subtask_id: str | None) -> str:
             + "\\n每一项计划要求都要有至少一个 source-backed metric；指标 id、标签或说明必须直接包含相应关键词。"
             "例如质量守恒/平衡要求必须提交由时序数组算出的 residual 或 balance metric；"
             "减压阀、双喷嘴和可行性要求也必须各自有对应指标。只写 `check=1` 或仅在 CSV 中提及而不提交 metric 会被拒绝。"
+            + (
+                "\\n仿真型诊断（simulation）必须在 record_execution_evidence 的 metrics 数组中提交至少一个包含"
+                "仿真诊断关键词（如 seed / 随机种子 / variance / 方差 / std / ci / 置信 / convergence / 收敛 / error / 误差 / sample / 采样）的指标，"
+                "且该指标的 value 必须真实记录在 CSV 文件中。"
+                if diagnostic_profile == "simulation"
+                else ""
+            )
+            + (
+                "\\n数值型诊断（numerical）必须在 record_execution_evidence 的 metrics 数组中提交至少一个包含"
+                "数值诊断关键词（如 convergence / 收敛 / step / 步长 / residual / 残差 / error / 误差 / iteration / 迭代 / tolerance / 容差）的指标，"
+                "且该指标的 value 必须真实记录在 CSV 文件中。"
+                if diagnostic_profile == "numerical"
+                else ""
+            )
+            + (
+                "\\n拟合型诊断（fitting）必须在 record_execution_evidence 的 metrics 数组中提交至少一个包含"
+                "拟合诊断关键词（如 residual / 残差 / rmse / mae / r2 / holdout / bootstrap / fit / loss / 损失）的指标，"
+                "且该指标的 value 必须真实记录在 CSV 文件中。"
+                if diagnostic_profile == "fitting"
+                else ""
+            )
             + (
                 "\\n优化型诊断除计划的验收指标外，至少将求解器状态（如 `solver_status=1`）、"
                 "约束可行性和计划要求的松弛量/独立复算分别作为 source-backed metrics 提交；"

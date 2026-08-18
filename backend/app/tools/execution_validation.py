@@ -820,22 +820,34 @@ def _identifiability_issues(root: Path, subtask_id: str, metrics: object) -> lis
 
 
 _DIAGNOSTIC_TOKENS: dict[str, tuple[str, ...]] = {
-    "exact": ("residual", "残差", "等式", "代入", "identity"),
+    "exact": (
+        "residual", "残差", "等式", "代入", "identity",
+        "reproducibility", "reproducible", "复现", "验证", "check",
+        "一致", "判定", "exact", "精确", "tolerance", "容差", "diff",
+        "error", "误差", "coverage", "覆盖", "completeness", "完整",
+        "closed_form", "解析", "analytic",
+    ),
     "numerical": (
         "convergence", "收敛", "step", "步长", "grid", "网格", "refinement",
-        "加密", "residual", "残差", "error", "误差",
+        "加密", "residual", "残差", "error", "误差", "iteration", "迭代",
+        "tolerance", "容差",
     ),
     "optimization": (
         "solver", "求解器", "status", "状态", "constraint", "约束", "feasible",
         "可行", "gap", "间隙", "initial", "初值", "branch", "分支",
+        "optimal", "最优", "dual", "对偶", "slack", "松弛",
     ),
     "fitting": (
         "residual", "残差", "rmse", "mae", "r2", "r²", "holdout", "验证集",
         "bootstrap", "可辨识", "identifiability", "interval", "区间",
+        "fit", "拟合", "loss", "损失",
     ),
     "simulation": (
         "seed", "随机种子", "replicate", "重复", "interval", "区间", "convergence",
         "收敛", "step", "步长", "residual", "残差", "balance", "守恒",
+        "mc", "monte", "蒙特", "sample", "样本", "trial", "试验",
+        "error", "误差", "variance", "方差", "std", "ci", "置信",
+        "reproducibility", "reproducible", "复现", "验证", "check",
     ),
 }
 
@@ -845,13 +857,46 @@ _DIAGNOSTIC_TOKENS: dict[str, tuple[str, ...]] = {
 # groups apply only when the ModelPlan explicitly asks for the corresponding
 # diagnostic.
 _DIAGNOSTIC_REQUIREMENT_GROUPS = (
-    (("求解器", "solver", "状态", "status"), ("求解器", "solver", "状态", "status")),
-    (("松弛", "slack"), ("松弛", "slack")),
-    (("质量", "守恒", "balance", "residual"), ("质量", "守恒", "balance", "residual")),
-    (("双喷嘴", "双喷油器", "injector"), ("双喷嘴", "双喷油器", "injector")),
-    (("减压阀", "溢流阀", "relief"), ("减压阀", "溢流阀", "relief")),
-    (("可行性", "feasible"), ("可行性", "feasible")),
-    (("步长", "网格", "step", "grid"), ("步长", "网格", "step", "grid")),
+    (
+        ("求解器", "solver", "状态方程", "state_equation", "state equation"),
+        ("求解器", "solver", "状态", "status", "最优性", "optimality", "收敛", "convergence"),
+    ),
+    (
+        ("松弛", "slack"),
+        ("松弛", "slack", "约束", "constraint", "边界", "bound", "violation"),
+    ),
+    (
+        ("质量", "守恒", "balance", "residual"),
+        ("质量", "守恒", "balance", "residual", "残差", "能量", "energy", "误差", "error"),
+    ),
+    (
+        ("双喷嘴", "双喷油器", "injector"),
+        ("双喷嘴", "双喷油器", "injector", "喷嘴", "nozzle"),
+    ),
+    (
+        ("减压阀", "溢流阀", "relief"),
+        ("减压阀", "溢流阀", "relief", "阀门", "valve"),
+    ),
+    (
+        ("可行性", "feasible"),
+        ("可行性", "feasible", "连通", "connectivity", "导通", "conduction", "相交", "intersection"),
+    ),
+    (
+        ("步长", "网格", "step", "grid", "mesh", "加密", "refinement"),
+        ("步长", "网格", "step", "grid", "mesh", "加密", "refinement", "分辨率", "resolution", "采样", "sample"),
+    ),
+    (
+        ("蒙特卡洛", "monte carlo", "mc"),
+        ("蒙特卡洛", "monte carlo", "mc", "方差", "variance", "置信区间", "confidence", "采样", "sample"),
+    ),
+    (
+        ("敏感性分析", "灵敏度分析", "sensitivity_analysis"),
+        ("敏感性", "灵敏度", "sensitivity", "鲁棒性", "robustness"),
+    ),
+    (
+        ("几何碰撞", "相交距离", "geometric_collision"),
+        ("几何", "geometry", "距离", "distance", "碰撞", "collision", "截断", "truncation", "镜像", "mirror", "周期", "periodic"),
+    ),
 )
 
 

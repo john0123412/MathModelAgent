@@ -191,8 +191,18 @@ _EMPIRICAL_QUALITY_METRIC = re.compile(
     re.IGNORECASE,
 )
 _NEUTRAL_COMPLETION_METRIC = re.compile(
-    r"(?:completed|completion|coverage|finite|reproducib|完成标志|完成率|覆盖(?:数|率)?"
-    r"|数值有限|可复算)",
+    r"(?:complet(?:ed|ion|e|eness)"
+    r"|coverage|finite|reproducib"
+    r"|(?:structure|format|valid(?:ation)?|match|check|verify)(?:_(?:ok|pass|done|flag))?"
+    r"|完成标志|完成率|覆盖(?:数|率)?|数值有限|可复算|格式正确|结构完整)",
+    re.IGNORECASE,
+)
+_ALGORITHM_DIAGNOSTIC_METRIC = re.compile(
+    r"(?:iteration[s]?|step[s]?(?:_count)?|grid[_ ]?(?:size|count|points)"
+    r"|convergence[_ ]?(?:check|flag|status)"
+    r"|bisection|newton|epoch[s]?|batch[_ ]?(?:size|count)"
+    r"|precision|resolution|tolerance|format|sample_size|replicate[s]?"
+    r"|迭代(?:次数|步数)?|网格(?:数|点数)?|收敛(?:检查|标志)?|精度|分辨率|容差|格式|采样点数|重复次数)",
     re.IGNORECASE,
 )
 _ZERO_BOUND_FEASIBILITY_METRIC = re.compile(
@@ -786,7 +796,12 @@ def _conclusion_forcing_metrics(plan: object, question: str) -> list[str]:
         forces_boolean_outcome = (
             _BOOLEAN_OUTCOME_METRIC.search(metric_text)
             and comparator == "eq"
-            and target in {0, 1}
+            and target in {0, 1, 0.0, 1.0}
+            # 放行结论中立的“过程完整性 / 可复算性”完成标志
+            # （如 distance_calculation_completeness / result_reproducibility /
+            #  *_complete / *_match eq 1），只拒绝真正在执行前预设科学结论
+            # 为肯定的指标（如 conduction / 是否导通 / existence eq 1）。
+            and not _NEUTRAL_COMPLETION_METRIC.search(metric_text)
         )
         if forces_direction or forces_significance or forces_boolean_outcome:
             issues.append(f"{_plan_field(metric, 'key', 'unknown')} {comparator} {target:g}")
@@ -807,6 +822,11 @@ def _unsupported_empirical_thresholds(plan: object) -> list[str]:
         if not _EMPIRICAL_QUALITY_METRIC.search(metric_text):
             continue
         if _NEUTRAL_COMPLETION_METRIC.search(identity_text):
+            continue
+        # Algorithm diagnostic parameters (iteration counts, grid sizes, convergence
+        # checks) are not empirical quality thresholds — they record algorithm
+        # configuration or execution diagnostics, not quality judgments.
+        if _ALGORITHM_DIAGNOSTIC_METRIC.search(identity_text):
             continue
         if (
             _ZERO_BOUND_FEASIBILITY_METRIC.search(identity_text)

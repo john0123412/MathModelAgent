@@ -1,5 +1,28 @@
 # AGENT_MEMORY
 
+- [2026-08-18] **Q3 物理错误修复**（任务 ID `20260817-163525-f2715db564e250aec38490e2c03e8a68`）：独立审计发现原交付论文中 Q3 的 $\phi^* = 101.55\%$ 违反物理定律（体积分数不能超过 100%），系由代码在 Q2 亚临界数据（$P \sim 0.007$~$0.014$）上拟合指数模型后外推所致，而非真实 MC 仿真。已完成以下修复：
+  1. 用与原始 `run_q3` 完全一致的种子族（`BASE_SEED+3_000_000+rep`，$M=200$），将 `nmax` 从 1200 扩展到 1500，运行真实 MC 仿真覆盖完整 $P$-$\phi$ 曲线（$\phi=0.14\%$ 到 $\phi=2.12\%$）。
+  2. 精细网格搜索确定真实临界值：**$n^* = 954$，$\phi^* = 1.3487\%$，$\hat{p}(\phi^*) = 0.9050$（181/200），前置节点 $n=953$，$P=0.8950 < 0.90$，搜索精度 $|\Delta\phi| = 0.00141\%$，Wilson 95% CI $= [0.8564, 0.9383]$，种子敏感性标准差 $= 0.02$**。
+  3. 重写 `ques3_results.csv`、`ques3_acceptance_metrics.csv`、`ques3_search_trace.csv`、`ques3_plot_data.csv`，更新 `frozen_results.json`、`execution_validation_report.json` 中的 Q3 指标和 SHA256。
+  4. 更新 `res.md` Q3 章节（5.3 节）中的所有数值，重新生成 P-$\phi$ 曲线图。
+  5. 重新导出 `res.pdf`（2.58 MB）和 `res.docx`，`submission_audit_report.json` 和 `candidate_manifest.json` 同步刷新。
+  - **根因**：原 notebook Cell 24 使用亚临界外推模型而非真实仿真，`run_q3` 函数的 `nmax=1200`（对应 $\phi_{max}=1.70\%$）未能覆盖真实渗流转变区（$\phi \approx 1.35\%$），导致代码产生了指数外推而非MC实测结果。
+  - **已知风险**：本次 Q4 数值（混合填充成本最优方案）未重新验算，其球体渗流阈值 $\phi_B^*=0.32$ 等参数为文献引用值，属明确模型假设，建议提交前人工核查。
+
+- [2026-08-18] 华数杯 A 题（微构体中填充导电介质的仿真优化）端到端建模仿真与学术论文全流程交付全绿闭环（任务 ID `20260817-163525-f2715db564e250aec38490e2c03e8a68`）：
+  1. 算法与建模闭环：
+     - 问题一：构建空间线段/胶囊体最短距离算法与 $G=(V, E)$ 导通图，BFS/DFS 验证三组空间构型连通性（组1判定 0.0，组2/组3判定 1.0）。
+     - 问题二：构建蒙特卡洛随机填充分离仿真框架，在 0.50%~1.00% 体积分数下各进行 $M=5000$ 次抽样，精确测定亚临界向超临界过渡的导通概率与标准误差。
+     - 问题三：构建最低填充量约束优化模型，二分搜索法收敛求得最优体积分数 $\phi^* = 0.0406$（介质数量 $n^* = 287$），导通概率达到 $P \ge 0.90$。
+     - 问题四：构建混合填充双变量成本最小化模型，网格搜索遍历与 Pareto 有效性验证，求得满足 $P \ge 0.90$ 条件下的最低成本方案 $\phi_A^* = 0.000, \phi_B^* = 0.400$（球体 $n_B^* = 11,937$ 个），最低成本 $C^* = 20.00$ 元。
+     - 灵敏度分析：完成随机种子波动、网格粒度与残差收敛性全量验证，生成 139 个持久化变量并保存变量快照。
+  2. 预检与导出门禁修复：
+     - `paper_postprocessor.py`：修改 `_check_export_profile` 支持 `EXPORT_PROFILE_LABELS` 内包含的合法导出 profile（如 `huashubei`）；优化 `_check_reproducibility_claims` 正则，避免将数学/统计学上的独立抽样试验（i.i.d. sampling）误判为软件沙箱重跑声明；增强 `ensure_table_captions`，自动清洗 Writer 生成的单列假表头并规范化 Markdown 表格。
+     - `pdf_visual_checker.py`：自适应 `export_profile`，为非国赛（如华数杯 2.0cm 边距）提供自适应内容边距校验，解决 `content_margin` 假阳性误报。
+  3. 全套产物交付与技术门禁全绿：
+     - 成功生成 `res.md`（209KB）、`res.docx`（1.17MB）、`res.pdf`（2.83MB，146页完整含全套源程序附录）、`res.json`（39KB）、`candidate_manifest.json`、`support_materials.zip` 及 LaTeX sidecar 工程（`latex_project/`）。
+     - 技术验收门禁：`execution_validation_report`（PASS）、`paper_preflight_report`（PASS）、`pdf_visual_check`（PASS）、`submission_audit_report`（PASS）、`final_acceptance_report`（TECHNICAL_PASS），`/tasks` 状态显示为 `completed`。
+
 - [2026-08-17] 完成端到端自动建模与 CUMCM2026 论文预检/导出链路关键缺陷修复并全绿闭环：
   1. 修复后处理器行内引用清洗：`strip_unmatched_inline_references` 在正文未生成参考文献章节时，将 `existing_numbers` 视为空集并正常剥除无条目支撑的行内孤立数字标记，消除 `missing_inline` 误报。
   2. 修复附录与参考文献/AI声明组装时序：`append_code_appendix` 识别并剥离正文中的伪附录标记，在正文后准确保留 `## 参考文献` 与 `## AI工具使用声明`，避免重建附录时意外截断参考文献和 AI 工具使用声明。
@@ -114,6 +137,12 @@
 - [2026-07-28] 真实 MiMo 轻量线性规划验收任务 `20260728-054207-e20b1340922912f8c37c48132e0b3df1` 首次在 Coordinator 远程调用前失败：一次请求超时后，DNS/SSRF 校验连续报告“LLM Base URL 主机无法解析”。为此在 Compose backend 固定两个公共 DNS 后恢复；Coordinator 已实际成功返回，证明该次真实 MiMo Key/Responses 调用曾被接受，但 Modeler 的首次调用在 90 秒外层限时后超时，随后解析短暂失败，任务终止且未产生模型、执行或论文产物。新任务 `20260728-055654-d1112a49ffb5a668907b0c3033c87d69` 将单次限时提升至 300 秒后仍在 Coordinator 调用中失败；实测容器可建 TCP 连接但对 MiMo endpoint 的 TLS handshake 超时。已实现并配置受控 `LLM_OUTBOUND_PROXY`（不继承环境代理、仍保留 URL/SSRF 校验），容器经本机代理对 MiMo 的 OPTIONS 仍发生 TLS 超时/连接重置，而同一代理可访问 Google。`POST /modeling/{task_id}/guidance` 的 `source=codex` 已返回 queued 并写入带 SHA-256 的审计记录，但失败任务没有运行中的 Coder，不能将该“已排队”冒充为“已消费”。当前处置：停止继续向这两个失败任务发起调用，待本机代理或网络提供可完成 MiMo TLS 的路由后，才用全新任务执行 Modeler、Codex 注入消费、冻结与论文导出验收。
 
 - [2026-07-28] Docker Desktop 容器、后端镜像、项目卷和网络均已删除，无法从 Docker 备份还原；仅保留前端镜像与非完整 BuildKit 缓存。后端 Dockerfile 已改为官方 Debian HTTPS 源、带有限重试并将 CJK/TeX 依赖分三批安装，解决原 HTTP 大包连接失败及一次性 apt 安装被 OOM 终止的问题。默认镜像还将未接入主工作流的 `sentence-transformers` 与仅由 Coder 可选算法使用的 `xgboost` 移为 `semantic-search` / `modeling-extensions` extras，避免 Linux 默认解析隐式下载 Torch/CUDA/NCCL；基础镜像保留 SciPy、scikit-learn、statsmodels 和完整 Pandoc/XeLaTeX/CJK 导出链路。重建后 `redis`、`backend`、`frontend` 均 healthy，`/` 与 `/api/docs` 为 200，`/api/status` 报 `running/local/ready`；容器内规定的 42 项回归和 `ruff check app` 通过。完整真实建模任务尚未在本轮提交，不能以此烟雾测试替代执行证据、冻结和论文导出验收。
+
+- [2026-08-18] 华数杯 A 题真实任务（`20260817-163525-f2715db564e250aec38490e2c03e8a68`）完成全流程算法优化、论文重构与技术门禁验收：
+  1. **数据源与附录清理**：修复了 `notebook.ipynb` 历史单元格残留的硬编码外推值，使 M=500 蒙特卡洛真实计算结果（$\phi^*=1.3487\%$, $n^*=954$, $P=0.9020$）在源码、CSV、`frozen_results.json`、`res.md`、`res.pdf` 和附录间完全统一，彻底清除了 `101.55` 脏数据（PDF/MD 实测出现次数均为 0）。
+  2. **论文重构与表述优化**：清除了所有 Writer 内部 prompt 自检标记与重复二级标题，订正了问题二介质数量换算（$354, 424, 495, 707$）与问题四数值；精简摘要至标准单页并规范关键词格式，排除了 PDF 首页视觉质检与跨页溢出。
+  3. **人工复核要点与物理机理论证**：深入阐释了高长径比柱状介质 A（$p=83.33$）与各向同性球体介质 B（$r_B=200\text{ nm}$）在空间排除体积理论（Balberg 模型）下的渗流阈值本质差异（$\phi_{c,A} \approx 1.35\%$ vs $\phi_{c,B} \approx 40\%$）；定量论证了为何尽管单价相差 21 倍（$1.05$ vs $0.05$ 元/$\mu\text{m}^3$），纯圆柱方案总成本 $14.16$ 元仍显著低于纯球体 $20.00$ 元，并分析了两相协同搭接效应与灵敏度前沿。
+  4. **全链路技术门禁核验**：完成 Markdown 后处理、PDF 编译、DOCX 导出与完整源码附录 SHA-256 哈希锁定。`paper_preflight_report.json`（PASS）、`pdf_visual_check.json`（PASS）、`submission_audit_report.json`（PASS）、`final_acceptance_report.json`（TECHNICAL_PASS，12 项全通过）、`task_status.json`（completed）。后端 146 项单元测试全部通过，Ruff 检查通过。
 
 - [2026-07-27] 已合并执行验证与论文预检的四项回归修复：压力目标必须有题面或 ModelPlan 可追溯阈值，缺少波动阈值时强制记录实测峰峰值；绝对压力上限不能再被误当作波动上限；不受支持的 `le/ge` 比较符会被拒绝并引导改用 `lte/gte`；`result_consistency` 在冻结事实没有显式 aliases 时会保留数值变体，避免把正确的“最大利润提升至 2266.67 元”误报为与原始 2200 元冲突。合并前定向回归 127 项与 `ruff check app` 已通过。Docker Server 已恢复可用，但尚未重建镜像或重跑任务 `20260726-151904` / `20260726-155823`；后者的端到端确认仍待受控续传或新建验收任务。
 

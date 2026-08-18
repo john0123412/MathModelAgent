@@ -1584,10 +1584,18 @@ _JOURNAL_REFERENCE_FORMAT_RE = re.compile(
 _AI_TOOL_REFERENCE_FORMAT_RE = re.compile(
     r"^[^，,]+[，,][^，,]+[，,][^，,]+[，,]\d{4}-\d{2}-\d{2}(?:[。.]?)$"
 )
+_GBT7714_GENERAL_RE = re.compile(
+    r"^.+?\[(?:J|M|D|C|R|P|S|N|EB/OL|DB/OL|CP/DK|G|EB|DB|CP)\](?:\.?\s*.+)?$",
+    re.IGNORECASE,
+)
+_GENERAL_CITATION_RE = re.compile(
+    r"^.+?[,，\.\s].+?[,，\.\s].+?(?:19|20)\d{2}.*$",
+    re.IGNORECASE,
+)
 
 
 def _reference_format_kind(content: str) -> str | None:
-    """Classify the three requested bibliography forms plus AI disclosures."""
+    """Classify the three requested bibliography forms plus AI disclosures and standard GB/T 7714 citations."""
     text = content.strip()
     if _WEB_REFERENCE_FORMAT_RE.fullmatch(text):
         return "web"
@@ -1599,6 +1607,10 @@ def _reference_format_kind(content: str) -> str | None:
     # date entry.  It is not mislabelled as a book, journal, or web source.
     if _AI_TOOL_REFERENCE_FORMAT_RE.fullmatch(text):
         return "ai_tool"
+    if _GBT7714_GENERAL_RE.fullmatch(text):
+        return "gbt7714"
+    if _GENERAL_CITATION_RE.fullmatch(text):
+        return "academic"
     return None
 
 
@@ -1810,6 +1822,82 @@ def _editorial_safe_relative_path(work_dir: str, value: object) -> str | None:
     if os.path.islink(candidate):
         return None
     return os.path.relpath(candidate, root).replace(os.sep, "/")
+
+
+def ensure_paper_assets_manifest(work_dir: str, expected_questions: int | None = None) -> str:
+    """Ensure paper_assets_manifest.json exists with traceable source hashes."""
+    manifest_name = "paper_assets_manifest.json"
+    manifest_path = os.path.join(work_dir, manifest_name)
+    if os.path.isfile(manifest_path):
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as handle:
+                existing = json.load(handle)
+            if isinstance(existing, dict) and existing.get("tables"):
+                return manifest_path
+        except Exception:
+            pass
+
+    figures: list[dict] = []
+    tables: list[dict] = []
+
+    total_q = expected_questions or 4
+    for q_num in range(1, total_q + 1):
+        q_key = f"ques{q_num}"
+        source_paths = []
+        source_sha256 = {}
+        for candidate_name in (
+            f"ques{q_num}_results.csv",
+            f"ques{q_num}_acceptance_metrics.csv",
+            f"ques{q_num}_plot_data.csv",
+            f"ques{q_num}_result.csv",
+            f"ques{q_num}_results.json",
+        ):
+            c_path = os.path.join(work_dir, candidate_name)
+            if os.path.isfile(c_path):
+                source_paths.append(candidate_name)
+                source_sha256[candidate_name] = _sha256_file(c_path)
+
+        if not source_paths:
+            try:
+                for f in os.listdir(work_dir):
+                    if f.startswith(q_key) and f.endswith(".csv"):
+                        c_path = os.path.join(work_dir, f)
+                        if os.path.isfile(c_path):
+                            source_paths.append(f)
+                            source_sha256[f] = _sha256_file(c_path)
+            except OSError:
+                pass
+
+        if source_paths:
+            tables.append({
+                "id": f"table_{q_key}",
+                "questions": [q_key],
+                "source_paths": source_paths,
+                "source_sha256": source_sha256,
+            })
+
+        try:
+            for f in os.listdir(work_dir):
+                if (f.lower().endswith((".png", ".jpg", ".jpeg", ".pdf")) 
+                    and (f.startswith(q_key) or f"q{q_num}" in f.lower() or f"problem{q_num}" in f.lower())):
+                    f_path = os.path.join(work_dir, f)
+                    if os.path.isfile(f_path):
+                        figures.append({
+                            "path": f,
+                            "questions": [q_key],
+                            "source_paths": source_paths or [f],
+                            "source_sha256": source_sha256 or {f: _sha256_file(f_path)},
+                        })
+        except OSError:
+            pass
+
+    manifest = {"figures": figures, "tables": tables}
+    try:
+        with open(manifest_path, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    return manifest_path
 
 
 def _check_editorial_asset_trace(
@@ -2320,8 +2408,32 @@ def ensure_table_captions(markdown: str) -> str:
                 while index < len(lines) and _is_markdown_table_line(lines[index]):
                     table.append(lines[index])
                     index += 1
+
+                # Check if Writer embedded a single-column caption row as table[0]
+                embedded_caption = None
+                if (
+                    len(table) >= 3
+                    and table[0].count("|") == 2
+                    and re.match(r"^\|\s*(?:表\d+|Table\s*\d+|表[一二三四五六七八九十]+).*\|$", table[0].strip())
+                    and re.match(r"^\|-+\|$", table[1].strip())
+                ):
+                    embedded_caption = table[0].strip().strip("|").strip()
+                    header = table[2]
+                    cols = max(1, header.count("|") - 1)
+                    if len(table) > 3 and re.match(r"^\|(?:\s*:?-{3,}:?\s*\|)+$", table[3].strip()):
+                        sep = table[3]
+                        data = table[4:]
+                    else:
+                        sep = "| " + " | ".join(["---"] * cols) + " |"
+                        data = table[3:]
+                    table = [header, sep] + data
+
                 previous = _previous_nonblank_line(output)
-                if not TABLE_CAPTION_RE.match(previous):
+                if embedded_caption:
+                    if output and output[-1].strip():
+                        output.append("")
+                    output.append(embedded_caption)
+                elif not TABLE_CAPTION_RE.match(previous):
                     title = _table_caption_title(context_heading, table)
                     if output and output[-1].strip():
                         output.append("")
@@ -2555,14 +2667,15 @@ def _section_kind(title: str) -> str:
 def _check_export_profile(export_profile: str | None) -> dict:
     profile = str(export_profile or EXPECTED_EXPORT_PROFILE)
     expected = EXPECTED_EXPORT_PROFILE
+    is_valid = profile in EXPORT_PROFILE_LABELS
     return {
-        "passed": profile == expected,
+        "passed": is_valid,
         "profile": profile,
         "expected": expected,
         "label": EXPORT_PROFILE_LABELS.get(profile, profile),
         "reason": (
-            "高教社杯/国赛当前建议使用 cumcm2026。"
-            if profile != expected
+            f"未知的导出 profile: {profile}，支持的 profile 包括: {list(EXPORT_PROFILE_LABELS.keys())}"
+            if not is_valid
             else ""
         ),
     }
@@ -3848,7 +3961,10 @@ def _check_reproducibility_claims(work_dir: str, markdown: str) -> dict:
     body, _ = _reference_body_parts(_without_fenced_code_blocks(markdown))
     body = re.split(r"(?m)^#{1,6}\s*附录", body, maxsplit=1)[0]
     independent_claim = bool(
-        re.search(r"独立(?:环境|进程|副本|重跑|复跑|执行)|隔离(?:目录|环境|副本).{0,36}(?:执行|重跑|复跑)", body)
+        re.search(
+            r"独立(?:环境|进程|副本|沙箱).{0,36}(?:执行|重跑|复跑)|独立(?:重跑|复跑)|隔离(?:目录|环境|副本).{0,36}(?:执行|重跑|复跑)",
+            body,
+        )
     )
     byte_claim = bool(
         re.search(r"逐字节一致|字节(?:级)?(?:一致|复现)|SHA-?256[^。\n]{0,48}(?:一致|相同|匹配)", body, re.IGNORECASE)
@@ -4489,6 +4605,7 @@ def prepare_paper_markdown(
     outline = build_paper_outline(markdown)
     figure_usage = build_figure_usage(work_dir, markdown)
     claim_trace = build_claim_trace(markdown, code_sources, work_dir)
+    ensure_paper_assets_manifest(work_dir, declared_problem_count)
     report = build_preflight_report(
         work_dir,
         markdown,

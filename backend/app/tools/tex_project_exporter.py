@@ -50,7 +50,9 @@ _MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 \usepackage{amssymb}
 \usepackage{hyperref}
 \usepackage{longtable}
+\usepackage{calc}
 \usepackage{listings}
+\IfFontExistsTF{{Consolas}}{{\setmonofont{{Consolas}}}}{{\IfFontExistsTF{{Courier New}}{{\setmonofont{{Courier New}}}}{{}}}}
 \lstset{
   breaklines=true,
   breakatwhitespace=false,
@@ -103,7 +105,9 @@ _CUMCM2025_MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 \usepackage{float}
 \usepackage{booktabs}
 \usepackage{longtable}
+\usepackage{calc}
 \usepackage{listings}
+\IfFontExistsTF{{Consolas}}{{\setmonofont{{Consolas}}}}{{\IfFontExistsTF{{Courier New}}{{\setmonofont{{Courier New}}}}{{}}}}
 \lstset{
   breaklines=true,
   breakatwhitespace=false,
@@ -180,7 +184,9 @@ _CUMCM2026_MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 \usepackage{amssymb}
 \usepackage{hyperref}
 \usepackage{longtable}
+\usepackage{calc}
 \usepackage{listings}
+\IfFontExistsTF{{Consolas}}{{\setmonofont{{Consolas}}}}{{\IfFontExistsTF{{Courier New}}{{\setmonofont{{Courier New}}}}{{}}}}
 \lstset{
   breaklines=true,
   breakatwhitespace=false,
@@ -234,6 +240,7 @@ _HUASHUBEI_MAIN_TEX_TEMPLATE = rf"""% !TEX program = xelatex
 \usepackage{{booktabs}}
 \usepackage{{array}}
 \usepackage{{longtable}}
+\usepackage{{calc}}
 \usepackage{{xcolor}}
 \usepackage{{listings}}
 \usepackage{{titlesec}}
@@ -251,6 +258,7 @@ _HUASHUBEI_MAIN_TEX_TEMPLATE = rf"""% !TEX program = xelatex
 \providecommand{{\passthrough}}[1]{{#1}}
 
 \IfFontExistsTF{{Times New Roman}}{{\setmainfont{{Times New Roman}}}}{{}}
+\IfFontExistsTF{{Consolas}}{{\setmonofont{{Consolas}}}}{{}}
 \linespread{{1.6}}
 \setlength{{\parindent}}{{2em}}
 \pagestyle{{plain}}
@@ -275,6 +283,7 @@ _HUASHUBEI_MAIN_TEX_TEMPLATE = rf"""% !TEX program = xelatex
 \titlespacing{{\subsubsection}} {{0pt}}{{0.9em}}{{0.75em}}
 
 \setlist[enumerate]{{label=\arabic*、, leftmargin=2em}}
+\IfFontExistsTF{{Consolas}}{{\setmonofont{{Consolas}}}}{{\IfFontExistsTF{{Courier New}}{{\setmonofont{{Courier New}}}}{{}}}}
 \lstset{{
   basicstyle=\ttfamily\footnotesize,
   backgroundcolor=\color{{black!3}},

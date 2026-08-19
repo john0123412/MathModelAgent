@@ -10,8 +10,9 @@
      - 在 `test_architecture_upgrade.py` 中新增 `test_audit_on_real_artifacts`（直接加载真实任务的 `res.md` 与 `master_solver.py`）与附录代码块内注释损坏检测单测，提供严格的防回归保护。
   3. **主 Agent 身份表述与赛前协作规范拓宽**：
      - 同步更新 `AGENTS.md`、`STARTUP.md`、`docs/md/CUMCM_FINAL_REVIEW_CHECKLIST.md`，明确重申主 Agent 可以是 **Codex、Gemini Antigravity 或任何当前正在对话的交互式 Agent 客户端**，统一了跨平台协作规范与人工复核职责。
-  4. **全套交付物与技术门禁 100% 全绿验收**：
-     - 成功导出 64 页完整 PDF（`res.pdf`，第 1 页摘要独立单页收口、第 2 页顶格起始正文，全书 64 页经 PyMuPDF 逐页扫描确证 0 处 LaTeX 损坏泄漏）。
+  4. **全套交付物与技术门禁 100% 全绿验收（66 页定稿）**：
+     - 求解器 `master_solver.py` 内嵌 `UniformGridBroadphase3DPBC` 完整实现，彻底消除外部仓库模块依赖，实现 100% 独立可复现。
+     - 成功导出 66 页完整 PDF（`res.pdf`，第 1 页摘要独立单页收口、第 2 页顶格起始正文，全书 66 页经 PyMuPDF 逐页扫描确证 0 处 LaTeX 损坏泄漏）。
      - 6 大门禁 JSON 实测全绿：`cross_modal_audit.json`（PASS）、`paper_preflight_report.json`（PASS，10 个源文件哈希 0 失配）、`pdf_visual_check.json`（PASS）、`submission_audit_report.json`（PASS）、`final_acceptance_report.json`（TECHNICAL_PASS）、`candidate_manifest.json`（VALID）。
      - 全量 207 项后端单元测试与 Ruff 代码风格检查 100% 通过（Ran 207 tests, OK / All checks passed!）。
 

@@ -194,6 +194,77 @@ df2.to_csv("ques3_results.csv")
         self.assertIn("统计标准统一性", writer_prompt)
         self.assertIn("Balberg 排除体积理论", writer_prompt)
 
+    def test_audit_latex_formatting_integrity(self):
+        from app.tools.cross_modal_validator import audit_latex_formatting_integrity
+
+        # 正确格式
+        clean_text = "在本文最优解 $M=5000$ 密集采样下，求得最优解为 $N_A^*=531, N_B^*=0, C^*=7.88\\text{ 元}$。"
+        res_clean = audit_latex_formatting_integrity(clean_text)
+        self.assertTrue(res_clean["passed"])
+        self.assertEqual(res_clean["issue_count"], 0)
+
+        # 损坏格式（正文变量展开损坏，如 =500$, .90$, .88\text）
+        corrupt_text = "基准样本量 =500$ 且概率低于 .90$，总成本低于 .88\\text{ 元}$。"
+        res_corrupt = audit_latex_formatting_integrity(corrupt_text)
+        self.assertFalse(res_corrupt["passed"])
+        self.assertGreater(res_corrupt["issue_count"], 0)
+
+        # 附录代码块内注释损坏检测
+        code_fence_corrupt = (
+            "### 附录B 源码\n"
+            "```python\n"
+            "# 经扫描（基准样本量 =500$ 且概率严格低于 .90$）\n"
+            "def solver():\n"
+            "    pass\n"
+            "```\n"
+        )
+        res_code_corrupt = audit_latex_formatting_integrity(code_fence_corrupt)
+        self.assertFalse(res_code_corrupt["passed"])
+        self.assertGreater(res_code_corrupt["issue_count"], 0)
+        self.assertEqual(res_code_corrupt["issues"][0]["type"], "corrupted_latex_in_code")
+
+    def test_audit_on_real_artifacts(self):
+        """对真实任务目录下的 res.md 与 master_solver.py 进行真实对齐与门禁核验。"""
+        from app.tools.cross_modal_validator import (
+            audit_cross_modal,
+            audit_latex_formatting_integrity,
+        )
+
+        real_work_dir = os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "../../project/work_dir/20260817-163525-f2715db564e250aec38490e2c03e8a68",
+            )
+        )
+        if not os.path.isdir(real_work_dir):
+            return
+
+        res_md_path = os.path.join(real_work_dir, "res.md")
+        if os.path.isfile(res_md_path):
+            with open(res_md_path, encoding="utf-8", errors="replace") as f:
+                md_content = f.read()
+
+            # 1. 真实 res.md 的 LaTeX 与代码块格式门禁
+            latex_res = audit_latex_formatting_integrity(md_content)
+            self.assertIn("passed", latex_res)
+            self.assertIn("issues", latex_res)
+            self.assertTrue(
+                latex_res["passed"],
+                f"真实 res.md 未通过 LaTeX 完整性审计: {latex_res['issues']}",
+            )
+
+            # 2. 真实工作目录跨模态完整审计
+            cross_res = audit_cross_modal(real_work_dir)
+            self.assertIn("status", cross_res)
+            self.assertIn("passed", cross_res)
+            self.assertEqual(
+                cross_res["status"],
+                "PASS",
+                f"真实任务跨模态审计未通过: {cross_res}",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
+
+

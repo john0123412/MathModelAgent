@@ -573,7 +573,7 @@ docker compose exec backend uv run python -m app.tools.export_cli task-refresh `
   不会被当作控制台噪声删除或阻断。
 - `paper_preflight_report.json` 是规则/正则驱动的格式与证据链门禁，不证明模型、求解和论证一定正确；`PASS` 后仍需人工复核数学内容。
 - **数学执行与结果冻结门禁**：新任务会在工作目录写入 `problem_contract.json`，把可识别的题面固定参数和必答要求传给 Modeler/Coder。所有 solution 代码阶段先单独完成并写入 checkpoint；每个正式 `quesN` 必须通过受控 `record_execution_evidence` 写入真实执行、可行性、可计算约束、任务内结果源 SHA-256、指标与图表数据来源，模型不得手写 manifest、哈希或顶层结构。每问都必须有任务目录内的结构化数值源（通常为 `quesN_results.csv`）；manifest 的 `source.path` 必须是精确任务相对路径，数值必须有限，PNG 等图片不能单独作为数值证据。优化题还必须冻结目标值和每个实际最优决策变量（包括灵敏度情景的新决策向量），不能只记录利润差或残差。工作流仅在 `execution_validation_report.json = PASS` 后生成 `frozen_results.json`，此后才启动 Writer；摘要、正文、图题和结论中的计算数值只能使用冻结结果。缺少 manifest、notebook 有未解决执行错误、约束不满足、优化变量缺失或来源哈希变化都会阻止论文写作与任务完成；一次失败只定向回交失败题，保留已通过题的检查点。历史任务目录没有这些文件时，必须按当前版本重跑后才能作为数学验收样本。
-- **Codex/人工执行质量复核门禁**：冻结后会先生成 `execution_quality_review.json/md`。结果表只要明确标记“不达标/失败”或出现 NaN/Inf，任务就停在 `waiting_quality_review`，Writer 不会启动；启用 `require_model_review=true` 时，即使机器筛查为 `PASS` 也会暂停，因为机器筛查不证明假设、量纲、守恒、推导和领域结论正确。审查者先读取题面、ModelPlan、代码、结果 CSV 和复核报告，再调用 `POST /modeling/<task_id>/execution-review`。请求 `{"action":"repair","review_id":"报告中的编号","failed_subtasks":["ques2"],"comment":"具体可执行修正意见"}` 会只让指定子题回到 Coder，并使依赖旧冻结事实的 Writer 文本失效；请求 `{"action":"approve","review_id":"报告中的编号","comment":"逐题复核依据和风险接受理由"}` 才会进入 Writer。审批只绑定当前结果文件哈希，结果变化后必须重审；返修最多一次，普通 `/resume` 不能绕过该状态。直接手改 CSV、manifest、冻结结果或论文数值不属于可信接管流程。
+- **主 Agent（Codex / Gemini Antigravity / 对话 Agent）/ 人工执行质量复核门禁**：冻结后会先生成 `execution_quality_review.json/md`。结果表只要明确标记“不达标/失败”或出现 NaN/Inf，任务就停在 `waiting_quality_review`，Writer 不会启动；启用 `require_model_review=true` 时，即使机器筛查为 `PASS` 也会暂停，因为机器筛查不证明假设、量纲、守恒、推导和领域结论正确。审查者先读取题面、ModelPlan、代码、结果 CSV 和复核报告，再调用 `POST /modeling/<task_id>/execution-review`。请求 `{"action":"repair","review_id":"报告中的编号","failed_subtasks":["ques2"],"comment":"具体可执行修正意见"}` 会只让指定子题回到 Coder，并使依赖旧冻结事实的 Writer 文本失效；请求 `{"action":"approve","review_id":"报告中的编号","comment":"逐题复核依据和风险接受理由"}` 才会进入 Writer。审批只绑定当前结果文件哈希，结果变化后必须重审；返修最多一次，普通 `/resume` 不能绕过该状态。直接手改 CSV、manifest、冻结结果或论文数值不属于可信接管流程。
 
 - **Writer 预检回修与导出停止条件**：冻结通过并不保证 Writer 没有误写数值。若 `paper_preflight_report.json = FAIL` 的硬错误仅能明确归属到某个 `quesN` 正文或摘要中的 `result_consistency` 等事实冲突，系统会把冲突句和冻结事实只交回该章节 Writer 一次，然后重新预检；已通过章节不会重写。无法可靠定位的来源、附录、版式等失败不会盲目调用模型。一次回修后仍为 `FAIL` 时任务会停止在预检阶段，不生成候选 PDF；请先看报告的 `checks`/`conflicts` 和 checkpoint 中的 `last_paper_preflight_failure`，修正后再续传。`CONDITIONAL_PASS` 不触发自动改写，但仍必须按提交清单人工处理。
 
@@ -998,9 +998,9 @@ curl.exe -X POST http://127.0.0.1:5173/api/modeling/<task_id>/resume `
    - 后端日志显示收到用户输入
    - Agent 行为是否有变化
 
-### Codex / 外部引导手：角色定向指导接口
+### 主 Agent（Codex / Gemini Antigravity / 对话 Agent）/ 外部引导手：角色定向指导接口
 
-运行中的任务可接收**建议性**引导。该接口适合让 Codex 在查看题目、`modeler_plan.json`、
+运行中的任务可接收**建议性**引导。该接口适合让主 Agent（Codex / Gemini Antigravity / 当前对话 Agent）在查看题目、`modeler_plan.json`、
 执行报告后，分阶段提醒 Docker 内的建模手或编程手核查具体问题；它不是越过门禁的
 系统提示词覆盖接口。注入内容仍会被标记为不可信，题面契约、ModelPlan schema、受控执行
 证据和最终验收继续生效。
@@ -1010,10 +1010,10 @@ curl.exe -X POST http://127.0.0.1:5173/api/modeling/<task_id>/resume `
 ```powershell
 curl.exe -X POST http://127.0.0.1:8000/modeling/<task_id>/guidance `
   -H "Content-Type: application/json" `
-  -d '{"target":"coder","purpose":"execution","source":"codex","content":"先逐项验证全部硬约束；只有可行候选才可比较目标值。用真实时序数组计算并落盘守恒残差。"}'
+  -d '{"target":"coder","purpose":"execution","source":"agent","content":"先逐项验证全部硬约束；只有可行候选才可比较目标值。用真实时序数组计算并落盘守恒残差。"}'
 ```
 
-若 Codex 已在任务创建前完成题面/附件复核，可在创建任务的 multipart 请求中预注入，
+若主 Agent 已在任务创建前完成题面/附件复核，可在创建任务的 multipart 请求中预注入，
 避免首轮建模过快而错过建议：
 
 ```powershell
@@ -1028,30 +1028,30 @@ curl.exe -X POST http://127.0.0.1:8000/modeling `
 
 - `target`：`coordinator`、`modeler`、`coder`、`writer` 或 `all`；`all` 会在每个角色下一次模型调用前各投递一次，通常应优先使用精确角色。
 - `purpose`：`modeling`、`execution`、`review`、`recovery`，用于审计和界面提示，不改变权限。
-- `source`：可标为 `codex` 或 `operator`，仅是审计元数据，**不是身份认证**。
+- `source`：可标为 `agent`、`codex`、`antigravity` 或 `operator`，仅是审计元数据，**不是身份认证**。
 - 每条内容最多 4000 字符，每任务最多排队 20 条；任务完成或取消后不能再注入。若服务对外暴露，应设置 `API_AUTH_TOKEN`，否则该接口与其他本机 API 一样不具备访问令牌保护。
 
-推荐节奏是：Codex 先审题→创建任务时预注入 `modeler` 建议→开启建模人工门禁后审阅
+推荐节奏是：主 Agent 先审题→创建任务时预注入 `modeler` 建议→开启建模人工门禁后审阅
 `modeler_plan.json`→批准前或 Coder 运行中向 `coder` 注入“约束、诊断、结果文件”检查项→
 只依据 `execution_validation_report.json`、冻结结果和预检报告判断是否继续。若方案本身错误，
 停止并重新建模；不要用引导文本直接改写既有 CSV、Manifest 或冻结结果。
 
-当需要由当前 ChatGPT Codex 实际担任引导执行者，而不依赖全局环境变量时，在创建任务时加入：
+当需要由当前主 Agent（Codex / Gemini Antigravity / 当前会话 Agent）实际担任引导执行者，而不依赖全局环境变量时，在创建任务时加入：
 
 ```powershell
 -F "require_model_review=true"
 ```
 
-该任务会在 `modeler_plan.json` 写入后停在 `waiting_review`。当前 Codex 可读取题面契约、
+该任务会在 `modeler_plan.json` 写入后停在 `waiting_review`。当前主 Agent 可读取题面契约、
 计划和 `modeling_decision.md`，先向 `coder` 队列写入后续执行检查项，再调用
 `POST /modeling/<task_id>/approve-modeling` 继续。若计划的物理模型、硬约束或验收口径本身不成立，
-不要批准；当前 Codex 可用一次 `POST /modeling/<task_id>/revise-modeling` 写入具体退回意见，让 Modeler
+不要批准；当前主 Agent 可用一次 `POST /modeling/<task_id>/revise-modeling` 写入具体退回意见，让 Modeler
 重建计划后再次审查。一次修订仍不合格或调用失败时应保留现场并停止，不得通过手工改写计划、伪造结果或绕过门禁。
-此模式只增加可复核暂停，不会把 Codex 或 API 调用者伪装成可信系统指令，也不会放宽两次失败后的恢复授权要求。
+此模式只增加可复核暂停，不会把 Agent 或 API 调用者伪装成可信系统指令，也不会放宽两次失败后的恢复授权要求。
 
-如果 Modeler 在创建阶段连续返回不合格计划，而任务已启用 `require_model_review=true`，Coordinator 的拆分结果会保留为检查点。当前 Codex 可通过 `POST /modeling/<task_id>/codex-modeling` 提交符合 `ModelerToCoder` schema 的结构化 `model_plan`；后端仍会重新执行题面契约校验、保存审计产物，并回到 `waiting_review`。随后仍必须调用 `approve-modeling` 才会进入 Coder。该接口不能用于运行中、未启用人工门禁或非 Modeler 失败的任务，也不能绕过执行验证、冻结和论文门禁。
+如果 Modeler 在创建阶段连续返回不合格计划，而任务已启用 `require_model_review=true`，Coordinator 的拆分结果会保留为检查点。当前主 Agent 可通过 `POST /modeling/<task_id>/codex-modeling` 提交符合 `ModelerToCoder` schema 的结构化 `model_plan`；后端仍会重新执行题面契约校验、保存审计产物，并回到 `waiting_review`。随后仍必须调用 `approve-modeling` 才会进入 Coder。该接口不能用于运行中、未启用人工门禁或非 Modeler 失败的任务，也不能绕过执行验证、冻结和论文门禁。
 
-冻结后的接管使用独立的 `execution-review` 接口，不再依赖运行中 advisory guidance 恰好被模型采纳。Codex/人工应优先选择 `repair` 并给出可验证的方程、量纲、约束或诊断方向；只有复算确认可接受时才 `approve`。这使“审查→定向重算→重新冻结→再次审查”成为正式链路，而不是手工篡改候选产物。
+冻结后的接管使用独立的 `execution-review` 接口，不再依赖运行中 advisory guidance 恰好被模型采纳。主 Agent / 人工应优先选择 `repair` 并给出可验证的方程、量纲、约束或诊断方向；只有复算确认可接受时才 `approve`。这使“审查→定向重算→重新冻结→再次审查”成为正式链路，而不是手工篡改候选产物。
 
 若 provider/Coder 无法完成已经批准的执行质量返修，当前 Codex 或人工操作员可以准备一个确定性 Python 候选和静态 execution evidence，再从 **backend 容器内**调用受控候选 CLI：
 

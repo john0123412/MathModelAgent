@@ -405,6 +405,91 @@ def audit_optimality_certificates(
     }
 
 
+def _strip_math_spans(text: str) -> str:
+    """去除行内/行间数学环境（$...$ 与 $$...$$），保留其余文本用于损坏模式检测。
+
+    转义 \\$ 先移除以免干扰计数；随后删除成对的 $$...$$ 与 $...$。
+    遵循 Pandoc 规范：合法行内公式首尾不能紧贴空白字符，且不跨越中文主句标点。
+    """
+    text = text.replace(r"\$", "")
+    text = re.sub(r"\$\$.*?\$\$", " ", text, flags=re.DOTALL)
+    text = re.sub(r"\$(?!\s)[^\$\n，。；！？]*?(?<!\s)\$", " ", text)
+    return text
+
+
+def audit_latex_formatting_integrity(markdown_text: str) -> dict[str, Any]:
+    """审计 Markdown 正文及附录代码中的 LaTeX 格式完整性，拦截损坏渲染与源码泄漏。"""
+    issues: list[dict[str, Any]] = []
+
+    corrupt_patterns = [
+        (r"(?<![A-Za-z0-9_])=\d+\$", "损坏的变量赋值 (如 =500$)"),
+        (r"(?<![A-Za-z0-9_\$])\.\d{2,}\$", "损坏的小数公式 (如 .90$)"),
+        (r"\.\d{2,}\\text\{", "损坏的文本公式 (如 .88\\text)"),
+        (r"\\text\{[^}]*$", "未闭合的 \\text{} 宏"),
+        (r"(?<![A-Za-z0-9_\$\\])\\in\s*\[", "裸露未包裹在公式内的 \\in [ 宏"),
+    ]
+
+    in_fence = False
+    for line_idx, line in enumerate(markdown_text.splitlines(), start=1):
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            continue
+        if not stripped:
+            continue
+
+        if not in_fence:
+            # 1. 正文行：检查不平衡的 $ 符号（单行内 $ 数量必须为偶数，排除转义 \$）
+            clean_line = stripped.replace(r"\$", "")
+            if "$$" not in clean_line:
+                dollar_count = clean_line.count("$")
+                if dollar_count % 2 != 0:
+                    issues.append({
+                        "line": line_idx,
+                        "type": "unbalanced_inline_dollar",
+                        "text": stripped,
+                        "message": f"第 {line_idx} 行存在未闭合的单美元符号 ($)。",
+                    })
+
+            # 2. 正文行：剥离合法数学区间后扫描损坏模式
+            non_math = _strip_math_spans(stripped)
+            for pat, desc in corrupt_patterns:
+                if re.search(pat, non_math):
+                    issues.append({
+                        "line": line_idx,
+                        "type": "corrupted_latex_syntax",
+                        "pattern": pat,
+                        "text": stripped,
+                        "message": f"第 {line_idx} 行发现 LaTeX 渲染损坏模式: {desc}",
+                    })
+        else:
+            # 3. 代码围栏内：检查注释与代码字符串中的 LaTeX 损坏模式
+            comment_text = ""
+            if "#" in stripped:
+                comment_text = stripped[stripped.index("#"):]
+
+            target_text = comment_text if comment_text else stripped
+            non_math_code = _strip_math_spans(target_text)
+
+            for pat, desc in corrupt_patterns:
+                if re.search(pat, non_math_code):
+                    issues.append({
+                        "line": line_idx,
+                        "type": "corrupted_latex_in_code",
+                        "pattern": pat,
+                        "text": stripped,
+                        "message": f"第 {line_idx} 行代码/注释中发现 LaTeX 渲染损坏模式: {desc}",
+                    })
+
+    passed = len(issues) == 0
+    return {
+        "status": "PASS" if passed else "FAIL",
+        "passed": passed,
+        "issues": issues,
+        "issue_count": len(issues),
+    }
+
+
 def audit_cross_modal(
     work_dir: str,
     markdown_text: str | None = None,
@@ -425,15 +510,23 @@ def audit_cross_modal(
         md_content, code_sources or [], work_dir=work_dir
     )
     optimality_result = audit_optimality_certificates(work_dir)
+    latex_integrity_result = audit_latex_formatting_integrity(md_content)
 
-    all_passed = parity_result["passed"] and optimality_result["passed"]
-    overall_status = "PASS" if all_passed else ("FAIL" if not optimality_result["passed"] else parity_result["status"])
+    all_passed = (
+        parity_result["passed"]
+        and optimality_result["passed"]
+        and latex_integrity_result["passed"]
+    )
+    overall_status = "PASS" if all_passed else (
+        "FAIL" if (not optimality_result["passed"] or not latex_integrity_result["passed"]) else parity_result["status"]
+    )
 
     report = {
         "status": overall_status,
         "passed": all_passed,
         "code_text_parity": parity_result,
         "optimality_consistency": optimality_result,
+        "latex_formatting_integrity": latex_integrity_result,
         "fact_store_fact_count": len(fact_store.list_facts()),
     }
 

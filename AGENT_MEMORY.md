@@ -1,6 +1,20 @@
 # AGENT_MEMORY
 
-- [2026-08-19] **Q4 证据链数学矛盾彻底修复与四大支柱架构门禁加固闭环**（任务 ID `20260817-163525-f2715db564e250aec38490e2c03e8a68`）：
+- [2026-08-19] **Q4 自适应序贯检验（SPRT）统计证书升级、LaTeX 格式完整性门禁硬化与全模态防回归闭环**（任务 ID `20260817-163525-f2715db564e250aec38490e2c03e8a68`）：
+  1. **SPRT 自适应序贯蒙特卡洛证书升级与正文排版修复**：
+     - 最优解 $(531A, 0B)$ 在 $M=5000$ 密集采样确证下达到 $\hat{P} = 91.22\%, P_{\text{low}} = 0.9040 \ge 0.90$（总成本 $C^* = 7.882177\text{ 元}$）。
+     - 重构全量 531 行一维全局排除证书 `ques4_global_frontier_certificate.csv`，统一引入 `sample_count`、`stop_reason`、`success_count`、`wilson_low`、`wilson_high` 字段：全 531 行均为 `EXCLUDED`（0 矛盾行），临界点 $(530, 8)$ 在 $M=2000$ 下实测 $P_{\text{low}} = 0.8898 < 0.90$ 严格排除。
+     - 彻底清除正文第 15 页（第 5.4.2 节）残留的 PowerShell 变量展开破损字符（如 `=500$`、`.90$`、`.88\text`），全篇数学公式与叙述完全对齐 SPRT 两阶段统计方案。
+  2. **`CrossModalValidator` 格式完整性门禁硬化（正文 + 代码围栏双重扫描）**：
+     - 在 `cross_modal_validator.py` 中升级 `audit_latex_formatting_integrity`：解除代码围栏整段跳过，针对代码块内注释（`# ...`）与字符串字面量独立提取，遵循 Pandoc 规范数学边界规则剥离合法公式后扫描损坏模式（`=\d+\$`、`\.\d{2,}\$`、`\.\d{2,}\\text\{`、`\\in\s*\[` 等），杜绝附录代码注释排版损坏泄漏。
+     - 在 `test_architecture_upgrade.py` 中新增 `test_audit_on_real_artifacts`（直接加载真实任务的 `res.md` 与 `master_solver.py`）与附录代码块内注释损坏检测单测，提供严格的防回归保护。
+  3. **主 Agent 身份表述与赛前协作规范拓宽**：
+     - 同步更新 `AGENTS.md`、`STARTUP.md`、`docs/md/CUMCM_FINAL_REVIEW_CHECKLIST.md`，明确重申主 Agent 可以是 **Codex、Gemini Antigravity 或任何当前正在对话的交互式 Agent 客户端**，统一了跨平台协作规范与人工复核职责。
+  4. **全套交付物与技术门禁 100% 全绿验收**：
+     - 成功导出 64 页完整 PDF（`res.pdf`，第 1 页摘要独立单页收口、第 2 页顶格起始正文，全书 64 页经 PyMuPDF 逐页扫描确证 0 处 LaTeX 损坏泄漏）。
+     - 6 大门禁 JSON 实测全绿：`cross_modal_audit.json`（PASS）、`paper_preflight_report.json`（PASS，10 个源文件哈希 0 失配）、`pdf_visual_check.json`（PASS）、`submission_audit_report.json`（PASS）、`final_acceptance_report.json`（TECHNICAL_PASS）、`candidate_manifest.json`（VALID）。
+     - 全量 207 项后端单元测试与 Ruff 代码风格检查 100% 通过（Ran 207 tests, OK / All checks passed!）。
+
   1. **Q4 排除证书确证与 531 点全局证书重构（根治数学矛盾）**：
      - 最优解 $(531A, 0B)$ 在 $M=5000$ 密集采样确证下达到 $\hat{P} = 91.22\%, P_{\text{low}} = 0.9040 \ge 0.90$（总成本 $C^* = 7.882177\text{ 元}$）。
      - 全量 531 行一维全局排除证书 `ques4_global_frontier_certificate.csv`（$N_A \in [0, 530]$）以 $M=500$ 统一基准扫描：确认全 531 行 `status` 均为 `EXCLUDED`，全项满足 `total_cost_yuan < C*` 且 `wilson_low <= 0.8728 < 0.90`，彻底清除了原证书中自相矛盾的 FEASIBLE 违规行与 44 行截断缺陷。

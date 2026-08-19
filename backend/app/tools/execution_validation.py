@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import nbformat
+import ast
 
 
 REPORT_NAME = "execution_validation_report.json"
@@ -1920,6 +1921,51 @@ def _subtask_evidence_issues(
     return issues
 
 
+def _code_safety_issues(root: Path) -> list[dict[str, Any]]:
+    issues = []
+    
+    def _detect_anti_hack_ast(source_code: str) -> list[str]:
+        hack_issues = []
+        try:
+            tree = ast.parse(source_code)
+        except SyntaxError:
+            return hack_issues
+        
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name) and node.func.id == "open":
+                    if len(node.args) >= 1 and isinstance(node.args[0], ast.Constant):
+                        filename = str(node.args[0].value).lower()
+                        if filename.endswith(".md") or filename.endswith(".docx"):
+                            hack_issues.append(f"发现违规直接写论文文件操作: {filename}")
+        return hack_issues
+
+    notebook_path = root / "notebook.ipynb"
+    if notebook_path.is_file():
+        try:
+            notebook = nbformat.read(notebook_path, as_version=4)
+            for i, cell in enumerate(notebook.cells):
+                if cell.get("cell_type") == "code":
+                    hacks = _detect_anti_hack_ast(cell.get("source", ""))
+                    if hacks:
+                        issues.append(_issue("anti_hack.notebook", False, f"notebook.ipynb Cell {i}: " + "；".join(hacks)))
+        except Exception:
+            pass
+
+    for py_file in root.glob("*.py"):
+        try:
+            source = py_file.read_text(encoding="utf-8")
+            hacks = _detect_anti_hack_ast(source)
+            if hacks:
+                issues.append(_issue(f"anti_hack.py_script.{py_file.name}", False, f"{py_file.name}: " + "；".join(hacks)))
+        except Exception:
+            pass
+
+    if not issues:
+        issues.append(_issue("anti_hack.safety", True, "未发现违规篡改论文文件的代码。"))
+
+    return issues
+
 def _notebook_issues(work_dir: Path, *, has_execution_manifest: bool) -> list[dict[str, Any]]:
     notebook_path = work_dir / "notebook.ipynb"
     if not notebook_path.is_file():
@@ -2258,6 +2304,17 @@ def write_frozen_results_from_execution_validation(
                         "subtask": figure_subtask_id or None,
                     }
                 )
+    executed_code_sources = []
+    if notebook_path.is_file():
+        executed_code_sources.append("notebook.ipynb")
+        
+    for root_dir, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in {"__pycache__", ".ipynb_checkpoints", "latex_project", ".git", ".cache", "scratch", ".agent-work"}]
+        for filename in sorted(files):
+            if filename.endswith(".py"):
+                rel_path = str((Path(root_dir) / filename).relative_to(root)).replace("\\", "/")
+                executed_code_sources.append(rel_path)
+
     document = {
         "schema": "mathmodel.result-freeze",
         "version": 1,
@@ -2265,7 +2322,7 @@ def write_frozen_results_from_execution_validation(
         "sources": source_entries,
         "subtasks": subtasks,
         "figures": figures,
-        "executed_code_sources": ["notebook.ipynb"] if notebook_path.is_file() else [],
+        "executed_code_sources": executed_code_sources,
         "generated_from": MANIFEST_NAME,
     }
     output = root / FREEZE_NAME
@@ -2274,7 +2331,7 @@ def write_frozen_results_from_execution_validation(
     reproducibility = {
         "schema_version": "mathmodel.reproducibility.v1",
         "generated_at": datetime.datetime.now().isoformat(),
-        "entrypoints": ["notebook.ipynb"] if notebook_path.is_file() else [],
+        "entrypoints": executed_code_sources,
         "source_artifacts": source_entries,
         "runtime": {
             "python_version": sys.version.split()[0],
@@ -2436,6 +2493,7 @@ def validate_execution_artifacts(
     required = required_subtasks or []
     has_execution_manifest = _read_json(root / MANIFEST_NAME) is not None
     issues = _notebook_issues(root, has_execution_manifest=has_execution_manifest)
+    issues.extend(_code_safety_issues(root))
     if require_manifest:
         issues.extend(_manifest_issues(root, required))
         issues.extend(_problem_parameter_issues(root))

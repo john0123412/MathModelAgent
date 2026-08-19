@@ -52,6 +52,11 @@ class BaseCodeInterpreter(abc.ABC):
         ...
 
     @abc.abstractmethod
+    async def restart_kernel(self):
+        """重置或重启内核以清除状态"""
+        ...
+
+    @abc.abstractmethod
     async def get_created_images(self, section: str) -> list[str]:
         """获取当前 section 创建的图片列表"""
         ...

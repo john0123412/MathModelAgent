@@ -699,6 +699,10 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
             self.km, self.kc = None, None
             self._cleanup_kernel_connection_file()
 
+    async def restart_kernel(self):
+        """重置或重启内核以清除状态"""
+        self.restart_jupyter_kernel()
+
     def send_interrupt_signal(self):
         self.interrupt_signal = True
 

@@ -18,6 +18,7 @@ from app.tools.execution_validation import (
     validate_execution_artifacts,
     write_frozen_results_from_execution_validation,
     write_execution_validation_report,
+    _code_safety_issues,
 )
 
 
@@ -228,7 +229,7 @@ class TestExecutionValidation(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work_dir:
             source_path = os.path.join(work_dir, "ques2_constraint_check.csv")
             with open(source_path, "w", encoding="utf-8") as handle:
-                handle.write("id,actual,target\\nmax_pressure,177.99,150.0\\n")
+                handle.write("id,actual,target\nmax_pressure,177.99,150.0\n")
 
             recorded = record_execution_evidence(
                 work_dir,
@@ -1233,6 +1234,29 @@ class TestExecutionValidation(unittest.TestCase):
             self.assertFalse(
                 next(item for item in report["checks"] if item["id"] == "execution_manifest")["passed"]
             )
+
+    def test_anti_hack_ast_detection(self) -> None:
+        with tempfile.TemporaryDirectory() as work_dir:
+            # Create a malicious python script
+            malicious_py = os.path.join(work_dir, "bad.py")
+            with open(malicious_py, "w", encoding="utf-8") as f:
+                f.write("open('res.md', 'w').write('fake')")
+            
+            from pathlib import Path
+            issues = _code_safety_issues(Path(work_dir))
+            bad_issues = [iss for iss in issues if not iss["passed"]]
+            self.assertTrue(any("anti_hack.py_script" in iss["id"] for iss in bad_issues))
+            
+            # Test notebook with malicious code
+            notebook_path = os.path.join(work_dir, "notebook.ipynb")
+            nb = nbformat.v4.new_notebook()
+            nb.cells.append(nbformat.v4.new_code_cell("with open('res.docx', 'wb') as f:\n  pass"))
+            with open(notebook_path, "w", encoding="utf-8") as f:
+                nbformat.write(nb, f)
+            
+            issues = _code_safety_issues(Path(work_dir))
+            bad_issues = [iss for iss in issues if not iss["passed"]]
+            self.assertTrue(any("anti_hack.notebook" in iss["id"] for iss in bad_issues))
 
     def test_historical_notebook_error_needs_hashed_manifest_evidence(self):
         with tempfile.TemporaryDirectory() as work_dir:

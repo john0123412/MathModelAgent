@@ -178,6 +178,7 @@ def write_execution_quality_review(work_dir: str) -> dict:
             "## 审查动作",
             "",
             "1. 对照题面、ModelPlan、代码、结果表检查假设、量纲、守恒、约束和关键数值。",
+            "   - **特别检查（Audit-on-Write 机制）**：必须将代码中的核心变量（如 `dist_sq`）显式映射到文档推导的物理量（如表面距 $d_{surface}$），一旦发现诸如“把 3D 圆柱体退化为质点进行轴心距比较”等代码与数学模型脱节的硬伤，立即打回并判定为物理失效。",
             "2. 有问题时调用 `POST /modeling/{task_id}/execution-review`，"
             "使用 `action=repair` 并给出子题和可执行修正意见。",
             "3. 仅在逐题复核充分时使用 `action=approve`；审批理由会写入 checkpoint 审计。",

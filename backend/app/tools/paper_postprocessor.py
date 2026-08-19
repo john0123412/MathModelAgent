@@ -308,6 +308,7 @@ _CODE_EXCLUDED_DIRS = {
     "latex_project",
     ".git",
     ".cache",
+    "scratch",
 }
 _SUPPORT_EXCLUDED_DIRS = _CODE_EXCLUDED_DIRS | {
     ".agent-work",
@@ -1168,10 +1169,26 @@ def _notebook_code_source(work_dir: str) -> CodeSource | None:
 
 def collect_code_sources(work_dir: str) -> list[CodeSource]:
     """收集应附在论文末尾的代码。"""
-    sources = _iter_python_files(work_dir)
+    frozen_path = os.path.join(work_dir, "frozen_results.json")
+    allowed_sources: set[str] | None = None
+    if os.path.exists(frozen_path):
+        try:
+            with open(frozen_path, encoding="utf-8") as f:
+                frozen = json.load(f)
+            if "executed_code_sources" in frozen:
+                allowed_sources = set(frozen["executed_code_sources"])
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    sources = []
+    for source in _iter_python_files(work_dir):
+        if allowed_sources is None or source.name in allowed_sources:
+            sources.append(source)
+            
     notebook_source = _notebook_code_source(work_dir)
     if notebook_source is not None:
-        sources.append(notebook_source)
+        if allowed_sources is None or "notebook.ipynb" in allowed_sources:
+            sources.append(notebook_source)
     return sources
 
 

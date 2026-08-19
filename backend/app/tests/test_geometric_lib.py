@@ -157,6 +157,28 @@ class TestGeometricLib(unittest.TestCase):
         self.assertNotIn((0, 2), pairs)
         self.assertNotIn((1, 2), pairs)
 
+    def test_pbc_distance_and_broadphase(self) -> None:
+        """Test periodic boundary minimum image distance and broadphase."""
+        from app.tools.geometric_lib import minimum_image_capsule_capsule_distance, UniformGridBroadphase3DPBC
+        
+        box = [100.0, 100.0, 100.0]
+        p1 = [5.0, 50.0, 50.0]
+        p2 = [5.0, 60.0, 50.0]
+        r1 = 2.0
+        q1 = [95.0, 50.0, 50.0]
+        q2 = [95.0, 60.0, 50.0]
+        r2 = 2.0
+        
+        dist = minimum_image_capsule_capsule_distance(p1, p2, r1, q1, q2, r2, box)
+        self.assertAlmostEqual(dist, 6.0, places=6)
+
+        grid = UniformGridBroadphase3DPBC(box_size=box, cell_size=20.0)
+        grid.insert_capsule(0, p1, p2, r1 + 5.0)
+        grid.insert_capsule(1, q1, q2, r2 + 5.0)
+        pairs = grid.get_candidate_pairs()
+        self.assertIn((0, 1), pairs)
+
 
 if __name__ == "__main__":
     unittest.main()
+

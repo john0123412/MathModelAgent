@@ -210,6 +210,51 @@ def independent_numerical_segment_distance(
     return min_dist
 
 
+
+def apply_pbc(
+    point: Sequence[float] | np.ndarray,
+    box_size: Sequence[float] | np.ndarray,
+) -> np.ndarray:
+    """将点坐标按周期性边界条件 (PBC) 映射到 [0, box_size) 内。"""
+    pt = np.asarray(point, dtype=np.float64)
+    box = np.asarray(box_size, dtype=np.float64)
+    return np.mod(pt, box)
+
+
+def minimum_image_capsule_capsule_distance(
+    p1: Sequence[float] | np.ndarray,
+    p2: Sequence[float] | np.ndarray,
+    r1: float,
+    q1: Sequence[float] | np.ndarray,
+    q2: Sequence[float] | np.ndarray,
+    r2: float,
+    box_size: Sequence[float] | np.ndarray,
+) -> float:
+    """计算带周期性边界条件 (PBC) 的两个胶囊体之间的最短表面距离。
+    
+    使用最小镜像约定 (Minimum Image Convention)，通过测试 27 个相邻周期镜像
+    来正确处理跨越边界的细长几何体相互作用。
+    """
+    bx, by, bz = box_size
+    min_dist = float("inf")
+    p1_arr = np.asarray(p1, dtype=np.float64)
+    p2_arr = np.asarray(p2, dtype=np.float64)
+    q1_arr = np.asarray(q1, dtype=np.float64)
+    q2_arr = np.asarray(q2, dtype=np.float64)
+
+    for dx in [-bx, 0.0, bx]:
+        for dy in [-by, 0.0, by]:
+            for dz in [-bz, 0.0, bz]:
+                offset = np.array([dx, dy, dz])
+                q1_img = q1_arr + offset
+                q2_img = q2_arr + offset
+                res = segment_segment_distance(p1_arr, p2_arr, q1_img, q2_img)
+                if res.distance < min_dist:
+                    min_dist = res.distance
+                    
+    return max(0.0, float(min_dist - r1 - r2))
+
+
 class UniformGridBroadphase3D:
     """三维均匀空间网格加速结构，用于将大规模 N 体碰撞/距离查询从 O(N^2) 降低为近线性。"""
 
@@ -261,6 +306,89 @@ class UniformGridBroadphase3D:
 
     def get_candidate_pairs(self) -> set[tuple[int, int]]:
         """获取所有处于同一空间网格内的候选相交对 (i, j), i < j。"""
+        pairs: set[tuple[int, int]] = set()
+        for cell_items in self.grid.values():
+            n = len(cell_items)
+            if n <= 1:
+                continue
+            for idx_i in range(n):
+                for idx_j in range(idx_i + 1, n):
+                    i = cell_items[idx_i]
+                    j = cell_items[idx_j]
+                    if i != j:
+                        pairs.add((min(i, j), max(i, j)))
+        return pairs
+
+
+class UniformGridBroadphase3DPBC:
+    """支持周期性边界条件 (PBC) 的三维均匀空间网格加速结构。"""
+
+    def __init__(
+        self,
+        box_size: Sequence[float],
+        cell_size: float,
+    ):
+        self.box_size = np.asarray(box_size, dtype=np.float64)
+        self.cell_size = max(1e-6, float(cell_size))
+        
+        self.grid_dims = np.maximum(1, np.floor(self.box_size / self.cell_size).astype(int))
+        self.actual_cell_size = self.box_size / self.grid_dims
+        
+        self.grid: dict[tuple[int, int, int], list[int]] = {}
+        self.items: list[tuple[np.ndarray, np.ndarray, float]] = []
+
+    def _coord_to_cell(self, point: np.ndarray) -> tuple[int, int, int]:
+        pt_wrapped = np.mod(point, self.box_size)
+        idx = np.floor(pt_wrapped / self.actual_cell_size).astype(int)
+        return (
+            min(idx[0], self.grid_dims[0] - 1),
+            min(idx[1], self.grid_dims[1] - 1),
+            min(idx[2], self.grid_dims[2] - 1),
+        )
+
+    def insert_capsule(
+        self,
+        item_id: int,
+        p1: Sequence[float] | np.ndarray,
+        p2: Sequence[float] | np.ndarray,
+        radius: float,
+    ) -> None:
+        """注册胶囊体，正确处理 PBC 跨界（若包围盒跨越边界，则分别注册）。"""
+        p1_arr = np.asarray(p1, dtype=np.float64)
+        p2_arr = np.asarray(p2, dtype=np.float64)
+        self.items.append((p1_arr, p2_arr, float(radius)))
+
+        box_min = np.minimum(p1_arr, p2_arr) - radius
+        box_max = np.maximum(p1_arr, p2_arr) + radius
+
+        span = box_max - box_min
+        if np.any(span >= self.box_size):
+            for cx in range(self.grid_dims[0]):
+                for cy in range(self.grid_dims[1]):
+                    for cz in range(self.grid_dims[2]):
+                        cell = (cx, cy, cz)
+                        if cell not in self.grid:
+                            self.grid[cell] = []
+                        self.grid[cell].append(item_id)
+            return
+
+        min_idx = np.floor(box_min / self.actual_cell_size).astype(int)
+        max_idx = np.floor(box_max / self.actual_cell_size).astype(int)
+
+        for cx in range(min_idx[0], max_idx[0] + 1):
+            for cy in range(min_idx[1], max_idx[1] + 1):
+                for cz in range(min_idx[2], max_idx[2] + 1):
+                    cell = (
+                        cx % self.grid_dims[0],
+                        cy % self.grid_dims[1],
+                        cz % self.grid_dims[2],
+                    )
+                    if cell not in self.grid:
+                        self.grid[cell] = []
+                    if not self.grid[cell] or self.grid[cell][-1] != item_id:
+                        self.grid[cell].append(item_id)
+
+    def get_candidate_pairs(self) -> set[tuple[int, int]]:
         pairs: set[tuple[int, int]] = set()
         for cell_items in self.grid.values():
             n = len(cell_items)

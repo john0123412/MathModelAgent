@@ -275,31 +275,81 @@ class Flows:
         # 冻结指标/CSV 事实，看不到其它子任务（含 sensitivity_analysis）的数值。
         quesx_writer_prompt = {
             key: f"""
-                    问题背景{bgc},不需要编写代码。
-                    {_subtask_isolation_notice(key)}
-                    执行说明（仅供方法叙述，且仅限本题 {key}）{code_context}
-                    {build_result_fact_summary(code_interpreter.work_dir, subtask_id=key)}
-                    {result_instruction}
-                    按照如下模板撰写：{config_template[key]}
-                """
+<instruction>
+你是结构化写作引擎。你的唯一任务是将 <data_payload> 中的事实，严格按照 <narrative_template> 的结构进行渲染。
+禁止自由发挥 (No Free-form Hallucination)：不得编造任何在数据负载中不存在的数值、方法、图表或结论。
+</instruction>
+
+<data_payload>
+【问题背景】
+{bgc}
+
+【执行说明】
+{code_context}
+
+【计算事实摘要】
+{build_result_fact_summary(code_interpreter.work_dir, subtask_id=key)}
+</data_payload>
+
+<narrative_template>
+{config_template[key]}
+</narrative_template>
+
+{_subtask_isolation_notice(key)}
+{result_instruction}
+"""
             for key in questions_quesx_keys
         }
 
         writer_prompt = {
             "eda": f"""
-                    问题背景{bgc},不需要编写代码。执行说明（仅供方法叙述）{code_context}
-                    {result_fact_summary}
-                    {result_instruction}
-                    按照如下模板撰写：{config_template["eda"]}
-                """,
+<instruction>
+你是结构化写作引擎。你的唯一任务是将 <data_payload> 中的事实，严格按照 <narrative_template> 的结构进行渲染。
+禁止自由发挥 (No Free-form Hallucination)：不得编造任何在数据负载中不存在的数值、方法、图表或结论。
+</instruction>
+
+<data_payload>
+【问题背景】
+{bgc}
+
+【执行说明】
+{code_context}
+
+【计算事实摘要】
+{result_fact_summary}
+</data_payload>
+
+<narrative_template>
+{config_template["eda"]}
+</narrative_template>
+
+{result_instruction}
+""",
             **quesx_writer_prompt,
             "sensitivity_analysis": f"""
-                    问题背景{bgc},不需要编写代码。执行说明（仅供方法叙述）{code_context}
-                    {result_fact_summary}
-                    {result_instruction}
-                    按照如下模板撰写：{config_template["sensitivity_analysis"]}
-                    注意：敏感性分析不是新增题目问题。若题目重述只列出两问，不要在正文、图题或表题中称其为“问题三/问题3”；如图片路径历史上含“问题3_”，括号中的路径保持不变，方括号中的图题和正文表述改写为“灵敏度分析_...”或“扩展分析_...”。
-                """,
+<instruction>
+你是结构化写作引擎。你的唯一任务是将 <data_payload> 中的事实，严格按照 <narrative_template> 的结构进行渲染。
+禁止自由发挥 (No Free-form Hallucination)：不得编造任何在数据负载中不存在的数值、方法、图表或结论。
+</instruction>
+
+<data_payload>
+【问题背景】
+{bgc}
+
+【执行说明】
+{code_context}
+
+【计算事实摘要】
+{result_fact_summary}
+</data_payload>
+
+<narrative_template>
+{config_template["sensitivity_analysis"]}
+</narrative_template>
+
+{result_instruction}
+注意：敏感性分析不是新增题目问题。若题目重述只列出两问，不要在正文、图题或表题中称其为“问题三/问题3”；如图片路径历史上含“问题3_”，括号中的路径保持不变，方括号中的图题和正文表述改写为“灵敏度分析_...”或“扩展分析_...”。
+""",
         }
 
         if key in writer_prompt:

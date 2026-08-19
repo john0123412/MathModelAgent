@@ -15,6 +15,7 @@ from app.utils.log_util import logger
 from app.utils import font_utils
 from app.schemas.enums import ExportProfile
 from app.tools.export_profiles import get_export_profile_config
+from app.tools.abstract_budget_engine import AbstractBudgetEngine
 from app.tools.export_template_override import (
     TemplateOverrideError,
     load_export_template_override,
@@ -692,6 +693,11 @@ def export_markdown_to_pdf(
         result["success"] = True
         result["pdf_path"] = pdf_path
         result["output_sha256"] = _file_sha256(pdf_path)
+        # 评估摘要单页锁定与版面预算
+        abstract_layout = AbstractBudgetEngine.evaluate_pdf_abstract_layout(pdf_path)
+        result["abstract_layout"] = abstract_layout
+        if not abstract_layout.get("is_single_page_abstract", True):
+            logger.warning(f"PDF 摘要版面可能存在溢出: {abstract_layout.get('issues')}")
         logger.info(f"PDF 生成成功: {pdf_path}")
     else:
         result["reason"] = f"pandoc 返回码非 0: {proc.returncode}"

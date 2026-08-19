@@ -680,8 +680,9 @@ class MathModelWorkFlow(WorkFlow):
                     logger.warning(f"保存变量快照失败: {e}")
 
             # 强制清空内核状态，确保下一个问题必须从文件读取数据（避免跨问题隐式依赖）
-            await code_interpreter.restart_kernel()
-            logger.info(f"已重置内核，确保 {key} 与后续子任务状态隔离")
+            if hasattr(code_interpreter, "restart_kernel"):
+                await code_interpreter.restart_kernel()
+                logger.info(f"已重置内核，确保 {key} 与后续子任务状态隔离")
 
         # `execution_validation.json` is assembled by the trusted evidence
         # recorder called within each formal Coder subtask.  Do not ask the

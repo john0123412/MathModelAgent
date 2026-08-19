@@ -115,7 +115,9 @@ class OpenAlexScholar:
         allow_scholarly = not requested_types or bool(requested_types - {"web"})
         include_tavily = include_tavily and allow_web
 
-        async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
+        async with httpx.AsyncClient(
+            timeout=_DEFAULT_TIMEOUT, trust_env=False
+        ) as client:
             tasks = []
             task_names = []
             if allow_scholarly:

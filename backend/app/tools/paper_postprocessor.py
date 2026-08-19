@@ -27,6 +27,11 @@ from app.tools.semantic_layout_review import (
     write_semantic_layout_review,
 )
 from app.tools.export_profiles import get_export_profile_config
+from app.tools.fact_store import FactStore
+from app.tools.cross_modal_validator import (
+    audit_cross_modal,
+    validate_code_text_parity,
+)
 from app.schemas.problem_contract import (
     affirmatively_binds_source,
     build_problem_contract,
@@ -4379,6 +4384,11 @@ def build_preflight_report(
         "reference_relevance": _with_severity(reference_relevance_check, "fail"),
         "reference_sources": _with_severity(reference_sources_check, "conditional"),
         "similarity_ai_risk": _with_severity(similarity_ai_risk_check, "conditional"),
+        # 跨模态代码-正文对齐检查
+        "code_text_parity": _with_severity(
+            validate_code_text_parity(markdown, code_sources, work_dir=work_dir),
+            "conditional",
+        ),
         # 语义排版属于人工/提示词复核项：保留 WARN 发现，但不改变主预检 PASS。
         "semantic_layout": _with_severity(semantic_layout_check, "info"),
         "claim_trace": _with_severity(
@@ -4568,6 +4578,14 @@ def prepare_paper_markdown(
     with open(md_path, encoding="utf-8") as f:
         markdown = f.read()
 
+    # FactStore 响应式占位符解析与渲染
+    try:
+        fact_store = FactStore.load_from_disk(work_dir)
+        markdown, _ = fact_store.render_template(markdown)
+        fact_store.save_to_disk(work_dir)
+    except Exception as exc:
+        logger.debug(f"FactStore 占位符渲染跳过: {exc}")
+
     markdown = normalize_markdown_headings(markdown)
     markdown, normalised_heading_blank_lines = normalize_heading_blank_lines(markdown)
     markdown, semantic_layout_fixups = normalize_markdown_semantics(markdown)
@@ -4709,6 +4727,8 @@ def prepare_paper_markdown(
             f.write(render_preflight_markdown(report))
         with open(claim_trace_md_path, "w", encoding="utf-8") as f:
             f.write(render_claim_trace_markdown(claim_trace))
+        # 执行跨模态对齐审计并持久化
+        audit_cross_modal(work_dir, markdown_text=markdown, code_sources=code_sources)
         logger.info(f"paper_preflight_report.json 生成成功: {report_path}")
     except OSError as exc:
         logger.error(f"paper_preflight_report 生成失败: {exc}")

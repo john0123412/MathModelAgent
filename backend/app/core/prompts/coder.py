@@ -107,40 +107,70 @@ plt.rcParams['font.sans-serif'] = ['SimHei', 'Noto Sans CJK SC', 'Noto Sans SC',
 plt.rcParams['axes.unicode_minus'] = False
 
 COLORS = {{
-    'primary': '#2E5B88',
-    'secondary': '#E85D4C',
-    'tertiary': '#4A9B7F',
-    'neutral': '#7F7F7F',
-    'light': '#B8D4E8',
+    'primary': '#2A6A92',    # 深藏青 (Teal/Dark Blue)
+    'secondary': '#D06C4C',  # 赤褐 (Burnt Orange)
+    'tertiary': '#508B72',   # 墨绿 (Muted Green)
+    'quaternary': '#8064A2', # 柔紫 (Muted Purple)
+    'neutral': '#7F7F7F',    # 中性灰
+    'light': '#B8D4E8',      # 浅灰蓝
 }}
 FIG_SINGLE = (5, 4)
 FIG_DOUBLE = (10, 4)
 FIG_WIDE = (8, 3)
 FIG_SQUARE = (6, 6)
+FIG_COMPOSITE = (10, 8)  # 复合图表默认尺寸
 ```
 
-## 图表类型选择
+## 图表类型选择（追求高信息密度）
 | 数据类型 | 推荐图表 | 避免使用 |
 |---------|---------|---------|
-| 趋势/时序 | 折线图+置信带 | 纯折线无CI |
+| 业务流程/系统机制 | **算法流程图、决策闭环框图** | 纯文本描述无图解 |
+| 多维指标综合对比 | **复合子图 (plt.subplots)** | 多张零散单图连放 |
+| 多目标优化/权衡 | **Pareto前沿及散点气泡图** | 简单的二维散点图 |
+| 资源排程/调度时间 | **甘特图 (Gantt Chart)** | 普通柱状图/堆叠图 |
+| 趋势/时序 | 折线图+置信带 (fill_between) | 纯折线无CI |
 | 分布比较 | 箱线图/小提琴图 | 柱状图+误差棒 |
-| 相关性 | 散点图+回归线+r值 | 只有散点 |
-| 分类对比 | 水平条形图 | 3D柱状图 |
-| 参数敏感性 | 热力图/等高线/带阴影折线 | 多条折线堆叠 |
-| 后验分布 | 密度图/直方图+KDE | 只有点估计 |
+| 参数敏感性/联合交互 | **3D曲面图/热力等高线图** | 多条平庸单变量折线 |
 
 ## 严格禁止
-- 饼图（改用水平条形图）
-- 图表内标题（用论文 caption，不要 ax.set_title()）
+- 饼图（改用水平条形图或环形图）
+- 图表内标题（用论文 caption，不要 ax.set_title()，除非是复合图表的子图 `(a)` `(b)`）
 - 密集网格线
 - 四边完整边框（只保留左+下）
 - 低分辨率 PNG（用 300dpi，保存为 PNG 即可）
 - 简单无信息量的单变量折线图充当敏感性分析
+- 连续输出多张单一维度的小图（强烈建议合并为复合图表）
 
 ## 高分算法约束与可视化强制要求（冲刺 85+ 标准）
-1. **高级算法的数据记录**：如果在执行高级算法（如改进启发式、动态规划或复杂的迭代优化算法）时，**必须将算法的迭代收敛数据（如随迭代次数变化的损失/目标函数值）保存为 CSV**，并在后续作图，不得只给出最终结果。
-2. **多维敏感性/稳健性分析**：在进行敏感性分析或结果稳健性分析时，**必须生成二维或三维参数联合敏感性分析图**（如基于两个核心变量交互的 Contour 等高线图、热力图或 3D Surface 曲面图），揭示变量之间的非线性交互关系。禁止仅使用单变量的平庸折线图敷衍了事。
-3. **对抗性验证输出**：若 Modeler 的规划中包含了对抗性验证（Adversarial Validation，如用两种算法求解同一个数值），必须将两种方法的**残差/误差对比分布保存为数据表及对比误差图**，用以证明核心结论的极高置信度。
+1. **复合图表设计 (Composite Figures)**：在比较不同情景或呈现多个相关指标时，**必须使用 `fig, axes = plt.subplots(...)` 绘制包含 2 到 4 个面板的复合图表**。每个子图的标题必须带有字母序号，如 `ax.set_title("(a) 成本演变")`。这能极大提升排版的专业度和信息密度。
+2. **绘制流程图与机理图 (Mechanism Diagrams)**：如果在进行算法设计（如排程调度、网络流分配、系统动力学、启发式），**必须使用 Python（如 `matplotlib.patches`, `networkx`）绘制至少一张该问题的“决策闭环图”或“算法流程框图”，并保存为 png**。使用代码绘制能确保高质量与跨平台稳定导出，极大提升论文的“工程感”与“理论深度”。
+3. **高级算法的数据记录**：如果在执行高级算法（如改进启发式、动态规划或复杂的迭代优化算法）时，必须将算法的迭代收敛数据保存为 CSV，并在后续作图，不得只给出最终结果。
+4. **多维敏感性/稳健性分析**：在进行敏感性分析或结果稳健性分析时，必须生成二维或三维参数联合敏感性分析图（如基于两个核心变量交互的 Contour 等高线图、热力图或 3D Surface 曲面图）。
+5. **对抗性验证输出**：若 Modeler 的规划中包含了对抗性验证（如用两种算法求解同一个数值），必须将两种方法的残差/误差对比分布保存为数据表及对比误差图，用以证明核心结论的极高置信度。
+6. **Wilson 95% 置信区间标准计算与下限准入**：在进行概率估算与可靠性判定时，必须使用 Wilson Score 区间，并以其置信下界（`wilson_low`）作为达标准入约束：
+   ```python
+   def wilson_score_interval(hits: int, total: int, z: float = 1.96) -> tuple[float, float, float]:
+       if total == 0:
+           return 0.0, 0.0, 0.0
+       p = hits / total
+       denom = 1.0 + z * z / total
+       center = (p + z * z / (2.0 * total)) / denom
+       margin = (z * np.sqrt((p * (1.0 - p) + z * z / (4.0 * total)) / total)) / denom
+       return p, max(0.0, center - margin), min(1.0, center + margin)
+   ```
+7. **一维上确界全局边界排除证明与自适应序贯采样（Sequential Sampling）**：在解决非线性/双变量成本优化并宣称“全局最低成本解”时，必须保证统计样本量与检力的一致性与公平性：
+   - 采用自适应序贯抽样（粗筛 $M_1=200$，若候选点接近阈值且可能挑战最优解，自适应提升至 $M_2=1000 \to M_3=5000$ 消除样本量不对称带来的假性排除）；
+   - 在附录主求解代码中内嵌生成对应的证书 CSV（如 `ques4_global_frontier_certificate.csv`）；
+   - 严格断言：若声称某解为全局最优，证书中所有更低成本方案的 Wilson 下界必须严格小于可靠性阈值：
+   ```python
+   # 对任意 N_A 计算保证总成本严格低于当前最优解所允许的最大 N_B_max
+   cert_records = []
+   # 遍历所有可能的 N_A 候选，计算 N_B_max 并评估 Wilson 下界
+   # ...
+   cert_df = pd.DataFrame(cert_records)
+   cert_df.to_csv("ques4_global_frontier_certificate.csv", index=False)
+   assert (cert_df["wilson_low"] < target_reliability).all(), "存在未被排除的潜在更优可行解！"
+   ```
 
 ## 必须遵守
 - 去掉上右边框（已通过全局配置实现）

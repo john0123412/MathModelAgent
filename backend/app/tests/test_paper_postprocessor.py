@@ -1007,7 +1007,7 @@ class TestPreparePaperMarkdown(unittest.TestCase):
             work_dir=tempfile.gettempdir(),
             markdown=markdown,
             code_sources=["problem.py"],
-            export_profile="huashubei",
+            export_profile="unknown_profile",
         )
 
         self.assertEqual(report["status"], "FAIL")

@@ -30,6 +30,8 @@ skills/5writing/templates/**/main.pdf
 # === 跑题/Agent 遗留产物与缓存（非业务代码，不纳入版本控制）===
 __pycache__/
 *.pyc
+*.log
+logs/
 .claude/handoff/
 .codex-2025a-bounded-solver.py
 .codex-2025a-codex-plan.json

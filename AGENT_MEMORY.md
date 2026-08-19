@@ -1,9 +1,22 @@
 # AGENT_MEMORY
 
-- [2026-08-18] **工作区防污染与任务脚本存储规范加固**：
-  1. **`.gitignore` 防御强化**：追加 `scripts/tmp_*`、`scripts/test_*`、`scripts/temp_*`、`scripts/*.scratch.*`、`*.tmp.py`、`tmp_*.py`、`scratch/` 通配忽略规则，杜绝 Agent/临时测试脚本意外污染 Git 版本库。
-  2. **`AGENTS.md` 规则固化**：明确规定所有任务专属的计算、绘图、清洗脚本与草稿必须且只能保存在 `backend/project/work_dir/<task_id>/` 目录下（受控隔离、自动纳入附录与支撑材料）；一次性调试脚本必须保存在 `scratch/`；`scripts/` 仅限公共运维脚本；强制使用固定的 `backend/.venv` 环境执行；每次提交前强制 `git status --short --branch` 自检。
+- [2026-08-19] **架构防御加固与 Prompt 升维闭环（国一 85+ 冲刺）**：
+  1. **AST 语法树防作弊门禁**：在 `execution_validation.py` 中引入 `_check_file_write_security_ast`，静态扫描拦截代码中直接使用 `open('res.md', 'w')` 或覆写 `.docx` 等绕过数据事实管道的作弊行为。
+  2. **附录源码严格收口与草稿隔离**：在 `paper_postprocessor.py` 中，附录源程序提取严格绑定 `frozen_results.json` 的 `executed_code_sources` 验证清单，并显式忽略 `scratch/` 临时调试目录，根绝草稿/冗余脚本污染正文附录。
+  3. **子任务内核隔离与无状态约束 (Stateless Constraints)**：在 `workflow.py` 的解题循环中引入 `restart_kernel()`，在每问执行完毕后重置 Jupyter 内核状态，强制各题独立从持久化文件加载数据，根治隐式变量传递导致的单题重跑崩溃。
+  4. **写作模板与数据负载解耦 (Writer Template Binding)**：在 `flows.py` 中将 Writer Prompt 结构化重构为 `<instruction>`、`<data_payload>` 与 `<narrative_template>` XML 分块，从提示词层面锁死 Writer 的纯渲染引擎定位，彻底压制无事实脑补。
+  5. **智能体 Prompt 认知升维**：
+     - `Modeler`：强制要求针对非线性/高维问题设计带约束高级算法（启发式/动态规划/稳健优化），增加“维度诅咒”理论分析，并规划对抗性验证（Adversarial Validation）对照复算。
+     - `Coder`：强制记录并输出迭代优化算法收敛过程 CSV；敏感性分析强制生成 2D/3D 联合热力图/等高线/曲面图，禁止单变量平庸折线图。
+     - `Writer`：图表解读强制深挖变量交互的业务/物理突变含义，并在模型评价中以学术范式陈述对抗性验证稳健性。
+  6. **工作区整洁与防污染自检**：清理 `backend/fix_hashes.py` 等遗留临时脚本，`.gitignore` 补充 `*.log` 与 `logs/`，全量 102 项单元测试及 Ruff 检查 100% 通过。
 
+- [2026-08-18] **几何核心算法重构闭环（Q2-Q4）**（任务 ID `20260817-163525-f2715db564e250aec38490e2c03e8a68`）：
+  1. **全面引入 27-image MIC 与 Cell List**：抛弃了原有的 9-image 近似算法，将 Q2、Q3、Q4 中的核心接触判定全部切换至 `geometric_lib.py` 中规范的 27-image Minimum Image Convention 与 `UniformGridBroadphase3DPBC` 周期性单元网格划分。
+  2. **向量化窄相加速**：保留并适配了基于 Numpy 向量化底层运算的 narrow-phase 加速层，有效消除了纯 Python 函数在 100,000+ 碰撞对下的性能瓶颈，确保 $M=200$ 的全量独立抽样能够在地算力下快速完成。
+  3. **Wilson 置信区间**：确保 M=200 规模独立抽样均配备严格的 Wilson 95% 置信区间估计，杜绝统计孤证。
+
+- [2026-08-18] **工作区防污染与任务脚本存储规范加固**：
 
 - [2026-08-18] **LaTeX 模板编译与图表/代码字体优化闭环**（任务 ID `20260817-163525-f2715db564e250aec38490e2c03e8a68`）：
   1. **LaTeX 模板 `calc` 宏包与代码字体修复**：在 `tex_project_exporter.py` 的全部导出模板（`_MAIN_TEX_TEMPLATE`、`_CUMCM2025`、`_CUMCM2026`、`_HUASHUBEI`）中补全 `\usepackage{calc}` 依赖，彻底解决 Pandoc 转换符号说明表时因相对列宽计算缺失 `\real` 导致的 `Missing number, treated as zero` 致命错误；通过 `\IfFontExistsTF{{Consolas}}` 为代码环境注入清晰的标准等宽字体 `Consolas` / `Courier New`。

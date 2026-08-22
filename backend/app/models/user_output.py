@@ -22,7 +22,49 @@ AI_USAGE_DECLARATION = (
 )
 
 
+def deduplicate_top_level_headings(text: str) -> str:
+    """清理多章节拼接中意外重复出现的章节块（包含标题及其实质正文），防止论文结构与正文重复。"""
+    seen_section_keys: set[str] = set()
+    output_lines: list[str] = []
+    # 匹配标准章节编号前缀（如 一、, 二、, 5.1, 附录A, 附录B, 参考文献 等）
+    major_heading_re = re.compile(
+        r"^(#+)\s*([一二三四五六七八九十]+、|[1-9]\d*(?:\.\d+)*\s*|附录\s*[A-Za-z0-9一二三四五六七八九十]+|附录|参考文献|AI工具使用声明)(.*)"
+    )
+    skipping_level: int | None = None
+
+    for line in text.splitlines():
+        match = major_heading_re.match(line.strip())
+        if match:
+            level = len(match.group(1))
+            sec_num = re.sub(r"\s+", "", match.group(2))
+            # 以章节编号标识符为去重键（跨 # 与 ## 层级），彻底阻断 # 一、 与 ## 一、 重复并存
+            section_key = sec_num
+
+            if skipping_level is not None:
+                if level <= skipping_level:
+                    skipping_level = None
+                else:
+                    continue
+
+            if section_key in seen_section_keys:
+                skipping_level = level
+                continue
+
+            seen_section_keys.add(section_key)
+
+        elif skipping_level is not None:
+            h_match = re.match(r"^(#+)\s+", line.strip())
+            if h_match and len(h_match.group(1)) <= skipping_level:
+                skipping_level = None
+            else:
+                continue
+
+        output_lines.append(line)
+    return "\n".join(output_lines)
+
+
 class UserOutput:
+
     """管理建模任务的输出结果，处理引用编号、脚注和最终论文拼接。"""
     def __init__(
         self,
@@ -237,9 +279,11 @@ class UserOutput:
             [sort_res[key]["response_content"] for key in self.seq]
         )
 
+        full_res_1 = deduplicate_top_level_headings(full_res_1)
         full_res_1 = self.append_ai_usage_declaration(full_res_1)
         full_res = self.append_footnotes_to_text(full_res_1)
         return full_res
+
 
     def save_result(self):
         """将结果保存为 res.json 和 res.md 文件。"""

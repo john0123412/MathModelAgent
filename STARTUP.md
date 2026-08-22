@@ -1138,12 +1138,75 @@ taskkill /PID <PID> /F
 ls D:\workspace\MathModelAgent\backend\project\work_dir\<task_id>\checkpoint.json
 ```
 
-## 论文收尾 P0-P2 门禁（2026-07）
+### Writer 单章节篇幅超限与压缩完整性门禁 (WRITER_SECTION_BUDGET_EXCEEDED / WRITER_SECTION_COMPRESSION_INTEGRITY_FAILED)
+Writer 单章节篇幅预算为 12,000 字符。若单章正文清洗后超过 12,000 字符，系统会自动触发且仅触发一次无工具定向压缩（要求保留数学公式、文献引用与脚注定义、图表引用与说明、全量数值结论）；压缩后系统会严格校验要素完整性，若返回空内容或丢失标题、公式、引用、脚注定义、图片路径/说明或关键数值事实（含单数字 0/1/5 及重复频次），系统将抛出 `WRITER_SECTION_COMPRESSION_INTEGRITY_FAILED`；若二次压缩后依然超过 12,000 字符，系统将抛出 `WRITER_SECTION_BUDGET_EXCEEDED` 明确失败并终止，坚决拒绝静默切片截断。排查时可检查该章节 Prompt 是否引入过多背景描述或冗余表格，并在重试时精炼叙述要求。
+
+### Coder 受保护文件快照与恢复门禁 (PROTECTED_FILE_SNAPSHOT_FAILED / PROTECTED_FILE_RECOVERY_FAILED)
+Coder 执行代码前后对受保护系统状态与预算文件（`checkpoint.json`、`frozen_results.json`、`evidence_failure_budget.json` 等）进行严格快照比对与原子恢复。若快照读取失败，系统抛出 `ProtectedFileSnapshotError` 立即 fail-closed 终止；若代码篡改文件且原子恢复失败，系统抛出 `ProtectedFileRecoveryError` 立即终止，严格禁止继续进入下一轮对话或重试，禁止对损坏文件建立新快照。
+
+## 论文收尾 P0-P2 门禁与合规工具（2026-08）
 
 当前论文链路按三层收尾：
 
-- **P0 产物新鲜度与状态一致性**：任务先进入 `finalizing`，基础 DOCX / audit / manifest / final acceptance 任一步异常都会形成真实失败；`task_status.json` 是任务状态权威来源。PDF、DOCX 重导前会删除旧文件，避免旧产物冒充本轮结果。`export_status.json` 与 `docx_export_status.json` 分别记录 Markdown 源哈希、输出哈希和导出结果。
-- **P1 结构与全页视觉质量**：预检会拒绝重复参考文献、非法 Markdown 表格、表题紧贴表格等结构问题；`pdf_visual_check.json` 默认扫描全部页面，并把 `pdf_sha256`、`pages_checked`、`page_count` 写入报告。提交审计只接受与当前 `res.md` / `res.pdf` 哈希一致且覆盖全部页面的报告。
+- **P0 产物新鲜度与状态一致性**：任务先进入 `finalizing`，基础 DOCX / audit / manifest / final acceptance 任一步异常都会形成真实失败；`task_status.json` 是任务状态权威来源。PDF、DOCX 重导前会删除旧文件，避免旧产物冒充本轮结果。`export_status.json` 与 `docx_export_status.json` 分别记录 Markdown 源哈希、输出哈希和导出结果。`frozen_results.json` 在预检期间保持纯只读，等价性核验实行严格 fail-closed。
+- **P1 结构与全页视觉质量**：预检会拒绝重复参考文献、非法 Markdown 表格、表题紧贴表格等结构问题；接入 `cross_modal_audit.json` 跨模态阻断检查（代码自包含、AST 解析、最优性证书矛盾、LaTeX 损坏）；`pdf_visual_check.json` 默认扫描全部页面，并把 `pdf_sha256`、`pages_checked`、`page_count` 写入报告。提交审计只接受与当前 `res.md` / `res.pdf` 哈希一致且覆盖全部页面的报告。
 - **P2 论文表达与复现闭环**：后处理会为正文中缺少邻近“图1、图2……”引用的图片补入中性图号说明（附录和代码块不改、重复运行不重复插入）；人工仍须确认图号与上下文语义匹配。连续型线性规划若把小数结果直接写成“46.67件”等，会产生 `continuous_quantity_wording` 条件警告，应改写为“连续生产当量”或另建整数规划。PDF/LaTeX 代码附录使用 `\footnotesize` 等宽字体，在保持可读的前提下减少只剩少量代码的尾页。
 
 `candidate_manifest.json` 现使用 schema `1.2`：`submission_file` 明确唯一可上传主文件（默认 `res.pdf`），并记录主产物哈希。受控支撑材料另写入 `support_materials_manifest.json` / `support_materials.zip`，按白名单、单文件/总大小与 SHA-256 打包，默认不属于主论文上传文件。引用来源追踪只校验 DOI/URL 基本格式和本地文件哈希，仍须人工查证原始来源；`similarity_ai_risk` 仅为本地可解释草稿风险提示，不是正式查重、AI 检测或抄袭判定。内部审查目录、失败尝试目录和 `latex_project/figures/` 的 sidecar 复制图片不会进入正式候选图片列表。严格技术验收仍不替代模型、推导、引用和逐页排版的人工复核。
+
+### 辅助工具命令行用法
+
+1. **选题评分辅助工具（`topic_scorer`）**：
+   ```powershell
+   cd D:\workspace\MathModelAgent\backend
+   .venv\Scripts\python.exe -m app.tools.topic_scorer --help
+   .venv\Scripts\python.exe -m app.tools.topic_scorer input_topics.json --output report.md
+   ```
+   支持题目/路线/子问分层评分、权重自动归一化、证据与翻转条件回显；输入格式异常、缺少或包含未知评分字段时确定性报错。
+
+2. **提交合规与分层匿名审计（`submission_audit`）**：
+   ```powershell
+   cd D:\workspace\MathModelAgent\backend
+   .venv\Scripts\python.exe -m app.tools.submission_audit --help
+   .venv\Scripts\python.exe -m app.tools.submission_audit project\work_dir\<task_id>
+   .venv\Scripts\python.exe -m app.tools.submission_audit --work-dir project\work_dir\<task_id> --require-official-fonts
+   ```
+   分层扫描 PDF、DOCX（含 `custom.xml`、批注与页眉）及候选清单文件名中的作者/学校/联系方式泄露；对损坏文件与时效性过期报告严格 fail-closed。
+
+### 输入文件清单与接管前置检查
+
+#### 输入清单（`input_manifest.json`）
+
+`POST /modeling` 和 `POST /example` 创建任务时，后端会自动为所有上传/复制的数据文件生成 `input_manifest.json`，持久化到 `work_dir/<task_id>/`。清单记录每个输入文件的安全文件名、相对路径、字节大小和 SHA-256 哈希，用于后续接管校验。用户无需手动创建，由后端自动管理。
+
+清单格式：
+```json
+{
+  "schema_version": "mathmodel.input-manifest.v1",
+  "task_id": "<task_id>",
+  "created_at": "2026-08-22T10:00:00",
+  "files": [
+    {"name": "data.csv", "relative_path": "data.csv", "size_bytes": 1234, "sha256": "abcdef..."}
+  ]
+}
+```
+
+#### 任务接管（`POST /modeling/{task_id}/codex-modeling`）
+
+当 Modeler Agent 失败（任务状态为 `failed`）时，可通过此端点提交外部建模方案（如 Codex 生成的方案）。接管需满足以下全部前置条件：
+
+1. **任务状态**：必须为 `failed`（非 `completed`/`frozen`/`running`）；
+2. **Pristine 检查**（`is_task_pristine_for_takeover`）：
+   - 不存在已完成的执行阶段、变量快照、返修记录或质量复核历史；
+   - 工作目录中不存在除 `input_manifest.json` 登记的输入文件和框架管理文件（`task_status.json`、`checkpoint.json`、`modeler_plan.json` 等）之外的任何文件；
+   - `input_manifest.json` 必须存在且格式合法（`schema_version` 匹配、`task_id` 一致、文件路径安全——无绝对路径/`..` 遍历/Windows 保留设备名/ADS 冒号/尾随空格句点），登记文件与磁盘文件大小和 SHA-256 哈希一致；
+3. **人工审核门禁**：任务必须启用 `require_model_review` 或全局 `HUMAN_MODEL_GATE_ENABLED=true`；
+
+任何条件不满足均返回 `409 Conflict`。接管成功后任务进入 `waiting_review` 状态，等待人工审批。
+
+调用示例（PowerShell）：
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/modeling/<task_id>/codex-modeling" `
+  -H "Content-Type: application/json" `
+  -d '{\"modeler_response\": \"<结构化建模方案文本>\", \"comment\": \"Codex 外部建模接管\"}'
+```

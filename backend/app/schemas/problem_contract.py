@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import Literal
+
 
 from pydantic import BaseModel, Field
 
@@ -261,11 +263,15 @@ _SOURCE_NEGATION_RE = re.compile(
 _STRUCTURED_DIAGNOSTIC_REQUIREMENT_GROUPS = (
     (
         ("求解器", "solver", "状态方程", "state_equation", "state equation"),
-        ("求解器", "solver", "状态", "status", "最优性", "optimality", "收敛", "convergence"),
+        (
+            "求解器", "solver", "状态", "status", "最优性", "optimality", "收敛", "convergence",
+            "成功", "success", "linprog", "highs", "scipy", "单纯形", "simplex", "算法",
+            "枚举", "enumeration", "一致性", "consistency", "核验", "验证", "verify",
+        ),
     ),
     (
-        ("松弛", "slack"),
-        ("松弛", "slack", "约束", "constraint", "边界", "bound", "violation"),
+        ("松弛", "slack", "违反量", "violation"),
+        ("松弛", "slack", "约束", "constraint", "边界", "bound", "violation", "违反量", "非负", "nonnegative", "满足"),
     ),
     (
         ("质量", "守恒", "balance", "residual"),
@@ -281,7 +287,7 @@ _STRUCTURED_DIAGNOSTIC_REQUIREMENT_GROUPS = (
     ),
     (
         ("可行性", "feasible"),
-        ("可行性", "feasible", "连通", "connectivity", "导通", "conduction", "相交", "intersection"),
+        ("可行性", "feasible", "连通", "connectivity", "导通", "conduction", "相交", "intersection", "区间", "interval", "范围", "range", "bound", "边界", "有效", "valid", "影子价格", "shadow", "对偶", "dual"),
     ),
     (
         ("步长", "网格", "step", "grid", "mesh", "加密", "refinement"),
@@ -987,6 +993,202 @@ def _structured_diagnostic_metric_gaps(subtask: object) -> list[str]:
     return gaps
 
 
+def audit_model_plan_semantics(plan: object) -> list[str]:
+    """复核 ModelPlan 内部逻辑自洽性与语义有效性。
+
+    在 Coder 启动前确保：
+    1. 指标键名在同一子任务内不重复，且提供数值时为有限数值；
+    2. 预期产物路径安全（无目录穿越、非绝对路径）、无重复；
+    3. 线性规划等优化任务包含完整的求解/约束诊断定义。
+    """
+    subtasks = _subtask_plans(plan)
+    if not subtasks:
+        return []
+    # 仅针对结构化 ModelPlan 或包含 schema_version 的计划执行严格语义审计
+    is_structured = isinstance(plan, BaseModel) or (
+        isinstance(plan, dict) and (
+            "schema_version" in plan
+            or ("model_plan" in plan and isinstance(plan["model_plan"], dict) and "schema_version" in plan["model_plan"])
+        )
+    ) or any(
+        _plan_field(st, "diagnostic_profile") is not None
+        or _plan_field(st, "acceptance_metrics")
+        or _plan_field(st, "expected_artifacts")
+        for st in subtasks.values()
+    )
+    if not is_structured:
+        return []
+
+    issues: list[str] = []
+    for key, subtask in subtasks.items():
+        # 1. 检查指标键唯一性与数值有效性
+        metrics = _plan_field(subtask, "acceptance_metrics", []) or []
+        seen_keys: set[str] = set()
+        for idx, metric in enumerate(metrics):
+            m_key = str(_plan_field(metric, "key", "")).strip()
+            if m_key:
+                if m_key in seen_keys:
+                    issues.append(f"{key} 存在重复的验收指标 key: {m_key!r}")
+                else:
+                    seen_keys.add(m_key)
+            target = _plan_field(metric, "target", None)
+            comparator = str(_plan_field(metric, "comparator", "")).strip().lower()
+            if target is not None:
+                try:
+                    if not math.isfinite(float(target)):
+                        issues.append(f"{key} 的验收指标 {m_key or idx} target 不是有限数值: {target!r}")
+                except (ValueError, TypeError):
+                    issues.append(f"{key} 的验收指标 {m_key or idx} target 不是有效数值: {target!r}")
+            elif comparator in {"eq", "le", "ge", "lt", "gt"}:
+                issues.append(f"{key} 的验收指标 {m_key or idx} comparator={comparator!r} 但缺少 target 数值")
+
+        # 2. 检查产物路径安全性与唯一性
+        artifacts = _plan_field(subtask, "expected_artifacts", []) or []
+        seen_paths: set[str] = set()
+        for idx, artifact in enumerate(artifacts):
+            path_str = str(_plan_field(artifact, "path", "")).strip()
+            if path_str:
+                norm_path = path_str.replace("\\", "/")
+                if norm_path.startswith("/") or ".." in norm_path.split("/") or (len(norm_path) > 1 and norm_path[1] == ":"):
+                    issues.append(f"{key} 的预期产物路径包含非法越界或绝对路径: {path_str!r}")
+                if norm_path in seen_paths:
+                    issues.append(f"{key} 存在重复的预期产物路径: {path_str!r}")
+                else:
+                    seen_paths.add(norm_path)
+
+        # 3. 检查输入和约束内容非空白字符串
+        inputs = _plan_field(subtask, "inputs", []) or []
+        if inputs and all(not str(item).strip() for item in inputs):
+            issues.append(f"{key} 的 inputs 为空或全为空白")
+        constraints = _plan_field(subtask, "constraints", []) or []
+        if constraints and all(not str(item).strip() for item in constraints):
+            issues.append(f"{key} 的 constraints 为空或全为空白")
+
+        # 4. 针对 LP / 优化任务的自洽性校验
+        if _is_linear_programming_subtask(subtask):
+            kinds = {_plan_field(item, "kind", "") for item in artifacts}
+            if artifacts and not kinds.intersection({"result_table", "constraint_table"}):
+                issues.append(f"{key} 为线性规划子任务，但 expected_artifacts 未包含 result_table 或 constraint_table")
+            if not metrics:
+                issues.append(f"{key} 为线性规划子任务，必须包含至少一个可机检的目标值或约束验收指标")
+            diag_prof = _plan_field(subtask, "diagnostic_profile", None)
+            if diag_prof != "optimization":
+                issues.append(f"{key} 的方法明确为线性规划，却声明 diagnostic_profile={diag_prof!r}，必须使用 optimization")
+
+        # 5. 跨字段数学与叙述自洽性审计（精确指标概念匹配，消除盲目正则误报）
+        narratives = " ".join([
+            str(_plan_field(subtask, "method", "")),
+            str(_plan_field(subtask, "visualization", "")),
+        ])
+        for metric in metrics:
+            m_key = str(_plan_field(metric, "key", "")).strip().lower()
+            m_target = _plan_field(metric, "target", None)
+            if m_target is not None:
+                try:
+                    target_val = float(m_target)
+                    pattern = None
+                    if any(k in m_key for k in ("profit", "objective", "利润", "目标值")):
+                        pattern = r"(?:最优利润|最大利润|总利润|最终利润|目标函数值|目标值|求解利润)\s*(?:预计为|预计|测算为|测算|估算为|估算|计算为|计算得到|约为|约|保持为|保持|为|等于|达|达到|维持在|:|=)\s*[:：=为]?\s*(\d+(?:\.\d+)?)"
+                    elif any(k in m_key for k in ("cost", "成本")):
+                        pattern = r"(?:最低成本|总成本|最终成本|目标成本)\s*(?:预计为|预计|测算为|测算|估算为|估算|计算为|计算得到|约为|约|保持为|保持|为|等于|达|达到|维持在|:|=)\s*[:：=为]?\s*(\d+(?:\.\d+)?)"
+                    if pattern:
+                        num_matches = re.findall(pattern, narratives)
+                        for num_str in num_matches:
+                            num_val = float(num_str)
+                            if abs(num_val - target_val) > max(1.0, 0.01 * abs(target_val)):
+                                issues.append(
+                                    f"{key} 存在方法叙述/可视化（声称数值 {num_val}）与验收指标 target={target_val} 冲突，请统一数学逻辑"
+                                )
+                                break
+                except (ValueError, TypeError):
+                    pass
+
+        # 6. 显式一维数学约束自洽性与可行性检查（支持严格不等式、单等号、反向形式）
+        var_lower_bounds: dict[str, tuple[float, bool]] = {}
+        var_upper_bounds: dict[str, tuple[float, bool]] = {}
+        bound_re_1 = re.compile(
+            r"([a-zA-Z_][a-zA-Z0-9_]*)\s*(<=|≤|<|>=|≥|>|==|=)\s*([-+]?\d+(?:\.\d+)?)"
+        )
+        bound_re_2 = re.compile(
+            r"([-+]?\d+(?:\.\d+)?)\s*(<=|≤|<|>=|≥|>|==|=)\s*([a-zA-Z_][a-zA-Z0-9_]*)"
+        )
+        for c_item in constraints:
+            c_str = str(c_item).strip()
+            for match in bound_re_1.finditer(c_str):
+                var_name, op, val_str = match.group(1), match.group(2), match.group(3)
+                try:
+                    val = float(val_str)
+                    if op in ("<=", "≤"):
+                        cur = var_upper_bounds.get(var_name)
+                        if cur is None or val < cur[0] or (val == cur[0] and not cur[1]):
+                            var_upper_bounds[var_name] = (val, False)
+                    elif op == "<":
+                        cur = var_upper_bounds.get(var_name)
+                        if cur is None or val <= cur[0]:
+                            var_upper_bounds[var_name] = (val, True)
+                    elif op in (">=", "≥"):
+                        cur = var_lower_bounds.get(var_name)
+                        if cur is None or val > cur[0] or (val == cur[0] and not cur[1]):
+                            var_lower_bounds[var_name] = (val, False)
+                    elif op == ">":
+                        cur = var_lower_bounds.get(var_name)
+                        if cur is None or val >= cur[0]:
+                            var_lower_bounds[var_name] = (val, True)
+                    elif op in ("==", "="):
+                        cur_u = var_upper_bounds.get(var_name)
+                        if cur_u is None or val < cur_u[0]:
+                            var_upper_bounds[var_name] = (val, False)
+                        cur_l = var_lower_bounds.get(var_name)
+                        if cur_l is None or val > cur_l[0]:
+                            var_lower_bounds[var_name] = (val, False)
+                except (ValueError, TypeError):
+                    pass
+            for match in bound_re_2.finditer(c_str):
+                val_str, op, var_name = match.group(1), match.group(2), match.group(3)
+                try:
+                    val = float(val_str)
+                    if op in ("<=", "≤"):
+                        cur = var_lower_bounds.get(var_name)
+                        if cur is None or val > cur[0] or (val == cur[0] and not cur[1]):
+                            var_lower_bounds[var_name] = (val, False)
+                    elif op == "<":
+                        cur = var_lower_bounds.get(var_name)
+                        if cur is None or val >= cur[0]:
+                            var_lower_bounds[var_name] = (val, True)
+                    elif op in (">=", "≥"):
+                        cur = var_upper_bounds.get(var_name)
+                        if cur is None or val < cur[0] or (val == cur[0] and not cur[1]):
+                            var_upper_bounds[var_name] = (val, False)
+                    elif op == ">":
+                        cur = var_upper_bounds.get(var_name)
+                        if cur is None or val <= cur[0]:
+                            var_upper_bounds[var_name] = (val, True)
+                    elif op in ("==", "="):
+                        cur_u = var_upper_bounds.get(var_name)
+                        if cur_u is None or val < cur_u[0]:
+                            var_upper_bounds[var_name] = (val, False)
+                        cur_l = var_lower_bounds.get(var_name)
+                        if cur_l is None or val > cur_l[0]:
+                            var_lower_bounds[var_name] = (val, False)
+                except (ValueError, TypeError):
+                    pass
+
+        for var_name, (lower, l_strict) in var_lower_bounds.items():
+            if var_name in var_upper_bounds:
+                upper, u_strict = var_upper_bounds[var_name]
+                if lower > upper + 1e-6:
+                    issues.append(
+                        f"{key} 存在明显不可行的数学约束矛盾：{var_name} >= {lower} 与 {var_name} <= {upper}"
+                    )
+                elif abs(lower - upper) <= 1e-6 and (l_strict or u_strict):
+                    issues.append(
+                        f"{key} 存在明显不可行的严格开区间约束矛盾：{var_name} 在边界 {lower} 无可行解"
+                    )
+    return issues
+
+
+
+
 def validate_modeler_plan(
     contract: ProblemContract,
     plan: object,
@@ -1003,11 +1205,14 @@ def validate_modeler_plan(
     normalized = re.sub(r"\s+", "", text)
     violations: list[str] = []
     missing: list[str] = []
+    semantic_issues = audit_model_plan_semantics(plan)
+    violations.extend(semantic_issues)
     subtasks = _subtask_plans(plan)
     sections = _plan_sections(plan)
     active_question_keys = expected_question_keys or {
         key for key in sections if re.fullmatch(r"ques[1-9]\d*", key)
     }
+
     if expected_question_keys is not None:
         actual_keys = set(subtasks) if subtasks else {
             key for key in getattr(plan, "questions_solution", plan if isinstance(plan, dict) else {})
@@ -1021,16 +1226,14 @@ def validate_modeler_plan(
             violations.append("出现未拆解的正式问题计划: " + ", ".join(extra_keys))
     for key, subtask in subtasks.items():
         question = str((questions or {}).get(key, ""))
-        diagnostic_profile = _plan_field(subtask, "diagnostic_profile", "not_applicable")
-        if (
-            _is_linear_programming_subtask(subtask)
-            and diagnostic_profile not in {"optimization", "not_applicable", None, ""}
-        ):
+        diagnostic_profile = _plan_field(subtask, "diagnostic_profile", None)
+        if _is_linear_programming_subtask(subtask) and diagnostic_profile != "optimization":
             violations.append(
                 f"{key} 的方法明确为线性规划，却声明 diagnostic_profile={diagnostic_profile!r}；"
                 "线性规划及其资源敏感性重求解必须使用 optimization，"
                 "以登记求解器状态、可行性和松弛量等诊断。"
             )
+
         for metric in _plan_field(subtask, "acceptance_metrics", []) or []:
             label = " ".join(
                 str(_plan_field(metric, field, ""))

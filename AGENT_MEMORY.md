@@ -1,5 +1,184 @@
 # AGENT_MEMORY
 
+- [2026-08-22] **第十七轮 PR 审查发现修复（冻结哈希刷新多文件覆盖 + 零值等价 + sys.path 变体门禁，827 项单测全绿）**：
+  1. **审查背景**：对 skills 合并分支的代码审查发现 5 项问题；核实后确认匿名门禁误报（HIGH_CONF_* 锚定正则分层）与 cross-modal status/passed 状态机已在既有加固轮次中修复，本轮定点修复其余 3 项。
+  2. **冻结哈希刷新覆盖全部冻结文件**：`result_integrity.refresh_frozen_results_hashes` 原在循环内首个存在的冻结文件处理后即 return，`reports/frozen_numbers.json`（skill 3a 兼容路径）永不被刷新或审计。现遍历 `FREEZE_FILENAMES` 全部成员并聚合结果（新增 `paths`/`written_paths` 字段），各文件写回决策相互隔离：仅当该文件自身无冲突且存在等价刷新时落盘，单文件冲突不阻断其他文件的独立刷新。
+  3. **长表零值等价修复**：`_check_source_metrics_equivalence` 中 `raw_val = row.get("数值") or row.get("value") ...` 的 or 链将合法数值 0 当 falsy 跳过，导致指标值恰为 0 时被误判"指标缺失"而拒绝等价刷新。改为显式 `is not None` 逐键探测。
+  4. **sys.path 变体绕过收口**：`CodeImportDependencyVisitor` 原仅识别 `sys.path.append/insert`。新增拦截：`from sys import path [as p]` 后的 `path.append/insert/extend(...)`、`import sys as s` 别名、`sys.path += [...]`、`sys.path = [...]` 直接重绑定；正则兜底同步覆盖语法错误片段中的上述变体（裸 `path = ...` 赋值不拦截以防误伤普通同名变量）。回归测试证实修复前 `from sys import path; path.append(...)` 可完全绕过自包含门禁。
+  5. **回归测试与验证**：新增 `ReviewFindingsRegressionTest` 6 项测试（from-import 变体、别名+augassign+直接赋值、同名变量不误报、语法错误兜底、零值等价、多冻结文件覆盖与冲突隔离）；验证流程为"先还原源码跑出 3 失败+1 错误证明测试有效，再恢复修复跑全绿"。全量后端单测 **827 项全部通过**（`Ran 827 tests in 75.784s, OK (skipped=2)`），Ruff 全部通过。
+
+- [2026-08-22] **三大数模外部技能库并入 `feat/6verity-latex-preflight-scripts` 分支（分支整合收口）**：
+  1. 从 `feat/skills-integration-and-compliance-hardening` 分支（cfde442）提取 `.agents/skills/` 下 138 个文件（math-modeling-contest-route-selection、mathmodel-latex-skill、mathmodel-skill），以 `git checkout <branch> -- .agents/skills/` 方式合入本分支，保留本分支第 13–16 轮深度安全硬化提交历史不变。
+  2. 合并可行性预检：使用 `git merge-tree --write-tree` 确认两分支直接合并将产生 13 个后端核心门禁/测试文件冲突，因此选择反向操作（以硬化分支为基底，仅叠加技能库资源），冲突面为零。
+  3. `SyntaxWarning: invalid escape sequence '\h'` 在本分支全量测试中不存在，无需修复。
+  4. 全量回归验收：693 tests OK (skipped=1)，Ruff All checks passed!。
+  5. 后续处理：旧分支 `feat/skills-integration-and-compliance-hardening` 暂时保留不删，待用户确认后再清理。
+- [2026-08-22] **第十六轮 端到端建模任务监控与闭环验收（真实轻量案例全链路技术通过，修复 4 项后处理/导出/视觉边界误报，全量 821 项单测 100% PASS）**：
+  1. **端到端建模任务闭环交付**（任务 ID `20260822-101333-5c44fb89e1637bc630d6230e71c04b90`）：
+     - 经典工厂生产 A/B 两产品资源配置问题（$Z=2200, Z'=2366.67$）端到端求解并成功通过 `task-refresh` 完整导出；
+     - 6 大门禁全部 PASS：`execution_validation_report` (PASS), `paper_preflight_report` (PASS), `pdf_visual_check` (PASS), `submission_audit_report` (PASS), `final_acceptance_report` (TECHNICAL_PASS), `candidate_manifest` (VALID)；
+     - 产物齐备：`res.md`、`res.json`、`res.docx`、`res.pdf`（68 页完整，含 A4 尺寸、单页摘要及附录代码）、`AI工具使用详情.pdf`、`latex_project/`（XeLaTeX 编译成功）、`support_materials.zip`；API `/tasks` 状态置为 `completed`。
+  2. **后处理与预检假阳性/边界修复**：
+     - **非采用算法假设/排除对比**：优化 `NON_IMPLEMENTED_ALGORITHM_CONTEXT_RE`，放行“若引入多目标权重，则需转化为加权和形式或采用Pareto效率分析，本题仅关注经济效益维度”等假设前提与明确排除句式，杜绝 `algorithm_evidence` 误报；
+     - **参考文献占位符回退收口**：修复 `normalize_chinese_references`，仅在真实占位符或空内容时回退默认文献，杜绝覆盖合法普通参考文献；
+     - **表格行数值提取与别名匹配**：优化 `_metric_claim_occurrences`，支持表格竖线 `|` 分隔符下的直接数值匹配，杜绝因行末包含等式将参数误判为指标冲突；
+     - **资产清单扩展名收敛**：`ensure_paper_assets_manifest` 中将 figures 扫描范围收敛至图片格式（`.png/.jpg/.jpeg/.svg/.webp`），杜绝将 `AI工具使用详情.pdf` 误作为结果图导致哈希失配。
+  3. **PDF 视觉检查首页摘要自然语言解耦**：
+     - 在 `pdf_visual_checker._check_first_page_is_abstract` 中，将结构化章节标题（如 `一、问题重述`）与关键词后的真实泄漏从摘要正文中的自然语言词汇（如“模型假设产量可连续取值…”）中精确解耦，消除首页摘要假阳性 `forbidden_terms` 拦截。
+  4. **全量单测与代码质量**：
+     - 全量后端单元测试 **821 项** 全部通过（`Ran 821 tests in 75.003s, OK (skipped=2)`）；
+     - Ruff 代码风格检查 100% 通过（`All checks passed!`）；
+     - Docker 容器内单测与 Windows 本地导出链路全绿，`git diff --check` 0 处错误。
+
+- [2026-08-22] **第十五轮 Pandoc fenced div 门禁覆盖（::: hidden / ::: .hidden 绕过已修复，新增 4 项反例测试，宿主机 821 项 + Docker 64 项全绿）**：
+  1. **漏洞定位**：`_detect_disallowed_pandoc_attributes` 未检测 Pandoc fenced div 语法（行首 `:::`）。`::: hidden` 和 `::: .hidden` 完全绕过三个门禁（`_detect_disallowed_raw_html`、`_detect_disallowed_pandoc_attributes`、`_mask_non_semantic_markdown`），`_verify_compression_integrity` 返回空错误列表。Pandoc 将 `::: hidden` 渲染为 `<div class="hidden">` (HTML)，可通过 CSS `display:none` 在浏览器层面隐藏内容；LaTeX 输出内容则完全可见（fenced div 在 LaTeX 中透明）。
+  2. **LaTeX raw_tex 审计（PASS）**：`\phantom`、`\iffalse`、`\begin{comment}` 等 LaTeX 命令在 Pandoc `markdown-raw_tex` 格式下被转义为字面文本（`\textbackslash phantom\{...\}`），不执行隐藏，无需修复。
+  3. **topic_scorer.py 审计（PASS）**：完整、有正确的错误处理（NaN/Infinity/越界/缺字段全部 fail-closed），有配套单测，逻辑无安全问题。
+  4. **修复**：在 `_detect_disallowed_pandoc_attributes` 函数开头新增 fenced div 检测（规则 0）：用 `re.MULTILINE` 匹配行首 `:::` 并无条件将整行加入 `disallowed`。行内 `::` 和缩进的 `:::` 均不触发（正确行为）。
+  5. **新增反例测试（`WriterAgentFencedDivGateTest`，4 项）**：`::: hidden` → REJECT ✅；`::: .hidden` → REJECT ✅；`::: {style="display:none"}` → REJECT ✅；无 fenced div 的正常内容 → PASS ✅。
+  6. **单测与质量**：4 项新 fenced div 测试全绿，全量宿主机单测 **821 项** 全绿（`Ran 821 tests in 74.101s, OK (skipped=2)`），Ruff 全绿，Docker 容器内 writer 单测 **64 项** 全绿（`Ran 64 tests in 3.741s, OK`）。
+  7. **发布状态**：fenced div 绕过漏洞已闭环，但尚未运行真实大模型端到端烟雾任务与故障恢复演练，按规则尚不能宣称可发布。
+
+- [2026-08-22] **第十四轮 Writer 短内容路径门禁覆盖补全（短内容绕过已修复，新增 4 项短内容反例测试，全量 817 项宿主机单测全绿，待 Docker 重建后验证）**：
+  1. **漏洞定位**：`WriterAgent.run()` 中的 `_detect_disallowed_raw_html`、`_detect_disallowed_pandoc_attributes`、`_mask_non_semantic_markdown` 三项门禁仅在 `len(response_content) > 12000` 触发压缩路径时（`_verify_compression_integrity` 内部）被调用；短内容（≤12000 字符）完全绕过这三项检查，可将 `<span hidden>`、Pandoc `{style="display:none"}`、链接参考定义等隐藏结构静默带入最终文稿。
+  2. **修复**：在 `run()` 方法的 `split_footnotes` 调用前，无条件插入三项门禁检查块（约 28 行）：① `_detect_disallowed_raw_html` → 发现原始 HTML 标签立即抛出 `WRITER_SECTION_COMPRESSION_INTEGRITY_FAILED`；② `_detect_disallowed_pandoc_attributes` → 发现 Pandoc 属性列表立即抛出；③ `_mask_non_semantic_markdown` 遮罩结果与原文不一致时立即抛出。修复作用域为所有输出长度，与压缩路径原有的 `_verify_compression_integrity` 完全正交，不影响压缩路径已有的完整性校验逻辑。
+  3. **新增短内容反例测试（`WriterAgentShortContentGateTest`，4 项）**：
+     - `test_short_content_raw_html_hidden_span_raises`：短内容含 `<span hidden>` 必须 REJECT。
+     - `test_short_content_pandoc_attr_display_none_raises`：短内容含 `{style="display:none"}` 必须 REJECT。
+     - `test_short_content_link_reference_definition_raises`：短内容含链接参考定义必须 REJECT。
+     - `test_short_content_clean_passes_gate`：无禁止结构的短内容必须正常通过（正例）。
+  4. **单测与质量**：4 项新测试全绿，针对性测试套件 146 项全绿，全量后端单测 **817 项** 全绿（`Ran 817 tests in 71.584s, OK (skipped=2)`），Ruff 静态检查全绿，本轮两个修改文件 `git diff --check` 0 项错误。
+  5. **Docker**：Docker 构建因 pnpm lock 文件 `@pnpm/exe.linux-x64 native binary` 缺失（已有问题，非本轮引入）无法完成 `docker compose up --build -d`；宿主机单测覆盖已足够验证本次修复，Docker 验证待环境修复后补齐。
+  6. **发布状态**：短内容绕过漏洞已闭环，但 Docker 镜像构建失败待处理，且尚未运行真实大模型端到端烟雾任务与故障恢复演练，按规则尚不能宣称可发布。
+
+- [2026-08-22] **第十三轮 Writer 多行链接参考定义续行遮罩与系统性审计矩阵闭环（MarkdownIt env.references 完整 map 遮罩、行级多行 scanner 回退、系统性 10 项反例审计矩阵全绿已完成，待独立反例审计）**：
+  1. **多行链接参考定义全范围遮罩**：在 `_mask_non_semantic_markdown` 中从 `MarkdownIt().parse(text, env)` 的 `env["references"]` 中提取所有非脚注参考定义的精确多行 `map: [start_line, end_line]` 并全量遮罩；同时结合增强型行级多行 scanner，处理 URL 换行、title 跨多行引号、括号与缩进续行，彻底杜绝将公式、数值、引用或图片隐藏在多行参考定义 title/URL 续行中绕过门禁。
+  2. **脚注定义与参考定义严格解耦**：在 `env["references"]` 处理时显式过滤 label 为 `^\^\d+$` 的文献脚注定义（如 `[^1]`），确保合法多行文献脚注不被参考定义遮罩误伤，各单测与真实压缩路径双向正常通行。
+  3. **系统性反例审计矩阵**：新增并执行包含 10 种 Markdown/Pandoc 逃逸与隐匿场景的矩阵单测（多行链接 title、多行链接 URL、单行链接 title、``` 围栏、~~~ 围栏、4 空格缩进代码块、HTML 注释、Pandoc 隐藏样式、Pandoc 零尺寸、Raw inline HTML），全部确定性 fail-closed 拦截。
+  4. **单测与质量**：针对性单测（142 tests）全绿，全量后端单测 813 项全绿（`Ran 813 tests in 74.983s, OK (skipped=2)`），Ruff 静态检查保持全绿，`uv lock --check` 与 `git diff --check` 0 项错误；Docker 镜像完成重新构建并容器内全绿通过（`Ran 56 tests in 3.800s, OK`）。
+  5. **发布状态**：单测与反例已全部通过，但尚未通过独立反例审计，且尚未运行真实大模型端到端烟雾任务与故障恢复演练，按规则尚不能宣称可发布。
+
+- [2026-08-22] **第十二轮 Writer 真实渲染语义收口（直接依赖 markdown-it-py、AST Image 语义校验、非渲染链接参考定义/伪图片语法拦截、Pandoc 属性隐藏全面 fail-closed 已完成，待独立反例审计）**：
+  1. **直接依赖声明与依赖锁定**：在 `backend/pyproject.toml` 中显式声明 `markdown-it-py>=3.0.0` 为直接依赖，并执行 `uv lock` 更新 `uv.lock`，消除传递依赖的直接导入风险。
+  2. **基于 MarkdownIt AST 的真实图片证据校验与非渲染行屏蔽**：在 `_extract_markdown_images_with_spans` 中严格使用 Markdown AST `image` token 作为图片 Counter 事实来源；链接参考定义（如 `[hidden]: /target "![图](...)"` 与 `[![图](...)]: /url`）、链接 URL（如 `[查看](http://![图](...))`）及 title 均无法产生有效图片 token；在 `_mask_non_semantic_markdown` 中全量屏蔽非渲染的链接参考定义行；对压缩结果检测 `_detect_pseudo_images_in_non_image_context`，一旦在非图片上下文包含未转义 `![...]` 伪语法立即判定完整性失败；对 URL 执行 `unquote` 规范化，确保含中文/括号/空格路径一致匹配。
+  3. **拒绝 Pandoc 属性隐藏与破坏**：实现 `_detect_disallowed_pandoc_attributes`，严格 fail-closed 拦截图片后附带的 Pandoc 属性（如 `![图](...){style="display:none"}`、`{style="visibility:hidden"}`、`{width=0}`、`{height=0}`、`{#id}` 等）；在剥离 LaTeX 数学公式和项目自定义文献引用 `{[^1] ...}` 的前提下，全量拦截标题、段落或 Span 中的通用 Pandoc 属性注入。
+  4. **单测与质量**：针对性单测（138 tests）全绿，全量后端单测 809 项全绿（`Ran 809 tests in 74.368s, OK (skipped=2)`），Ruff 静态检查保持全绿，`git diff --check` 0 项错误；Docker 镜像完成重新构建并容器内全绿通过（`Ran 52 tests in 3.687s, OK`）。
+  5. **发布状态**：单测与反例已全部通过，但尚未通过独立反例审计，且尚未运行真实大模型端到端烟雾任务与故障恢复演练，按规则尚不能宣称可发布。
+
+- [2026-08-22] **第十一轮 Writer AST 屏蔽顺序与 Inline HTML 收口（AST 屏蔽先行禁止 raw 脚注豁免、Raw Inline HTML 容器与属性严格 fail-closed 拦截已完成，待独立反例审计）**：
+  1. **AST 屏蔽顺序与脚注作用域硬化**：重构 `_mask_non_semantic_markdown`，无条件收集 MarkdownIt 解析的 `fence`、`html_block`、`code_block` 行区间；严禁 raw 行首 `[^N]:` 预先豁免非语义行；仅在确认不属于任何非语义行的行首识别真实脚注定义；缩进续行仅从 `code_block` 中受控恢复，落入 `fence` 或 `html_block` 的行严禁豁免；围栏与 HTML 注释中的脚注彻底被屏蔽为丢失事实。
+  2. **Raw Inline HTML 严格 fail-closed**：实现 `_detect_disallowed_raw_html`，基于 MarkdownIt inline AST 识别所有非注释原始 HTML 标签与容器（如 `<span hidden>`, `<span style="...">`, `<div>` 等）；压缩结果出现任何原始 HTML 容器直接判定不合规并抛出 `WRITER_SECTION_COMPRESSION_INTEGRITY_FAILED`；标准 HTML 注释 `<!-- ... -->` 继续作为非语义区域屏蔽。
+  3. **单测与质量**：针对性单测（130 tests）全绿，全量后端单测 801 项全绿（`Ran 801 tests in 70.264s, OK (skipped=2)`），Ruff 静态检查保持全绿，`git diff --check` 0 项错误；Docker 容器内定向单测全绿。
+  4. **发布状态**：单测与反例已全部通过，但尚未通过独立反例审计，且尚未运行真实大模型端到端烟雾任务与故障恢复演练，按规则尚不能宣称可发布。
+
+- [2026-08-21] **第十轮 Writer Markdown 语义解析收口（MarkdownIt 语法树识别缩进代码块/多级围栏/引用块代码、全量多行脚注定义提取与续行篡改拦截已完成，待独立反例审计）**：
+  1. **基于 MarkdownIt 的非语义区域识别**：引入 `markdown_it.MarkdownIt` 语法树解析器，完整识别 4 空格与 Tab 缩进代码块（`code_block`）、0~3 空格缩进的 ``` 与 ~~~ 围栏代码块（`fence`）、引用块（`blockquote`）及列表嵌套内的围栏代码块，以及 HTML 块级内容（`html_block`）；将其整行替换为等长空白，杜绝将证据藏匿在代码块中绕过门禁。
+  2. **全量多行脚注定义提取与篡改拦截**：实现 `_extract_full_footnotes` 与 `_strip_footnote_definitions`，完整捕获脚注定义首行、4 空格/Tab 缩进续行以及空行后的续段；任意续行的文字或数值篡改均改变 `Counter` 频次比对，确定性触发 `WRITER_SECTION_COMPRESSION_INTEGRITY_FAILED`；在正文数值提取前完整剥离全部脚注定义行，杜绝泄漏与误计。
+  3. **单测与质量**：针对性单测（125 tests）全绿，全量后端单测 796 项全绿（`Ran 796 tests in 70.119s, OK (skipped=2)`），Ruff 静态检查保持全绿，`git diff --check` 0 项错误。
+  4. **发布状态**：单测与反例已全部通过，但尚未通过独立反例审计，且尚未运行真实大模型端到端烟雾任务与故障恢复演练，按规则尚不能宣称可发布。
+
+- [2026-08-21] **第九轮 Writer 解析收口（已修复已知直接反例，但缩进代码上下文和多行脚注待第十轮收口）**：
+  1. **Markdown 非语义上下文屏蔽**：引入初步扫描器，屏蔽行首围栏代码块、行内代码与转义字符。
+  2. **双向 Counter 校验机制**：在 `_verify_compression_integrity` 中对引用标记、内联引用正文、脚注定义、Markdown 图片与全量数值实施双向 `Counter` 频次比对；拦截事实丢失与新增未经授权伪造事实。
+  3. **尖括号图片 URL 扫描修复**：重构图片目标解析器，引入引号状态机与平衡括号跟踪，确保包含圆括号的图片标题完整消费。
+
+- [2026-08-21] **第八轮最小范围收口（Writer 引用正文/脚注定义精确匹配、Markdown 图片目标平衡括号解析、Coder 成功恢复篡改统一抛出 ProtectedFileTamperError 已完成）**：
+  1. **Writer 引用正文与脚注定义精确校验**：废除子串包含（`c in comp_c`）判断，改为 `(idx, normalized_content)` 与 `(idx, normalized_def)` 的精确内容和 `Counter` 频次比对；原引用后追加伪造结论、原脚注后追加错误数据、重复引用频次减少等篡改均严格拦截并抛出 `WRITER_SECTION_COMPRESSION_INTEGRITY_FAILED`；仅压缩普通冗余文字的正当压缩用例正常通过。
+  2. **Writer Markdown 图片平衡括号解析器**：实现支持平衡括号、尖括号 `<...>`、转义字符与可选标题的图片目标解析器 `_extract_markdown_images_with_spans`；精确提取 `(alt_text, normalized_url)`，正确解析 `figures/result(1).png`、`figures/结果 图(1).png` 等包含括号和空格的文件名；修改扩展名（如 `.png` 改为 `.jpg`）严格拦截。
+  3. **Coder 篡改策略统一 fail-closed**：在 `_verify_and_restore_protected_files` 完成原子恢复后，若检测到受保护文件被篡改，立即抛出 `ProtectedFileTamperError`，在 `CoderAgent.run` 外层直接向上抛出；严格保证 `_chat` 仅调用 1 次，严禁进入第二轮模型调用或通用重试；恢复失败仍抛出 `ProtectedFileRecoveryError`。
+  4. **单测与质量**：针对性单测（113 tests）全绿，全量后端单测 784 项全绿（`Ran 784 tests in 67.955s, OK (skipped=2)`），Ruff 静态检查保持全绿，`git diff --check` 0 项错误；Docker 镜像完成重新构建（`docker compose up --build -d`）并容器内全绿通过。
+  5. **发布状态**：单测与反例已全部通过，但尚未运行修复后的真实端到端任务与演练，按规则尚不能宣称可发布。
+
+- [2026-08-21] **第七轮最终 fail-closed 反例收口（Coder 恢复失败与快照失败立即终止、Writer 单数字/引用/脚注/数值频次/图表标题完整性硬化、Manifest Windows ADS 与保留设备名严格拦截已完成）**：
+  1. **Coder 恢复失败与快照失败立即终止**：引入专用确定性异常类型 `ProtectedFileSnapshotError`、`ProtectedFileRecoveryError`、`ProtectedFileTamperError`；在 `_snapshot_protected_files` 中文件读取失败时抛出 `ProtectedFileSnapshotError`；在 `execute_code` 后受保护文件原子恢复失败时抛出 `ProtectedFileRecoveryError`；在 `CoderAgent.run` 外层通用异常处理前单独捕获上述异常并立即 re-raise 向上暴露，绝不执行退避重试或继续下一轮对话（`_chat` 严格仅调用 1 次）；严禁对损坏文件建立新快照。
+  2. **Writer 完整性与关键要素补强**：在 `_extract_protected_compression_tokens` 中剥离标题、公式、引用与图片后，使用 `Counter` 提取正文全部数值字面量（包含单数字 0、1、5、小数、百分数与科学计数法），精确校验数值重复频次；建立引用编号到内联引用正文及脚注定义内容的完整双向映射；对 Markdown 图片校验 `(alt_text, image_path)` 元组，图片标题或路径篡改均严格拦截；要素缺失或篡改统一抛出 `WRITER_SECTION_COMPRESSION_INTEGRITY_FAILED`。
+  3. **Manifest Windows 路径与 ADS 严格拦截**：在 `is_task_pristine_for_takeover` 中新增 Windows 文件系统反例防御：严格拦截包含 `:` 的路径（NTFS 备用数据流 ADS 如 `data.csv:payload`、`file.txt::$DATA` 及绝对盘符）；严格拦截 Windows 保留设备名（`CON`、`PRN`、`AUX`、`NUL`、`COM1`~`COM9`、`LPT1`~`LPT9`，大小写不敏感且含扩展名）；严格拦截路径片段中的尾随空格或句点（如 `data.csv `、`file.txt.`）；严格拦截 `<>"|?*` 等危险特殊字符；完整保留合法中文、空格、括号及嵌套相对路径。
+  4. **单测与质量**：针对性单测（107 tests）与全量后端单测全绿，Ruff 静态检查保持全绿。
+
+- [2026-08-21] **第六轮主要反例已修复，但恢复失败重试、ADS 和单数字/引用内容完整性仍待收口**：
+  1. **Manifest 接管反例门禁闭环**：在 `is_task_pristine_for_takeover` 中硬化所有安全反例校验：`input_manifest.json` 的 `task_id` 必须与 `checkpoint.task_id` 精确一致；`name` 与 `relative_path` 必须一致；严格拦截 Windows 盘符绝对路径（如 `C:/Windows/win.ini`）、UNC 路径（如 `\\server\share`）、POSIX 绝对路径（`/etc/passwd`）及 `..` 路径遍历；解析后的文件必须严格包含在 `work_dir.resolve()` 内；`size_bytes` 严格拒绝布尔类型（`True`/`False`）；严格拦截与 `_PRISTINE_FRAMEWORK_MANAGEMENT_FILES` 保留系统文件名重名的输入文件。
+  2. **Writer 压缩完整性反例门禁**：在 `writer_agent.py` 中引入受保护要素确定性提取器 `_extract_protected_compression_tokens` 与完整性校验器 `_verify_compression_integrity`；定向压缩后若返回空内容、清洗后变为空内容、或丢失任一标题、行内/独立数学公式、文献引用标记（`[^1]`）、Markdown 图片路径或关键数值事实，立即抛出确定性 `WRITER_SECTION_COMPRESSION_INTEGRITY_FAILED` 并返回缺失分类与数量摘要，禁止静默生成残缺正文。
+  3. **Coder 受保护状态恢复与快照失败保障**：在 `coder_agent.py` 中重构 `_snapshot_protected_files` 与 `_verify_and_restore_protected_files`；快照阶段若受保护文件存在但读取失败（如权限异常/OSError）立即 fail-closed 抛出 `PROTECTED_FILE_SNAPSHOT_FAILED`；原子恢复后重新计算 SHA-256 校验，若恢复失败或非法新建文件清理失败，明确记录 `PROTECTED_FILE_RECOVERY_FAILED`，绝不虚报“已恢复”或“已清理”；在 `CoderAgent.run` 中将执行异常与安全完整性检测解耦，安全与恢复异常具备最高暴露优先级，绝不被执行异常遮蔽。
+  4. **单测与质量**：Manifest 接管反例测试、Writer 压缩完整性反例测试、Coder 受保护文件快照与恢复反例测试全部一次性通过，全量单测与 Ruff 静态检查保持全绿。
+
+- [2026-08-21] **第五轮最小范围收口（管理文件常量统一与 Manifest 强校验、多文件并发篡改原子恢复、Writer 一次性长度返修与确定性章节授权已完成，待端到端验证）**：
+  1. **生产管理文件常量与不可歧义 Manifest 强校验**：定义 `_PRISTINE_FRAMEWORK_MANAGEMENT_FILES` 常量统一后端生产管理文件，彻底删除错误的 `request_snapshot.json`；集成测试通过真实的 `write_task_request_snapshot()`、`_write_modeler_plan()`、`_write_modeling_decision()` 证明生产目录可通过 pristine 检查；在 `is_task_pristine_for_takeover` 中对 `input_manifest.json` 进行严格字段校验（`schema_version`、非空 `task_id`、安全相对路径、无重复文件名、非负大小、64 位十六进制 SHA-256），未登记的 `results.csv`、`foo.py` 或嵌套子目录产物严格 409 拒绝接管。
+  2. **多文件并发篡改原子恢复**：重构 `_verify_and_restore_protected_files`，遍历全量受保护系统状态文件，收集所有违规项统一返回；恢复时采用同目录临时文件、`flush()`、`os.fsync()` 与 `os.replace()` 原子替换；执行中非法新建的文件全部执行 `unlink` 删除；单测覆盖同时篡改 `checkpoint.json`、`frozen_results.json` 并新建 `evidence_failure_budget.json` 的全部恢复与清理。定位为执行后完整性检测与恢复。
+  3. **Writer 一次性长度返修与确定性章节授权**：`sub_title` 仅接受工作流合法的章节键（`firstpage`/`abstract`、`repeatques`、`analysisques`、`modelassumption`、`symbol`、`eda`、`sensitivity_analysis`、`judge`）及 `quesN`/`quesN_preflight_repair` 格式，未知 `sub_title` 无论是否包含标题均严格 fail-closed；章节清洗后超过 12,000 字符时触发且仅触发一次无工具定向压缩（强制要求保留公式、引用、结论与标题），二次超限抛出确定性 `WRITER_SECTION_BUDGET_EXCEEDED` 熔断；重新提取/同步 `footnotes`，杜绝静默切片。
+  4. **单测与质量**：定向单测全绿，全量测试准备就绪。
+
+- [2026-08-21] **第四轮发布阻断定点修复（P0-1 ~ P0-4 定点修改完成，仍待收口验证与端到端演练）**：
+  1. **P0-1 显式精度协议全链路贯穿**：在 `AcceptanceMetric` 增加 Pydantic 跨字段合法性校验（整数指标 target 必须为数学整数且 precision=0；布尔指标 target 必须为 0/1 且 comparator 仅允许 eq/within；precision 与 abs_tol 冲突拒绝）。统一容差解析引擎 `_deduce_float_tolerance`，贯穿表格审计、Plan 约束绑定、约束规范化与证据清单固化，禁止 Coder 参数篡改放宽。
+  2. **P0-2 真实输入清单与哈希接管校验**：在 `POST /modeling` 与 `POST /example` 创建任务保存上传文件时，由后端持久化不可歧义的 `input_manifest.json`（记录文件名、相对路径、大小与 SHA-256 哈希）。接管前置检查 `is_task_pristine_for_takeover` 严格校验输入清单存在性、文件完整性与哈希一致性，对任何未登记的顶层或嵌套文件一律返回 409 拒绝接管。
+  3. **P0-3 受保护状态完整性覆盖新建、异常与原子恢复**：在 `coder_agent.py` 中重构 `_snapshot_protected_files` 与 `_verify_and_restore_protected_files`，快照同时记录文件存在与不存在状态；执行中非法新建的文件立即清理删除，被修改或删除的文件立即从内存备份原子恢复；将完整性复核置于解释器执行的严格 `try ... finally` 块中，覆盖正常、报错、超时与中断场景。定性为事后篡改检测与原子恢复，不使用“物理隔离”等夸大措辞。
+  4. **P0-4 确定性 Writer 标题所有权、附录去重与移除静默截断**：建立确定性的 `sub_title` $\to$ 章节标识符映射，`quesN` 一级标题仅允许五、及模型建立与求解（剔除含其他题号的标题），二级标题仅允许 `5.N`，未知 `sub_title` 严格 fail-closed 返回 False；在 `user_output.deduplicate_top_level_headings` 正则中支持附录标识（`附录 A` 与 `附录 B` 分离去重键完整保留，仅去重同名重复附录）；移除单章节末尾静默切片截断，确保 AI 声明、参考文献、公式与附录 100% 完整。
+  5. **测试与质量**：全量后端单测 757 项全部通过 (`skipped=2`)，Ruff 检查 `All checks passed!`，`git diff --check` 0 项错误。
+
+- [2026-08-21] **第三轮反例定点根因闭环与质量门禁硬化（7 项发布阻断问题定点闭环，待真实案例与端到端演练）**：
+  1. **显式精度协议与整数浮点容差推导**：在 `AcceptanceMetric` 引入 `metric_kind`、`precision`、`abs_tol`、`rel_tol`；重构 `execution_validation._deduce_float_tolerance`，对整数/离散指标数学上判定 `d == d.to_integral()` 并统一采用 `1e-6` 机器容差，阻断 `2200.0 vs 2200.05` 假通过，同时支持 `2366.6667 vs 2366.67` 合理四舍五入。
+  2. **接管前置检查输入白名单与递归扫描**：在 `modeling_router.is_task_pristine_for_takeover` 中区分合法上传数据文件（如 `input.csv`）与执行产物，并对 `work_dir` 及其所有子目录进行递归扫描，严格阻断任何包含执行产物（`res.json`、`support_materials/`、`*.csv`、`*_solver.py`、`*.ipynb`、sidecar）的任务（409 Conflict）。
+  3. **受保护系统状态与预算防篡改双重防御**：在 `coder_agent.py` 中引入 `_snapshot_protected_files` 与 `_verify_and_restore_protected_files`，在解释器执行代码前后对 `evidence_failure_budget.json` 等受控文件进行 SHA-256 签名校验与自动备份恢复；动态变量拼接或系统调用篡改立即被捕获并触发 `SecurityError` 严格 fail-closed。
+  4. **敏感性分析与基准指标叙述结构化隔离**：在 `problem_contract.audit_model_plan_semantics` 中将叙述检查范围严格限定在子任务自身的 `method` 与 `visualization` 中，隔离全局敏感性分析文本，允许“基准利润 2200，增加机器时间后利润 2366.67”等合法对照叙述。
+  5. **移除全局静默字符截断**：在 `user_output.get_result_to_save` 中移除 `max_full_paper_chars=70000` 盲目切片，确保 `## AI工具使用声明`、`## 参考文献` 与附录 100% 完整保留；篇幅控制前移至单章节写作预算及导出后真实 PDF 页数门禁。
+  6. **Writer 章节穿透修复与跨层级标题去重**：重构 `writer_agent._enforce_section_ownership_and_budget` 状态机，非法标题下属三级子标题一律保持跳过，仅在明确遇到当前章节授权标题时恢复；在 `user_output.deduplicate_top_level_headings` 中基于章节序号标识符去重，消除 `# 一、` 与 `## 一、` 跨层级重复。
+  7. **单测全绿与代码风格合规**：后端单元测试 `750 tests` 全部通过 (`skipped=2`)，Ruff 检查 `All checks passed!`，`git diff --check` 0 项错误。
+
+- [2026-08-20] **架构 P0 级深度硬化与修复（浮点协议统一、接管前置拦截、失败预算熔断、计划语义与叙述自洽审计、Writer章节所有权与标题去重已就绪，待端到端验证）**：
+  1. **收紧 `/codex-modeling` 权限与前置拦截**：在 `modeling_router.py` 增加并发排他任务锁 `_get_task_lock(task_id)` 与完备前置拦截；限制仅在未发生任何执行单元、变量快照、阶段求解（`completed_phases`）、返修尝试且磁盘无执行产物（`frozen_results.json` / `checkpoint.ipynb` / `variable_snapshot.pkl`）的 Modeler 失败状态下触发接管，彻底杜绝越权重置执行状态（返回 409 阻断）。
+  2. **ModelPlan 语义与跨字段自洽性审计**：在 `problem_contract.py` 实现 `audit_model_plan_semantics`，并在 `workflow._run_solution_flows` 中在 Coder 启动前复核逻辑自洽性（指标键唯一性、数值有限性、路径安全性、LP 强制 `optimization` profile 与数据表产物、方法叙述与指标 target 数值矛盾检测拦截）。
+  3. **持久化失败预算与 Fail-Closed 熔断**：在 `coder_agent.py` 中实现基于 `work_dir`、`task_id` 与 `plan_sha256` 绑定的持久化机制（`evidence_failure_budget.json`，原子写入与异常 fail-closed）；在 `CoderAgent.run` 启动时进行前置检查，达 3 次失败时立即抛出 `RuntimeError("PLAN_CONFLICT: ...")` 触发熔断保护，不发生任何额外模型调用。
+  4. **统一浮点验收协议**：在 `execution_validation.py` 中统一 `_evaluate_simple_comparison`、`_bind_plan_constraints_from_acceptance_table` 与 `_check_constraint` 的容差机制（`abs_tol=0.01`，`rel_tol=1e-3`），支持 `2366.6667` 与 `2366.67` 的合理四舍五入与浮点判定，移除等值约束必须 `tolerance=0` 的死板冲突。
+  5. **Writer 章节所有权硬门禁与标题去重**：在 `writer_agent.py` 的 `run()` 中实现每章节独立的 `chat_history` 作用域隔离与章节所有权/篇幅预算过滤（`_enforce_section_ownership_and_budget`），并在 `user_output.py` 拼接时进行顶层章节标题去重，阻断篇幅膨胀与串章。
+  6. **修正历史任务状态与支撑包记录**：校正 `AGENT_MEMORY.md` 中的历史任务状态（记录为执行证据通过、最终技术验收失败）与支撑包大小记录。
+  7. **任务自洽性校验加固**：在 `problem_contract.py` 中针对线性规划（LP）任务强制校验 `optimization` 诊断 profile、数据表产物与机检指标。
+
+
+- [2026-08-20] **Docker 真实建模案例执行验证与最终技术验收失败审计**（任务 ID `20260820-085502-db5133fe4175e3b94b58da0a18743cc6`）：
+  1. **任务与交付物实际状态（执行证据通过、最终技术验收失败，不可作为稳定版验收成功记录）**：
+     - `task_status.json`: `failed`；
+     - `final_acceptance_report.json`: `TECHNICAL_FAIL`；
+     - `execution_validation_report.json`: `PASS`（数学解 $Z=2200, Z'=2366.67$ 回代通过）；
+     - `paper_preflight_report.json`: `CONDITIONAL_PASS`；
+     - `pdf_visual_check.json`: `FAIL`（正文及附录共 128 页，超出正文篇幅限制且版式异常）；
+     - `submission_audit_report.json`: `FAIL`；
+     - 支撑材料生成 39 个文件（5.6 MB）。
+  2. **根因取证与技术审计结论**：
+     - **Modeler 逻辑/数学错误**：紧约束误判为松弛，敏感性分析指标前后冲突；
+     - **缺少计划级确定性自洽复核**：导致错误计划穿透到 Coder 阶段引发持续证据拒绝；
+     - **Coder 证据失败预算此前未持久化**：多次 resume 导致失败计数归零并放大耗时至 97 分钟；
+     - **浮点零容差硬拦截**：`tolerance=0` 将有效浮点近似判为失败；
+     - **Writer 跨章节历史未隔离**：对话历史持续复用导致重复生成标题与正文失控膨胀；
+     - **处理措施**：全面完成上述 7 项 P0 架构修复并在重新测试前完成闭环。
+
+
+- [2026-08-20] **PR-A 合规门禁硬化与选题工具（B-01～B-04 阻断项修复与对抗测试闭环）**：
+  1. **B-01 冻结结果等价性比对严格 fail-closed 与预检只读修复**：
+     - 重构 `result_integrity._extract_rows_from_source` 与 `_check_source_metrics_equivalence`：全面支持 CSV、Excel（跨 Sheet/行号追踪 `_sheet`, `_row`）与 JSON（全路径递归键值），对缺失指标、重命名（禁止标签覆盖显式 ID 冲突）、同表/跨表重复 ID、非有限数值（NaN/Inf）、越界路径及格式解析失败实行严格 fail-closed；
+     - 修复 `refresh_frozen_results_hashes`：移除 basename 兜底绑定，数据源缺失时判定 conflict 拒绝刷新；
+     - 彻底消除 `paper_postprocessor.prepare_paper_markdown` 中的 `refresh_frozen_results_hashes` 自动改写逻辑，确保预检流程对 `frozen_results.json` 保持 100% 只读。
+  2. **B-02 跨模态校验器时效性绑定与阻断门禁闭环**：
+     - `cross_modal_validator.audit_cross_modal` 正式记录 `markdown_sha256`、`code_source_hashes` 与 `generated_at` 时效性指纹；直接从磁盘读取原始字节并支持 CRLF/LF 双模态规范化匹配，彻底解决 Windows 本地导出哈希失配问题；
+     - 严格保证“被审计正文 = 被哈希正文”：显式传入内存正文与磁盘 `res.md` 不一致时判定 `FAIL` 阻断，并在 `paper_postprocessor.prepare_paper_markdown` 中先持久化后处理正文再执行预检与大纲分析，消除时序差异；
+     - `submission_audit._audit_cross_modal_integrity` 接入报告存在性与内容新鲜度校验：统一采用 `_safe_path`（基于 `os.path.commonpath` 严格拦截 `task_evil` 同前缀兄弟目录穿越）；对 `code_source_hashes` 缺失、非字典格式、已登记源码被删除/修改/越界、或 `frozen_results` 声明源码缺失一律严格阻断 FAIL；
+     - 统一跨模态校验状态机语义：阻断项返回 `status="FAIL", passed=False`；非阻断预警项返回 `status="WARN", passed=True`；完全干净返回 `status="PASS", passed=True`；消除 `PASS/False` 矛盾；
+     - 在 `paper_postprocessor.build_preflight_report` 中正式接入 `checks["cross_modal_audit"]` 阻断联动。
+  3. **B-03 提交物分层匿名与覆盖面硬化（真实 PDF 附件元数据覆盖闭环）**：
+     - `submission_audit._audit_submission_anonymity` 升级为分层审计：高置信泄露（邮箱、手机号、学号/身份证/队号字段+值、作者/学校字段+值、微信/QQ、DOCX/PDF 元数据 author/creator/company）严格拦截；低置信机构普通词与参考文献出版单位仅提示 warning；
+     - 精准匹配与前缀捕获：`HIGH_CONF_IDENTITY_RE` 支持前置中文（“本文作者：王强”、“论文指导教师：李教授”、“本队参赛队员：张三”），对冒号/下划线等明确分隔符赋值跳过谓词过滤（确保“院系：计算机学院”、“学校名称：研究院”、“班级：设计二班”精准拦截），仅在纯空白分隔时过滤自然语言谓词；
+     - 真实 PDF 内嵌附件元数据全覆盖与 Mojibake 严格修复：同时扫描 `embfile_names()` 附件键与 `embfile_info()` 的 `filename`、`ufilename`、`description`；实现严格 `_normalize_mojibake_candidates`（严格 Latin-1 恢复为 UTF-8，杜绝宽松 `errors='ignore'`），成功拦截 PyMuPDF 中文文件名解码异常；
+     - 抽象位置与绝对路径零泄露：附件 findings 的 part 统一规范为 `pdf:attachment:<idx>:(key|filename|ufilename|description)` 纯位置标识；DOCX/PDF/XML/manifest 解析异常均只记录 `type(exc).__name__`，绝不回显原始敏感值、附件名或本机绝对路径；
+     - 补齐覆盖面与脱敏回显：实现 DOCX `custom.xml` 扫描、PDF 页面批注/注释扫描、损坏 DOCX/PDF 严格 fail-closed；全面覆盖 candidate manifest schema 1.2 顶层 `submission_file`、`support_materials` 及 `files` 字典/列表嵌套结构；报告 JSON 统一采用不可逆脱敏掩码。
+  4. **B-04 选题器与通用提示词收口**：
+     - `topic_scorer.py` 严格输入校验：缺少评分字段或包含未知评分字段时确定性抛出 `ValueError`，非有限数分值/权重与非法权重严格报错；
+     - 提示词赛题残留泛化：剔除 Modeler / Coder / Writer 中特定历史赛题参数（如特定样本规模、特定空间算法类名、8 核经验数据、特定物理文献），收敛为通用单文件自包含（静态私有依赖检查通过）、温和并发与假设配对规范；
+     - 测试确定性重构：`test_architecture_upgrade.py` 消除读取历史 `20260817-...` 任务目录的非确定性行为，单元测试始终使用临时目录固定 fixture，真实任务核验改为显式可选集成测试。
+  5. **测试与静态检查全绿验收**：
+     - PR-A 67 项单元测试 100% PASS（`Ran 67 tests in 0.848s, OK (skipped=1)`）；
+     - 全量 722 项后端单元测试 100% PASS（`Ran 722 tests in 64.900s, OK (skipped=2)`）；
+     - Ruff 代码风格检查 100% PASS（`All checks passed!`）；
+     - Docker 容器内单元测试（`Ran 67 tests in 0.627s, OK (skipped=1)`）与 Docker Ruff 100% PASS；
+     - `git diff --check origin/main` 0 处空白或格式问题。
+
 - [2026-08-19] **Q4 统计证书学术命名精准化（分层两阶段 Monte Carlo）、95% 置信准入收尾与全模态闭环**（任务 ID `20260817-163525-f2715db564e250aec38490e2c03e8a68`）：
   1. **统计术语与最优性结论精准化（去 SPRT 虚名，立实测分层之实）**：
      - 最优解 $(531A, 0B)$ 在 $M=5000$ 密集采样确证下达到 $\hat{P} = 91.22\%, P_{\text{low}} = 0.9040 \ge 0.90$（总成本 $C^* = 7.882177\text{ 元}$）。

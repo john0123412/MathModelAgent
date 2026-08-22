@@ -506,6 +506,15 @@ class MathModelWorkFlow(WorkFlow):
         quality_repair: bool = False,
     ) -> str | None:
         """先完成全部代码求解与验证冻结，再允许论文手撰写。"""
+        # Coder 启动前复核 ModelPlan 语义自洽性与逻辑一致性
+        if modeler_response.model_plan is not None:
+            from app.schemas.problem_contract import audit_model_plan_semantics
+            plan_issues = audit_model_plan_semantics(modeler_response.model_plan)
+            if plan_issues:
+                issue_summary = "；".join(plan_issues)
+                logger.error(f"Coder 启动前 ModelPlan 语义审计未通过: {issue_summary}")
+                raise ValueError(f"ModelPlan 语义审计未通过，无法启动代码求解：{issue_summary}")
+
         solution_flows = flows.get_solution_flows(self.questions, modeler_response)
         if checkpoint_manager.repair_attempts_exhausted():
             raise RuntimeError(
@@ -518,6 +527,7 @@ class MathModelWorkFlow(WorkFlow):
             for flow_key in solution_flows
             if flow_key.startswith("ques") and flow_key != "ques_count"
         ]
+
         checkpoint = checkpoint_manager._checkpoint
         quality_repair = quality_repair or bool(
             checkpoint
@@ -593,17 +603,12 @@ class MathModelWorkFlow(WorkFlow):
                 prompt=coder_prompt, subtask_title=key, **coder_kwargs
             )
 
-            if (
-                not coder_response.execution_attempted
-                or not coder_response.execution_succeeded
-                or coder_response.execution_error_occurred
-            ):
-                if key not in required_subtasks:
-                    # EDA is allowed to execute code but never owns a formal
-                    # quesN evidence manifest.  It must still stop the task
-                    # when it fails, yet writing `required_subtasks=["eda"]`
-                    # creates a misleading report that later treats EDA as a
-                    # required formal question.
+            if key not in required_subtasks:
+                if (
+                    not coder_response.execution_attempted
+                    or not coder_response.execution_succeeded
+                    or coder_response.execution_error_occurred
+                ):
                     await redis_manager.publish_message(
                         self.task_id,
                         SystemMessage(
@@ -617,6 +622,11 @@ class MathModelWorkFlow(WorkFlow):
                     raise RuntimeError(
                         f"非正式代码阶段 {key} 未成功执行，无法进入正式问题"
                     )
+            elif (
+                not coder_response.execution_attempted
+                or not coder_response.execution_succeeded
+                or coder_response.execution_error_occurred
+            ):
 
                 # Requiring the per-question manifest keeps the persisted
                 # report aligned with the authoritative failed task status

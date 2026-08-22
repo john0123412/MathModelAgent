@@ -487,5 +487,61 @@ class TestModelingExportProfileDefaults(unittest.TestCase):
         self.assertEqual(form_default.default, ExportProfile.CUMCM2026)
 
 
+class TestUserOutputMandatorySectionsPreservation(unittest.TestCase):
+    """验证论文拼接绝对保留 AI 工具声明与参考文献列表，绝不静默截断。"""
+
+    def test_get_result_to_save_preserves_declaration_and_references(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            output = UserOutput(
+                work_dir=work_dir,
+                ques_count=1,
+                export_profile="cumcm2026",
+            )
+            required_keys = [
+                "firstPage",
+                "RepeatQues",
+                "analysisQues",
+                "modelAssumption",
+                "symbol",
+                "eda",
+                "ques1",
+                "sensitivity_analysis",
+                "judge",
+            ]
+            for key in required_keys:
+                output.set_res(
+                    key,
+                    WriterResponse(
+                        response_content=f"# {key}\n" + ("这是正文段落。\n\n" * 50),
+                        footnotes=[],
+                    ),
+                )
+            output.set_res(
+                "ques1",
+                WriterResponse(
+                    response_content="正文引用{[^1] 权威文献条目}",
+                    footnotes=[],
+                ),
+            )
+            full_res = output.get_result_to_save()
+            self.assertIn("## AI工具使用声明", full_res)
+            self.assertIn("## 参考文献", full_res)
+            self.assertIn("[1] 权威文献条目", full_res)
+
+    def test_deduplicate_top_level_headings_preserves_multiple_appendices(self):
+        from app.models.user_output import deduplicate_top_level_headings
+        paper_with_appendices = (
+            "# 附录 A 求解源程序\nimport numpy as np\n\n"
+            "# 附录 B 支撑材料说明\n数据说明文件\n\n"
+            "# 附录 A 求解源程序重复段\nimport numpy as np (dup)\n"
+        )
+        deduped = deduplicate_top_level_headings(paper_with_appendices)
+        self.assertIn("# 附录 A 求解源程序", deduped)
+        self.assertIn("import numpy as np", deduped)
+        self.assertIn("# 附录 B 支撑材料说明", deduped)
+        self.assertIn("数据说明文件", deduped)
+        self.assertNotIn("求解源程序重复段", deduped)
+
+
 if __name__ == "__main__":
     unittest.main()

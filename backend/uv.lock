@@ -153,6 +153,7 @@ dependencies = [
     { name = "ipykernel" },
     { name = "jupyter-client" },
     { name = "loguru" },
+    { name = "markdown-it-py" },
     { name = "matplotlib" },
     { name = "nbformat" },
     { name = "numpy" },
@@ -205,6 +206,7 @@ requires-dist = [
     { name = "ipykernel", specifier = ">=6.29.5" },
     { name = "jupyter-client", specifier = ">=8.6.3" },
     { name = "loguru", specifier = ">=0.7.3" },
+    { name = "markdown-it-py", specifier = ">=3.0.0" },
     { name = "matplotlib", specifier = ">=3.10.1" },
     { name = "nbformat", specifier = ">=5.10.4" },
     { name = "numpy", specifier = ">=2.2.5" },
@@ -229,7 +231,7 @@ requires-dist = [
     { name = "websocket", specifier = ">=0.2.1" },
     { name = "xgboost", marker = "extra == 'modeling-extensions'", specifier = ">=3.0.0" },
 ]
-provides-extras = ["modeling-extensions", "semantic-search"]
+provides-extras = ["semantic-search", "modeling-extensions"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "ruff", specifier = ">=0.9.10" }]

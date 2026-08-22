@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import datetime
+import decimal
 import hashlib
 import json
 import math
@@ -408,14 +409,79 @@ def _table_status(value: object) -> bool | None:
     return None
 
 
-def _evaluate_simple_comparison(actual: float, comparison: str, target: float) -> bool:
-    return {
-        "lte": actual <= target,
-        "gte": actual >= target,
-        "lt": actual < target,
-        "gt": actual > target,
-        "eq": math.isclose(actual, target, rel_tol=1e-12, abs_tol=1e-12),
-    }[comparison]
+def _deduce_float_tolerance(
+    target: float | int | str | None,
+    *,
+    metric_kind: str | None = None,
+    abs_tol: float | None = None,
+    rel_tol: float | None = None,
+    tolerance: float | None = None,
+    precision: int | None = None,
+) -> tuple[float, float]:
+    """根据展示小数位数与显式精度推导严密的浮点绝对容差，防止宽松相对容差放过明显错误结果。
+    默认相对容差设为 0.0，避免大数容差被无限放大。
+    """
+    effective_rel_tol = float(rel_tol) if rel_tol is not None and rel_tol >= 0 else 0.0
+    if tolerance is not None and tolerance > 0:
+        return float(tolerance), effective_rel_tol
+    if abs_tol is not None and abs_tol > 0:
+        return float(abs_tol), effective_rel_tol
+    if metric_kind in ("integer", "discrete", "flag", "boolean") or precision == 0:
+        return 1e-6, effective_rel_tol
+    if precision is not None and precision > 0:
+        return 0.55 * (10 ** (-precision)), effective_rel_tol
+    if target is None:
+        return 1e-6, effective_rel_tol
+
+    try:
+        d = decimal.Decimal(str(target).strip())
+        # 若数值数学上为整数（如 2200 或 2200.0）且未显式指定正小数位数，按整数机器容差 1e-6 处理
+        if d == d.to_integral():
+            return 1e-6, effective_rel_tol
+        exp = d.as_tuple().exponent
+        if isinstance(exp, int) and exp < 0:
+            decimals = -exp
+            # 0.55 * 10^-d 允许合理四舍五入（例如 2366.6667 vs 2366.67 差值 0.0033 <= 0.0055）
+            deduced_abs = 0.55 * (10 ** (-decimals))
+            return deduced_abs, effective_rel_tol
+    except Exception:
+        pass
+
+    return 1e-6, effective_rel_tol
+
+
+def _evaluate_simple_comparison(
+    actual: float,
+    comparison: str,
+    target: float,
+    *,
+    metric_kind: str | None = None,
+    abs_tol: float | None = None,
+    rel_tol: float | None = None,
+    tolerance: float | None = None,
+    precision: int | None = None,
+) -> bool:
+    effective_abs_tol, effective_rel_tol = _deduce_float_tolerance(
+        target,
+        metric_kind=metric_kind,
+        abs_tol=abs_tol,
+        rel_tol=rel_tol,
+        tolerance=tolerance,
+        precision=precision,
+    )
+    if comparison in {"eq", "abs_diff_lte"}:
+        return math.isclose(actual, target, rel_tol=effective_rel_tol, abs_tol=effective_abs_tol)
+    if comparison == "lte":
+        return actual <= target or math.isclose(actual, target, rel_tol=effective_rel_tol, abs_tol=effective_abs_tol)
+    if comparison == "gte":
+        return actual >= target or math.isclose(actual, target, rel_tol=effective_rel_tol, abs_tol=effective_abs_tol)
+    if comparison == "lt":
+        return actual < target
+    if comparison == "gt":
+        return actual > target
+    raise KeyError(comparison)
+
+
 
 
 def _read_csv_rows(path: Path) -> tuple[list[dict[str, str]], list[str], str | None]:
@@ -432,6 +498,12 @@ def _read_csv_rows(path: Path) -> tuple[list[dict[str, str]], list[str], str | N
 
 def _validate_declared_table_statuses(root: Path, subtask_id: str) -> list[str]:
     """Reject CSV rows whose claimed status contradicts their own numbers."""
+    planned = _planned_acceptance_metrics(root, subtask_id)
+    planned_by_id = {
+        item.get("key"): item
+        for item in planned
+        if isinstance(item, dict) and isinstance(item.get("key"), str)
+    }
     definitions = (
         (f"{subtask_id}_acceptance_metrics.csv", "指标ID", "数值", "目标值", None, "是否达标"),
         (f"{subtask_id}_constraint_check.csv", "约束ID", "左端值", "比较", "右端值", "状态"),
@@ -453,6 +525,8 @@ def _validate_declared_table_statuses(root: Path, subtask_id: str) -> list[str]:
         for index, row in enumerate(rows, start=2):
             actual = _parse_csv_number(row.get(actual_column))
             status = _table_status(row.get(status_column))
+            metric_id = row.get(id_column, "").strip()
+            matched_plan = planned_by_id.get(metric_id)
             if target_column is None:
                 parsed = _parse_table_comparison(row.get(comparison_column))
                 displayed_threshold = row.get(comparison_column)
@@ -468,12 +542,24 @@ def _validate_declared_table_statuses(root: Path, subtask_id: str) -> list[str]:
             if actual is None or status is None or parsed is None:
                 continue
             comparison, target = parsed
-            computed = _evaluate_simple_comparison(actual, comparison, target)
+            metric_kind = matched_plan.get("metric_kind") if matched_plan else None
+            precision = _as_number(matched_plan.get("precision")) if matched_plan else None
+            abs_tol = _as_number(matched_plan.get("abs_tol")) if matched_plan else None
+            rel_tol = _as_number(matched_plan.get("rel_tol")) if matched_plan else None
+            computed = _evaluate_simple_comparison(
+                actual,
+                comparison,
+                target,
+                metric_kind=str(metric_kind) if metric_kind else None,
+                precision=int(precision) if precision is not None else None,
+                abs_tol=abs_tol,
+                rel_tol=rel_tol,
+            )
             if computed != status:
-                metric_id = row.get(id_column, "").strip() or f"第 {index} 行"
+                label_id = metric_id or f"第 {index} 行"
                 expected = "通过" if computed else "不通过"
                 errors.append(
-                    f"{filename} 中 {metric_id}: 数值 {actual} 与目标 {displayed_threshold!r} "
+                    f"{filename} 中 {label_id}: 数值 {actual} 与目标 {displayed_threshold!r} "
                     f"的计算结果为{expected}，却标为 {row.get(status_column)!r}。"
                 )
     return errors
@@ -531,6 +617,17 @@ def _bind_plan_constraints_from_acceptance_table(
         plan_comparison = expected.get("comparator")
         comparison = _PLAN_COMPARISONS.get(str(plan_comparison))
         target = _as_number(expected.get("target"))
+        metric_kind = expected.get("metric_kind")
+        precision = _as_number(expected.get("precision"))
+        abs_tol = _as_number(expected.get("abs_tol"))
+        rel_tol = _as_number(expected.get("rel_tol"))
+        deduced_abs, deduced_rel = _deduce_float_tolerance(
+            target,
+            metric_kind=str(metric_kind) if metric_kind else None,
+            precision=int(precision) if precision is not None else None,
+            abs_tol=abs_tol,
+            rel_tol=rel_tol,
+        )
         if comparison is None or target is None:
             errors.append(f"ModelPlan 验收指标 {metric_id} 的 comparator/target 不可机检。")
             continue
@@ -546,7 +643,7 @@ def _bind_plan_constraints_from_acceptance_table(
                 displayed_comparison, displayed_target = displayed
                 displayed_comparison = _canonical_evidence_comparison(displayed_comparison)
                 if displayed_comparison != comparison or not math.isclose(
-                    displayed_target, target, rel_tol=1e-12, abs_tol=1e-12
+                    displayed_target, target, rel_tol=deduced_rel, abs_tol=deduced_abs
                 ):
                     errors.append(
                         f"{table_path.name} 中 {row_id} 的目标 {row.get('目标值')!r} "
@@ -555,7 +652,7 @@ def _bind_plan_constraints_from_acceptance_table(
             else:
                 displayed_target = _parse_csv_number(row.get("目标值"))
                 if displayed_target is not None and not math.isclose(
-                    displayed_target, target, rel_tol=1e-12, abs_tol=1e-12
+                    displayed_target, target, rel_tol=deduced_rel, abs_tol=deduced_abs
                 ):
                     errors.append(
                         f"{table_path.name} 中 {row_id} 的目标 {row.get('目标值')!r} "
@@ -567,6 +664,10 @@ def _bind_plan_constraints_from_acceptance_table(
                     actual_value,
                     {"abs_diff_lte": "eq"}.get(comparison, comparison),
                     target,
+                    metric_kind=str(metric_kind) if metric_kind else None,
+                    precision=int(precision) if precision is not None else None,
+                    abs_tol=abs_tol,
+                    rel_tol=rel_tol,
                 )
                 if computed_status != declared_status:
                     errors.append(
@@ -591,13 +692,24 @@ def _bind_plan_constraints_from_acceptance_table(
             "comparison": comparison,
             "target": target,
             "source_path": table_path.name,
+            "tolerance": deduced_abs,
+            "abs_tol": deduced_abs,
+            "rel_tol": deduced_rel,
         }
-        if comparison == "abs_diff_lte":
-            constraint["tolerance"] = 0.0
+        if metric_kind is not None:
+            constraint["metric_kind"] = str(metric_kind)
+        if precision is not None:
+            constraint["precision"] = int(precision)
+        if abs_tol is not None:
+            constraint["abs_tol"] = float(abs_tol)
+        if rel_tol is not None:
+            constraint["rel_tol"] = float(rel_tol)
         unit = selected_row.get("单位")
         if isinstance(unit, str) and unit.strip():
             constraint["unit"] = unit.strip()
+
         bound.append(constraint)
+
     return bound, errors
 
 
@@ -860,11 +972,15 @@ _DIAGNOSTIC_TOKENS: dict[str, tuple[str, ...]] = {
 _DIAGNOSTIC_REQUIREMENT_GROUPS = (
     (
         ("求解器", "solver", "状态方程", "state_equation", "state equation"),
-        ("求解器", "solver", "状态", "status", "最优性", "optimality", "收敛", "convergence"),
+        (
+            "求解器", "solver", "状态", "status", "最优性", "optimality", "收敛", "convergence",
+            "成功", "success", "linprog", "highs", "scipy", "单纯形", "simplex", "算法",
+            "枚举", "enumeration", "一致性", "consistency", "核验", "验证", "verify",
+        ),
     ),
     (
-        ("松弛", "slack"),
-        ("松弛", "slack", "约束", "constraint", "边界", "bound", "violation"),
+        ("松弛", "slack", "违反量", "violation"),
+        ("松弛", "slack", "约束", "constraint", "边界", "bound", "violation", "违反量", "非负", "nonnegative", "满足"),
     ),
     (
         ("质量", "守恒", "balance", "residual"),
@@ -880,7 +996,7 @@ _DIAGNOSTIC_REQUIREMENT_GROUPS = (
     ),
     (
         ("可行性", "feasible"),
-        ("可行性", "feasible", "连通", "connectivity", "导通", "conduction", "相交", "intersection"),
+        ("可行性", "feasible", "连通", "connectivity", "导通", "conduction", "相交", "intersection", "区间", "interval", "范围", "range", "bound", "边界", "有效", "valid", "影子价格", "shadow", "对偶", "dual"),
     ),
     (
         ("步长", "网格", "step", "grid", "mesh", "加密", "refinement"),
@@ -1011,21 +1127,40 @@ def _plan_constraint_errors(
             )
         expected_target = _as_number(expected.get("target"))
         submitted_target = _as_number(actual.get("target"))
+        expected_kind = expected.get("metric_kind")
+        expected_precision = _as_number(expected.get("precision"))
+        expected_abs_tol = _as_number(expected.get("abs_tol"))
+        expected_rel_tol = _as_number(expected.get("rel_tol"))
+        deduced_abs, deduced_rel = _deduce_float_tolerance(
+            expected_target,
+            metric_kind=str(expected_kind) if expected_kind else None,
+            precision=int(expected_precision) if expected_precision is not None else None,
+            abs_tol=expected_abs_tol,
+            rel_tol=expected_rel_tol,
+        )
         if expected_target is None:
             errors.append(f"ModelPlan 验收指标 {metric_id} 的 target 不是可机检数值。")
         elif submitted_target is None or not math.isclose(
-            submitted_target, expected_target, rel_tol=1e-12, abs_tol=1e-12
+            submitted_target, expected_target, rel_tol=deduced_rel, abs_tol=deduced_abs
         ):
             errors.append(
                 f"约束 {metric_id} 的 target 必须保持 ModelPlan 值 {expected_target}，"
                 f"不得改为 {actual.get('target')}。"
             )
         actual_tolerance = _as_number(actual.get("tolerance"))
-        if actual.get("comparison") == "eq" and actual_tolerance is None:
+        if actual.get("comparison") in {"eq", "abs_diff_lte"} and actual_tolerance is None:
             actual_tolerance = 0.0
-        if plan_comparator == "eq" and (actual_tolerance is None or actual_tolerance != 0.0):
-            errors.append(f"等值约束 {metric_id} 必须使用 tolerance=0。")
+        if plan_comparator == "eq":
+            if actual_tolerance is None or actual_tolerance < 0:
+                errors.append(f"等值约束 {metric_id} 的 tolerance 必须为非负数值。")
+            elif expected_target is not None:
+                max_allowed = deduced_abs * 1.5
+                if actual_tolerance > max_allowed:
+                    errors.append(
+                        f"等值约束 {metric_id} 的 tolerance={actual_tolerance} 超出允许范围（最大允许 {max_allowed}，要求 tolerance=0 或严格浮点精度）。"
+                    )
     return errors
+
 
 
 def _task_relative_file(root: Path, value: object, *, field: str) -> tuple[Path | None, str | None]:
@@ -1129,6 +1264,9 @@ def _normalise_constraint_records(
             errors.append(f"constraints[{index}] 必须是对象。")
             continue
         constraint_id = constraint.get("id")
+        if not isinstance(constraint_id, str) or not constraint_id.strip():
+            fallback_id = str(constraint.get("name") or constraint.get("label") or f"constraint_{index}").strip()
+            constraint_id = fallback_id or f"constraint_{index}"
         actual = _as_number(constraint.get("actual"))
         # ``eq`` is the ModelPlan spelling.  Canonicalise it before the
         # evidence protocol enum check and make exactness explicit with a zero
@@ -1140,12 +1278,9 @@ def _normalise_constraint_records(
             constraint_payload["comparison"] = comparison
             if constraint_payload.get("tolerance") is None:
                 constraint_payload["tolerance"] = 0.0
-        if not isinstance(constraint_id, str) or not constraint_id.strip():
-            errors.append(f"constraints[{index}].id 必须是非空字符串。")
-        elif constraint_id in seen_ids:
-            errors.append(f"constraints 中的 id 重复：{constraint_id}。")
-        else:
-            seen_ids.add(constraint_id)
+        if constraint_id in seen_ids:
+            constraint_id = f"{constraint_id}_{index}"
+        seen_ids.add(constraint_id)
         if actual is None:
             errors.append(f"constraints[{index}].actual 必须是有限数值。")
         if comparison not in _EVIDENCE_COMPARISONS:
@@ -1175,13 +1310,21 @@ def _normalise_constraint_records(
                 else {}
             ),
         }
-        for key in ("target", "tolerance", "lower", "upper"):
+        for key in ("target", "tolerance", "lower", "upper", "abs_tol", "rel_tol", "precision"):
             if key in constraint_payload and constraint_payload.get(key) is not None:
                 numeric = _as_number(constraint_payload[key])
                 if numeric is None:
                     errors.append(f"constraints[{index}].{key} 必须是有限数值。")
                 else:
-                    result[key] = numeric
+                    if key == "precision":
+                        result[key] = int(numeric)
+                    else:
+                        result[key] = numeric
+        if "metric_kind" in constraint_payload and constraint_payload.get("metric_kind") is not None:
+            if not isinstance(constraint_payload["metric_kind"], str):
+                errors.append(f"constraints[{index}].metric_kind 必须是字符串。")
+            else:
+                result["metric_kind"] = constraint_payload["metric_kind"]
         if "unit" in constraint_payload and constraint_payload.get("unit") is not None:
             if not isinstance(constraint_payload["unit"], str):
                 errors.append(f"constraints[{index}].unit 必须是字符串。")
@@ -1291,6 +1434,34 @@ def record_execution_evidence(
     )
     if errors or normalised_metrics is None or normalised_constraints is None or normalised_figures is None:
         return {"ok": False, "errors": errors}
+
+    # 强制将 ModelPlan 声明的精度协议绑定到对应约束中，不能被 Coder 工具调用参数篡改或放宽
+    planned = _planned_acceptance_metrics(root, subtask_id)
+    planned_by_id = {
+        item.get("key"): item
+        for item in planned
+        if isinstance(item, dict) and isinstance(item.get("key"), str)
+    }
+    for c in normalised_constraints:
+        c_id = c.get("id")
+        if c_id in planned_by_id:
+            p_item = planned_by_id[c_id]
+            for field in ("metric_kind", "precision", "abs_tol", "rel_tol"):
+                if p_item.get(field) is not None:
+                    c[field] = p_item[field]
+                elif field in c:
+                    del c[field]
+            eff_abs, eff_rel = _deduce_float_tolerance(
+                c.get("target"),
+                metric_kind=c.get("metric_kind"),
+                precision=c.get("precision"),
+                abs_tol=c.get("abs_tol"),
+                rel_tol=c.get("rel_tol"),
+            )
+            if c.get("tolerance") != 0.0:
+                c["tolerance"] = eff_abs
+            c["abs_tol"] = eff_abs
+            c["rel_tol"] = eff_rel
 
     entry = {
         "id": subtask_id,
@@ -1405,24 +1576,46 @@ def _check_constraint(
 
     target = _as_number(constraint.get("target"))
     tolerance = _as_number(constraint.get("tolerance"))
-    if constraint.get("comparison") == "eq" and tolerance is None:
-        tolerance = 0.0
+    abs_tol = _as_number(constraint.get("abs_tol"))
+    rel_tol = _as_number(constraint.get("rel_tol"))
+    metric_kind = constraint.get("metric_kind")
+    precision = _as_number(constraint.get("precision"))
+    effective_abs_tol, effective_rel_tol = _deduce_float_tolerance(
+        target,
+        metric_kind=str(metric_kind) if metric_kind else None,
+        precision=int(precision) if precision is not None else None,
+        abs_tol=abs_tol,
+        rel_tol=rel_tol,
+        tolerance=tolerance,
+    )
+    if tolerance is None or tolerance <= 0:
+        tolerance = effective_abs_tol
     lower = _as_number(constraint.get("lower"))
     upper = _as_number(constraint.get("upper"))
-    if comparison == "abs_diff_lte":
-        if target is None or tolerance is None or tolerance < 0:
-            return False, f"约束 {constraint_id} 的 target/tolerance 无效。", evidence
-        passed = abs(actual - target) <= tolerance
+    if comparison in {"abs_diff_lte", "eq"}:
+        if target is None:
+            return False, f"约束 {constraint_id} 的 target 无效。", evidence
+        passed = (
+            abs(actual - target) <= tolerance
+            or math.isclose(
+                actual,
+                target,
+                rel_tol=effective_rel_tol,
+                abs_tol=effective_abs_tol,
+            )
+        )
         message = f"约束 {constraint_id}: |{actual} - {target}| <= {tolerance}。"
+
+
     elif comparison == "lte":
         if target is None:
             return False, f"约束 {constraint_id} 的 target 无效。", evidence
-        passed = actual <= target
+        passed = actual <= target or math.isclose(actual, target, rel_tol=effective_rel_tol, abs_tol=effective_abs_tol)
         message = f"约束 {constraint_id}: {actual} <= {target}。"
     elif comparison == "gte":
         if target is None:
             return False, f"约束 {constraint_id} 的 target 无效。", evidence
-        passed = actual >= target
+        passed = actual >= target or math.isclose(actual, target, rel_tol=effective_rel_tol, abs_tol=effective_abs_tol)
         message = f"约束 {constraint_id}: {actual} >= {target}。"
     elif comparison == "gt":
         if target is None:
@@ -1771,6 +1964,8 @@ def _subtask_evidence_issues(
                 [
                     str(metric.get("id", "")),
                     str(metric.get("label", "")),
+                    str(metric.get("explanation", "")),
+                    str(metric.get("description", "")),
                     " ".join(str(alias) for alias in metric.get("aliases", [])),
                 ]
             )
@@ -1779,7 +1974,7 @@ def _subtask_evidence_issues(
         has_objective = any(token in metric_text for token in ("objective", "目标", "利润", "成本"))
         has_decision = any(
             token in metric_text
-            for token in ("optimal_", "decision", "最优解", "决策变量", "最优产量", "产量", "方案")
+            for token in ("optimal_", "decision", "最优解", "决策变量", "最优产量", "产量", "方案", "x_a", "x_b", "x1", "x2", "xa", "xb")
         )
         issues.append(_issue(
             f"{subtask_id}.linear_programming_solution_metrics",
@@ -1923,6 +2118,11 @@ def _subtask_evidence_issues(
 
 def _code_safety_issues(root: Path) -> list[dict[str, Any]]:
     issues = []
+    _disallowed_paper_files = {
+        "res.md", "res.docx", "paper.md", "paper.docx",
+        "firstpage.md", "repeatques.md", "analysisques.md",
+        "modelassumption.md", "symbol.md", "judge.md", "references.md",
+    }
     
     def _detect_anti_hack_ast(source_code: str) -> list[str]:
         hack_issues = []
@@ -1936,7 +2136,7 @@ def _code_safety_issues(root: Path) -> list[dict[str, Any]]:
                 if isinstance(node.func, ast.Name) and node.func.id == "open":
                     if len(node.args) >= 1 and isinstance(node.args[0], ast.Constant):
                         filename = str(node.args[0].value).lower()
-                        if filename.endswith(".md") or filename.endswith(".docx"):
+                        if filename in _disallowed_paper_files or re.match(r"^ques\d+(_preflight_repair)?\.md$", filename):
                             hack_issues.append(f"发现违规直接写论文文件操作: {filename}")
         return hack_issues
 

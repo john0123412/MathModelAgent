@@ -28,6 +28,11 @@
 > 这只影响论文中的代码生成图表，不改变 PDF 正文的 XeLaTeX 字体门禁；正式提交仍须按上文检查
 > PDF 实际命中的字体。
 
+> **Writer 篇幅控制与压缩完整性门禁**：Writer 单章节篇幅预算为 12,000 字符。清洗后超过 12,000 字符时
+> 系统会自动触发且仅触发一次无工具定向压缩，并在压缩后严格机检标题、数学公式、文献引用与脚注定义、图表引用与说明、
+> 以及全量数值事实（含单数字 0/1/5 及重复频次）的完整性；若返回空或丢失关键要素抛出 `WRITER_SECTION_COMPRESSION_INTEGRITY_FAILED`；
+> 若二次仍超限将触发 `WRITER_SECTION_BUDGET_EXCEEDED` 明确失败中断，坚决不使用任何静默切片截断。
+
 ## 当前推荐流程
 
 Docker 后端默认负责完成建模主流程，并生成：
@@ -36,7 +41,12 @@ Docker 后端默认负责完成建模主流程，并生成：
 - `res.json`
 - `res.docx`
 - `candidate_manifest.json`
-- `paper_preflight_report.json/md`
+- `frozen_results.json`（数值事实唯一来源，预检保持纯只读，等价性核验 fail-closed）
+- `cross_modal_audit.json`（跨模态对齐质检：代码-文本对齐、最优性证书一致性、LaTeX 完整性与私有依赖审计）
+- `paper_preflight_report.json/md`（包含结构完整性、正文事实一致性与跨模态阻断检查）
+- `pdf_visual_check.json`（PDF 全页视觉与边距溢出检查）
+- `submission_audit_report.json/md`（提交物合规与分层匿名审计：PDF/DOCX 高置信阻断与低置信预警、文档元数据/注释/附件扫描）
+- `final_acceptance_report.json`（最终技术验收报告）
 - `paper_outline.json`
 - `figure_usage.json`
 - `claim_trace.json/md`

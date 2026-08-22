@@ -1,5 +1,6 @@
 """Unit tests for Architecture Upgrade Proposal components (FactStore, CrossModalValidator, AbstractBudgetEngine, and Prompts)."""
 
+import json
 import os
 import tempfile
 import unittest
@@ -177,22 +178,24 @@ df2.to_csv("ques3_results.csv")
     def test_modeler_prompt_contains_rigor_and_literature(self):
         self.assertIn("Wilson 95% 置信区间", MODELER_PROMPT)
         self.assertIn("一维上确界前沿排除证明算法", MODELER_PROMPT)
-        self.assertIn("Balberg 排除体积理论", MODELER_PROMPT)
-        self.assertIn("Lorenz & Ziff", MODELER_PROMPT)
-        self.assertIn("Spherocylinder", MODELER_PROMPT)
+        self.assertIn("模型选型锦标赛与备选方案证伪", MODELER_PROMPT)
+        self.assertIn("假设与解释标准化规范", MODELER_PROMPT)
+        self.assertIn("可靠性约束优化模型", MODELER_PROMPT)
 
     def test_coder_prompt_contains_advanced_templates(self):
         self.assertIn("Composite Figures", CODER_PROMPT)
         self.assertIn("Mechanism Diagrams", CODER_PROMPT)
         self.assertIn("wilson_score_interval", CODER_PROMPT)
-        self.assertIn("ques4_global_frontier_certificate.csv", CODER_PROMPT)
+        self.assertIn("SELF-CONTAINED SOLVER PROTOCOL", CODER_PROMPT)
+        self.assertIn("GENTLE CONCURRENCY PROTOCOL", CODER_PROMPT)
 
     def test_writer_prompt_contains_consistency_and_literature(self):
         writer_prompt = get_writer_prompt()
         self.assertIn("复合多子图解析", writer_prompt)
         self.assertIn("机理图/算法流程图解读", writer_prompt)
         self.assertIn("统计标准统一性", writer_prompt)
-        self.assertIn("Balberg 排除体积理论", writer_prompt)
+        self.assertIn("关键词数模术语硬性规范", writer_prompt)
+        self.assertIn("可靠性约束优化模型", writer_prompt)
 
     def test_audit_latex_formatting_integrity(self):
         from app.tools.cross_modal_validator import audit_latex_formatting_integrity
@@ -223,48 +226,478 @@ df2.to_csv("ques3_results.csv")
         self.assertGreater(res_code_corrupt["issue_count"], 0)
         self.assertEqual(res_code_corrupt["issues"][0]["type"], "corrupted_latex_in_code")
 
-    def test_audit_on_real_artifacts(self):
-        """对真实任务目录下的 res.md 与 master_solver.py 进行真实对齐与门禁核验。"""
+    def test_audit_on_fixture_artifacts(self):
+        """默认单元测试：始终使用临时目录与固定 fixture，确保 CI 与本地确定性一致。"""
         from app.tools.cross_modal_validator import (
             audit_cross_modal,
             audit_latex_formatting_integrity,
         )
 
-        real_work_dir = os.path.abspath(
-            os.path.join(
-                os.path.dirname(__file__),
-                "../../project/work_dir/20260817-163525-f2715db564e250aec38490e2c03e8a68",
-            )
+        res_md_fixture = (
+            "# 题目摘要\n\n## 摘要\n本文基于微构体模型建立可靠性约束优化模型。\n\n"
+            "关键词：混合整数规划；自适应抽样；灵敏度分析\n\n"
+            "# 五、模型的建立与求解\n"
+            "通过计算生成了全域排除证书 `ques4_global_frontier_certificate.csv`。\n\n"
+            "# 附录\n## 附录B 源程序代码\n"
+            "```python\n# 独立求解器\nimport numpy as np\nimport pandas as pd\n"
+            "df = pd.DataFrame({'N_A': [531]})\ndf.to_csv('ques4_global_frontier_certificate.csv')\n```\n"
         )
-        if not os.path.isdir(real_work_dir):
-            return
+        with open(os.path.join(self.work_dir, "res.md"), "w", encoding="utf-8") as f:
+            f.write(res_md_fixture)
+        with open(os.path.join(self.work_dir, "master_solver.py"), "w", encoding="utf-8") as f:
+            f.write("import numpy as np\nimport pandas as pd\n")
+        with open(os.path.join(self.work_dir, "ques4_global_frontier_certificate.csv"), "w", encoding="utf-8") as f:
+            f.write("N_A,status,total_cost_yuan,wilson_low\n500,EXCLUDED,7.5,0.85\n")
 
-        res_md_path = os.path.join(real_work_dir, "res.md")
-        if os.path.isfile(res_md_path):
-            with open(res_md_path, encoding="utf-8", errors="replace") as f:
-                md_content = f.read()
+        res_md_path = os.path.join(self.work_dir, "res.md")
+        with open(res_md_path, encoding="utf-8", errors="replace") as f:
+            md_content = f.read()
 
-            # 1. 真实 res.md 的 LaTeX 与代码块格式门禁
-            latex_res = audit_latex_formatting_integrity(md_content)
-            self.assertIn("passed", latex_res)
-            self.assertIn("issues", latex_res)
-            self.assertTrue(
-                latex_res["passed"],
-                f"真实 res.md 未通过 LaTeX 完整性审计: {latex_res['issues']}",
-            )
+        # 1. LaTeX 与代码块格式门禁
+        latex_res = audit_latex_formatting_integrity(md_content)
+        self.assertIn("passed", latex_res)
+        self.assertTrue(
+            latex_res["passed"],
+            f"res.md 未通过 LaTeX 完整性审计: {latex_res.get('issues')}",
+        )
 
-            # 2. 真实工作目录跨模态完整审计
-            cross_res = audit_cross_modal(real_work_dir)
-            self.assertIn("status", cross_res)
-            self.assertIn("passed", cross_res)
-            self.assertEqual(
-                cross_res["status"],
-                "PASS",
-                f"真实任务跨模态审计未通过: {cross_res}",
-            )
+        # 2. 跨模态完整审计
+        cross_res = audit_cross_modal(self.work_dir)
+        self.assertIn("status", cross_res)
+        self.assertTrue(
+            cross_res["passed"],
+            f"跨模态审计未通过: {cross_res}",
+        )
+        self.assertIn(
+            cross_res["status"],
+            ("PASS", "WARN"),
+            f"跨模态审计状态异常: {cross_res}",
+        )
+
+    def test_audit_on_explicit_integration_task_if_configured(self):
+        """显式集成测试：仅当环境变量提供 MMA_INTEGRATION_TASK_DIR 且路径存在时才执行真实任务目录核验。"""
+        from app.tools.cross_modal_validator import (
+            audit_cross_modal,
+            audit_latex_formatting_integrity,
+        )
+
+        integration_task_dir = os.environ.get("MMA_INTEGRATION_TASK_DIR")
+        if not integration_task_dir or not os.path.isdir(integration_task_dir):
+            self.skipTest("未配置 MMA_INTEGRATION_TASK_DIR，跳过真实任务集成测试")
+
+        res_md_path = os.path.join(integration_task_dir, "res.md")
+        if not os.path.isfile(res_md_path):
+            self.skipTest("指定任务目录下不存在 res.md，跳过真实任务集成测试")
+
+        with open(res_md_path, encoding="utf-8", errors="replace") as f:
+            md_content = f.read()
+
+        latex_res = audit_latex_formatting_integrity(md_content)
+        self.assertTrue(latex_res["passed"])
+
+        cross_res = audit_cross_modal(integration_task_dir)
+        self.assertTrue(cross_res["passed"])
+
+    def test_audit_code_self_containment(self):
+        from app.tools.cross_modal_validator import audit_code_self_containment
+
+        # 1. 干净自包含代码（PASS）
+        clean_code = """
+import numpy as np
+import pandas as pd
+
+class UniformGridBroadphase3DPBC:
+    def __init__(self, box_size, cell_size):
+        self.box_size = box_size
+"""
+        res_clean = audit_code_self_containment(code_sources=[{"name": "master_solver.py", "code": clean_code}])
+        self.assertTrue(res_clean["passed"])
+        self.assertEqual(res_clean["status"], "PASS")
+        self.assertEqual(res_clean["issue_count"], 0)
+
+        # 2. 包含仓库私有导入（FAIL）
+        corrupt_code_import = """
+import numpy as np
+from app.tools.geometric_lib import UniformGridBroadphase3DPBC
+"""
+        res_import = audit_code_self_containment(code_sources=[{"name": "solver.py", "code": corrupt_code_import}])
+        self.assertFalse(res_import["passed"])
+        self.assertEqual(res_import["status"], "FAIL")
+        self.assertGreaterEqual(res_import["issue_count"], 1)
+        self.assertIn("app.tools.geometric_lib", str(res_import["issues"]))
+
+        # 3. 包含 sys.path 追加（FAIL）
+        corrupt_code_sys = """
+import sys
+sys.path.append("D:/workspace/MathModelAgent/backend")
+"""
+        res_sys = audit_code_self_containment(code_sources=[{"name": "solver.py", "code": corrupt_code_sys}])
+        self.assertFalse(res_sys["passed"])
+        self.assertEqual(res_sys["status"], "FAIL")
+        self.assertGreaterEqual(res_sys["issue_count"], 1)
+
+        # 4. 工作目录多求解脚本扫描（覆盖 ques1_solver.py 等）
+        with open(os.path.join(self.work_dir, "ques1_solver.py"), "w", encoding="utf-8") as f:
+            f.write("from app.utils.log_util import logger\n")
+        res_workdir = audit_code_self_containment(work_dir=self.work_dir)
+        self.assertFalse(res_workdir["passed"])
+        self.assertIn("ques1_solver.py", str(res_workdir["issues"]))
+
+    def test_refresh_frozen_results_hashes_with_equivalence_and_conflict(self):
+        import hashlib
+        import json
+        from app.tools.result_integrity import refresh_frozen_results_hashes, validate_result_freeze
+
+        csv_path = os.path.join(self.work_dir, "ques1_results.csv")
+        with open(csv_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("metric,value\nx_val,10\n")
+
+        with open(csv_path, "rb") as f:
+            initial_hash = hashlib.sha256(f.read()).hexdigest()
+
+        frozen_doc = {
+            "schema": "mathmodel.result-freeze",
+            "version": 1,
+            "metrics": [
+                {
+                    "id": "x_val",
+                    "label": "X指标",
+                    "value": 10,
+                    "unit": "个",
+                    "explanation": "测试指标",
+                    "source_path": "ques1_results.csv",
+                }
+            ],
+            "sources": [
+                {
+                    "relative_path": "ques1_results.csv",
+                    "sha256": initial_hash,
+                }
+            ],
+        }
+        frozen_path = os.path.join(self.work_dir, "frozen_results.json")
+        with open(frozen_path, "w", encoding="utf-8") as f:
+            json.dump(frozen_doc, f, indent=2)
+
+        # 验证初始状态通过
+        val_init = validate_result_freeze(self.work_dir)
+        self.assertTrue(val_init["passed"])
+
+        # 场景 A: 格式/换行调整但数值等价 (x_val 仍为 10)
+        with open(csv_path, "w", encoding="utf-8", newline="\r\n") as f:
+            f.write("metric,value\r\nx_val, 10.000\r\n")
+
+        # 此时因字节改变 validate 失败
+        self.assertFalse(validate_result_freeze(self.work_dir)["passed"])
+
+        # 等价性刷新应当成功放行
+        refresh_equiv = refresh_frozen_results_hashes(self.work_dir, verify_equivalence=True)
+        self.assertTrue(refresh_equiv["active"])
+        self.assertTrue(refresh_equiv["updated"])
+        self.assertFalse(refresh_equiv["has_conflicts"])
+        self.assertTrue(validate_result_freeze(self.work_dir)["passed"])
+
+        # 场景 B: 数值发生实质性突变 (x_val 变成 20) -> 必须拦截！
+        with open(csv_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("metric,value\nx_val,20\n")
+
+        refresh_conflict = refresh_frozen_results_hashes(self.work_dir, verify_equivalence=True)
+        self.assertTrue(refresh_conflict["has_conflicts"])
+        self.assertEqual(len(refresh_conflict["conflicts"]), 1)
+        self.assertIn("已变更为 20.0", refresh_conflict["conflicts"][0]["reason"])
+
+        # 哈希未被偷换，validate_result_freeze 保持报错拦截
+        self.assertFalse(validate_result_freeze(self.work_dir)["passed"])
+
+    def test_refresh_frozen_results_hashes_xlsx_and_json_equivalence_and_conflict(self):
+        import hashlib
+        import json
+        import openpyxl
+        from app.tools.result_integrity import refresh_frozen_results_hashes, validate_result_freeze
+
+        # 1. 测试 XLSX 数据源
+        xlsx_path = os.path.join(self.work_dir, "ques2_results.xlsx")
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Results"
+        ws.append(["id", "label", "value"])
+        ws.append(["optimal_cost", "最优成本", 7.882])
+        wb.save(xlsx_path)
+        wb.close()
+
+        with open(xlsx_path, "rb") as f:
+            initial_xlsx_hash = hashlib.sha256(f.read()).hexdigest()
+
+        frozen_doc = {
+            "schema": "mathmodel.result-freeze",
+            "version": 1,
+            "metrics": [
+                {
+                    "id": "optimal_cost",
+                    "label": "最优成本",
+                    "value": 7.882,
+                    "unit": "元",
+                    "explanation": "最小化总成本",
+                    "source_path": "ques2_results.xlsx",
+                }
+            ],
+            "sources": [
+                {
+                    "relative_path": "ques2_results.xlsx",
+                    "sha256": initial_xlsx_hash,
+                }
+            ],
+        }
+        frozen_path = os.path.join(self.work_dir, "frozen_results.json")
+        with open(frozen_path, "w", encoding="utf-8") as f:
+            json.dump(frozen_doc, f, indent=2)
+
+        self.assertTrue(validate_result_freeze(self.work_dir)["passed"])
+
+        # 重新保存 XLSX（格式调整但数值等价: 7.8820 -> sha256 变动但数值等价）
+        wb2 = openpyxl.load_workbook(xlsx_path)
+        ws2 = wb2.active
+        ws2["C2"] = "7.8820"
+        wb2.save(xlsx_path)
+        wb2.close()
+
+        # 此时因 zip 字节变动导致校验失败
+        self.assertFalse(validate_result_freeze(self.work_dir)["passed"])
+
+        # 等价性刷新应当成功放行并更新哈希
+        refresh_equiv = refresh_frozen_results_hashes(self.work_dir, verify_equivalence=True)
+        self.assertTrue(refresh_equiv["active"])
+        self.assertTrue(refresh_equiv["updated"])
+        self.assertFalse(refresh_equiv["has_conflicts"])
+        self.assertTrue(validate_result_freeze(self.work_dir)["passed"])
+
+        # 修改 XLSX 数值为 9.999 -> 必须拦截！
+        wb3 = openpyxl.Workbook()
+        ws3 = wb3.active
+        ws3.append(["id", "label", "value"])
+        ws3.append(["optimal_cost", "最优成本", 9.999])
+        wb3.save(xlsx_path)
+        wb3.close()
+
+        refresh_conflict = refresh_frozen_results_hashes(self.work_dir, verify_equivalence=True)
+        self.assertTrue(refresh_conflict["has_conflicts"])
+        self.assertEqual(len(refresh_conflict["conflicts"]), 1)
+        self.assertIn("已变更为 9.999", refresh_conflict["conflicts"][0]["reason"])
+
+        # 2. 测试 JSON 数据源
+        json_src_path = os.path.join(self.work_dir, "ques3_results.json")
+        with open(json_src_path, "w", encoding="utf-8") as f:
+            json.dump([{"id": "prob", "value": 0.9122}], f)
+
+        with open(json_src_path, "rb") as f:
+            initial_json_hash = hashlib.sha256(f.read()).hexdigest()
+
+        frozen_doc["metrics"] = [
+            {
+                "id": "prob",
+                "label": "导通概率",
+                "value": 0.9122,
+                "unit": "%",
+                "explanation": "蒙特卡洛导通概率",
+                "source_path": "ques3_results.json",
+            }
+        ]
+        frozen_doc["sources"] = [
+            {
+                "relative_path": "ques3_results.json",
+                "sha256": initial_json_hash,
+            }
+        ]
+        with open(frozen_path, "w", encoding="utf-8") as f:
+            json.dump(frozen_doc, f, indent=2)
+
+        # 格式化 JSON（字节改变但数值等价）
+        with open(json_src_path, "w", encoding="utf-8") as f:
+            json.dump([{"id": "prob", "value": 0.9122}], f, indent=4)
+
+        # 字节改变导致校验失败
+        self.assertFalse(validate_result_freeze(self.work_dir)["passed"])
+
+        refresh_json_equiv = refresh_frozen_results_hashes(self.work_dir, verify_equivalence=True)
+        self.assertTrue(refresh_json_equiv["updated"])
+        self.assertFalse(refresh_json_equiv["has_conflicts"])
+        self.assertTrue(validate_result_freeze(self.work_dir)["passed"])
+
+        # 修改 JSON 数值为 0.5000 -> 必须拦截！
+        with open(json_src_path, "w", encoding="utf-8") as f:
+            json.dump([{"id": "prob", "value": 0.5000}], f)
+
+        refresh_json_conflict = refresh_frozen_results_hashes(self.work_dir, verify_equivalence=True)
+        self.assertTrue(refresh_json_conflict["has_conflicts"])
+        self.assertIn("已变更为 0.5", refresh_json_conflict["conflicts"][0]["reason"])
+
+        # 3. 测试 XLSX 多 Sheet 场景（指标分布在非首个 Sheet）
+        multi_sheet_path = os.path.join(self.work_dir, "ques4_multi_sheet.xlsx")
+        wb_m = openpyxl.Workbook()
+        ws_m1 = wb_m.active
+        ws_m1.title = "Cover"
+        ws_m1.append(["Title", "Description"])
+        ws_m1.append(["Experiment 4", "Summary sheet"])
+        ws_m2 = wb_m.create_sheet(title="MetricsData")
+        ws_m2.append(["id", "label", "value"])
+        ws_m2.append(["percolation_threshold", "渗流阈值", 0.4215])
+        wb_m.save(multi_sheet_path)
+        wb_m.close()
+
+        with open(multi_sheet_path, "rb") as f:
+            multi_sheet_hash = hashlib.sha256(f.read()).hexdigest()
+
+        frozen_doc["metrics"] = [
+            {
+                "id": "percolation_threshold",
+                "label": "渗流阈值",
+                "value": 0.4215,
+                "unit": "无量纲",
+                "explanation": "渗流体积分数阈值",
+                "source_path": "ques4_multi_sheet.xlsx",
+            }
+        ]
+        frozen_doc["sources"] = [
+            {
+                "relative_path": "ques4_multi_sheet.xlsx",
+                "sha256": multi_sheet_hash,
+            }
+        ]
+        with open(frozen_path, "w", encoding="utf-8") as f:
+            json.dump(frozen_doc, f, indent=2)
+
+        self.assertTrue(validate_result_freeze(self.work_dir)["passed"])
+
+        # 修改 Sheet2 中的数值为 0.8888 -> 即使在非首个 Sheet 也必须被精准拦截！
+        wb_m3 = openpyxl.load_workbook(multi_sheet_path)
+        ws_m2_mod = wb_m3["MetricsData"]
+        ws_m2_mod["C2"] = 0.8888
+        wb_m3.save(multi_sheet_path)
+        wb_m3.close()
+
+        refresh_multi_conflict = refresh_frozen_results_hashes(self.work_dir, verify_equivalence=True)
+        self.assertTrue(refresh_multi_conflict["has_conflicts"])
+        self.assertIn("已变更为 0.8888", refresh_multi_conflict["conflicts"][0]["reason"])
+
+    def test_prompts_precision_and_concurrency_policy(self):
+        # 1. Writer Prompt
+        writer_prompt = get_writer_prompt()
+        self.assertIn("可靠性约束优化模型", writer_prompt)
+        self.assertIn("Wilson 95% 置信下限准入规则", writer_prompt)
+        self.assertIn("基于临界加密的分层自适应 Monte Carlo 检验", writer_prompt)
+        self.assertIn("核心单文件自包含求解器", writer_prompt)
+        self.assertIn("关键词数模术语硬性规范", writer_prompt)
+        self.assertIn("假设 1：[假设内容简练陈述]。解释：", writer_prompt)
+
+        # 2. Modeler Prompt
+        self.assertIn("可靠性约束优化模型", MODELER_PROMPT)
+        self.assertIn("分层自适应两阶段 Monte Carlo 检验", MODELER_PROMPT)
+        self.assertIn("准入决策金句标准范式", MODELER_PROMPT)
+        self.assertIn("假设与解释标准化规范", MODELER_PROMPT)
+        self.assertIn("模型选型锦标赛与备选方案证伪", MODELER_PROMPT)
+
+        # 3. Coder Prompt
+        self.assertIn("SELF-CONTAINED SOLVER PROTOCOL", CODER_PROMPT)
+        self.assertIn("GENTLE CONCURRENCY PROTOCOL", CODER_PROMPT)
+        self.assertIn("ProcessPoolExecutor", CODER_PROMPT)
+        self.assertIn("分层自适应两阶段抽样", CODER_PROMPT)
+
+    def test_audit_keywords_modeling_compliance(self):
+        from app.tools.cross_modal_validator import audit_keywords_modeling_compliance
+
+        # 1. 合规数模关键词
+        valid_md = """
+# 论文标题
+## 摘要
+本文建立了混合整数非线性规划模型。
+关键词：混合整数规划；蒙特卡洛模拟；自适应抽样；灵敏度分析
+# 一、问题重述
+"""
+        res_valid = audit_keywords_modeling_compliance(valid_md)
+        self.assertTrue(res_valid["passed"])
+        self.assertEqual(res_valid["status"], "PASS")
+        self.assertEqual(len(res_valid["keywords"]), 4)
+
+        # 2. 纯背景词（违规预警提示：status=WARN, passed=True）
+        invalid_md = """
+# 论文标题
+## 摘要
+本文研究了乡村农业与蔬菜销售。
+关键词：乡村；农业；蔬菜；种植策略
+# 一、问题重述
+"""
+        res_invalid = audit_keywords_modeling_compliance(invalid_md)
+        self.assertTrue(res_invalid["passed"])
+        self.assertEqual(res_invalid["status"], "WARN")
+        self.assertIn("domain_only_keywords", [i["type"] for i in res_invalid["issues"]])
+
+        # 3. 领域词仅包含“优化”子串不应直接放行
+        domain_opt_md = """
+# 论文标题
+## 摘要
+关键词：种植优化；农作物；销售策略
+# 一、问题重述
+"""
+        res_domain_opt = audit_keywords_modeling_compliance(domain_opt_md)
+        self.assertEqual(res_domain_opt["status"], "WARN")
+        self.assertTrue(res_domain_opt["passed"])
+        self.assertGreater(len(res_domain_opt["issues"]), 0)
+
+    def test_cross_modal_status_invariants(self):
+        """测试跨模态审计的状态不变量：阻断项必为 FAIL/False，仅预警项必为 WARN/True。"""
+        # 场景 A: 仅有关键词预警 -> status="WARN", passed=True
+        warn_md = """
+# 论文标题
+## 摘要
+关键词：乡村；农业；蔬菜
+# 一、问题重述
+正文。
+"""
+        res_warn = audit_cross_modal(self.work_dir, markdown_text=warn_md, code_sources=[])
+        self.assertEqual(res_warn["status"], "WARN")
+        self.assertTrue(res_warn["passed"])
+
+        # 场景 B: 代码包含私有依赖阻断项 -> status="FAIL", passed=False
+        bad_code = "from app.utils.log_util import logger\n"
+        res_fail = audit_cross_modal(
+            self.work_dir,
+            markdown_text=warn_md,
+            code_sources=[{"name": "solver.py", "code": bad_code}],
+        )
+        self.assertEqual(res_fail["status"], "FAIL")
+        self.assertFalse(res_fail["passed"])
+
+    def test_formal_solver_syntax_error_and_out_of_bounds(self):
+        """测试正式求解器语法错误与越界路径检测。"""
+        from app.tools.cross_modal_validator import audit_code_self_containment
+
+        # 1. 求解器语法错误
+        syntax_err_path = os.path.join(self.work_dir, "master_solver.py")
+        with open(syntax_err_path, "w", encoding="utf-8") as f:
+            f.write("def broken_syntax(:\n    pass\n")
+
+        res_syntax = audit_code_self_containment(work_dir=self.work_dir)
+        self.assertFalse(res_syntax["passed"])
+        self.assertEqual(res_syntax["status"], "FAIL")
+        self.assertTrue(any(i["type"] == "formal_solver_syntax_error" for i in res_syntax["issues"]))
+
+        # 2. 越界代码源路径
+        os.remove(syntax_err_path)
+        frozen_doc = {
+            "schema": "mathmodel.result-freeze",
+            "version": 1,
+            "metrics": [],
+            "sources": [],
+            "executed_code_sources": ["../outside_solver.py"],
+        }
+        with open(os.path.join(self.work_dir, "frozen_results.json"), "w", encoding="utf-8") as f:
+            json.dump(frozen_doc, f)
+
+        res_oob = audit_code_self_containment(work_dir=self.work_dir)
+        self.assertFalse(res_oob["passed"])
+        self.assertEqual(res_oob["status"], "FAIL")
+        self.assertTrue(any(i["type"] == "out_of_bounds_source_path" for i in res_oob["issues"]))
 
 
 if __name__ == "__main__":
     unittest.main()
-
-

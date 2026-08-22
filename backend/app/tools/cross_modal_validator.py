@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import ast
 import csv
+import datetime
+import hashlib
 import json
 import os
 import re
@@ -19,6 +21,7 @@ from typing import Any
 
 from app.utils.log_util import logger
 from app.tools.fact_store import FactStore
+from app.tools.result_integrity import _safe_path
 
 
 CROSS_MODAL_REPORT_FILENAME = "cross_modal_audit.json"
@@ -26,6 +29,38 @@ DATA_FILE_RE = re.compile(
     r"\b(?P<filename>[a-zA-Z0-9_/-]+\.(?:csv|xlsx|json|parquet|txt))\b",
     re.IGNORECASE,
 )
+
+MODELING_TERMS_CN = [
+    "数学建模", "优化模型", "规划模型", "线性规划", "非线性规划", "整数规划", "混合整数规划", "0-1规划", "目标规划",
+    "动态规划", "随机规划", "鲁棒优化", "多目标优化", "组合优化", "最优化方法", "最优化", "约束优化", "凸优化", "优化算法",
+    "回归分析", "线性回归", "多元回归", "逻辑回归", "逐步回归", "岭回归", "Lasso回归", "非参数回归",
+    "时间序列", "ARIMA", "灰色预测", "灰色模型", "GM", "马尔可夫", "马尔可夫链", "预测模型",
+    "聚类分析", "K-means", "层次聚类", "分类模型", "判别分析", "主成分分析", "因子分析", "降维",
+    "层次分析法", "熵权法", "TOPSIS", "模糊综合评价", "综合评价", "评价模型", "指标体系",
+    "蒙特卡洛", "Monte Carlo", "系统仿真", "模拟退火", "遗传算法", "粒子群算法", "蚁群算法", "启发式算法", "差分进化",
+    "网络流", "最短路", "图论", "排队论", "博弈论", "元胞自动机", "系统动力学",
+    "风险决策", "风险度量", "CVaR", "机会约束", "情景分析", "情景模拟", "灵敏度分析", "敏感性分析", "鲁棒性分析",
+    "误差分析", "残差分析", "显著性检验", "假设检验", "相关性分析", "协方差", "概率模型", "贝叶斯", "统计检验",
+    "数值插值", "数据拟合", "最小二乘", "参数估计", "数据预处理", "标准化", "归一化", "可行性检验", "置信区间", "Wilson",
+    "空间分箱", "Cell List", "最小镜像", "MIC", "渗流", "连通图", "BFS", "DFS", "自适应抽样", "分层抽样",
+]
+
+MODELING_TERMS_EN = [
+    "mathematical modeling", "optimization", "linear programming", "integer programming", "mixed integer programming",
+    "nonlinear programming", "goal programming", "dynamic programming", "robust optimization", "multi-objective optimization",
+    "simulation", "monte carlo", "sensitivity analysis", "robustness analysis", "regression", "clustering",
+    "principal component analysis", "pca", "time series", "markov", "bayesian", "graph theory", "network flow",
+    "shortest path", "queuing", "game theory", "decision analysis", "risk decision", "evaluation model",
+    "topsis", "ahp", "entropy weight", "genetic algorithm", "particle swarm", "simulated annealing",
+    "sampling", "adaptive sampling", "mcmc", "bootstrap",
+]
+
+DOMAIN_ONLY_HINTS = [
+    "农作物", "种植策略", "种植", "乡村", "农业", "蔬菜", "销售", "定价", "生产", "企业", "供应链", "交通", "道路",
+    "高校", "学生", "运动", "体测", "玻璃", "文物", "矿井", "逃生", "水沙", "黄河", "波浪", "烟幕", "无人机",
+    "问题研究", "策略", "影响因素",
+]
+
 
 
 class CodeOutputAstVisitor(ast.NodeVisitor):
@@ -127,6 +162,51 @@ class CodeOutputAstVisitor(ast.NodeVisitor):
                 if s:
                     return s
         return None
+
+
+class CodeImportDependencyVisitor(ast.NodeVisitor):
+    """AST 访问器：检查附录求解器代码中是否残留私有仓库模块依赖或 sys.path 路径篡改。"""
+
+    def __init__(self) -> None:
+        self.private_imports: list[dict[str, Any]] = []
+        self.sys_path_modifications: list[dict[str, Any]] = []
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            name = alias.name
+            if name == "app" or name.startswith("app."):
+                self.private_imports.append({
+                    "type": "import_app",
+                    "module": name,
+                    "lineno": getattr(node, "lineno", 0),
+                    "statement": f"import {name}",
+                })
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        mod = node.module or ""
+        if mod == "app" or mod.startswith("app."):
+            names_str = ", ".join(a.name for a in node.names)
+            self.private_imports.append({
+                "type": "from_app_import",
+                "module": mod,
+                "lineno": getattr(node, "lineno", 0),
+                "statement": f"from {mod} import {names_str}",
+            })
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        # 检测 sys.path.append(...) / sys.path.insert(...)
+        if isinstance(node.func, ast.Attribute) and node.func.attr in {"append", "insert"}:
+            if isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "path":
+                if isinstance(node.func.value.value, ast.Name) and node.func.value.value.id == "sys":
+                    self.sys_path_modifications.append({
+                        "type": "sys_path_modification",
+                        "method": f"sys.path.{node.func.attr}",
+                        "lineno": getattr(node, "lineno", 0),
+                    })
+        self.generic_visit(node)
+
 
 
 def extract_code_generated_files(code_content: str) -> tuple[set[str], list[dict[str, Any]]]:
@@ -490,6 +570,277 @@ def audit_latex_formatting_integrity(markdown_text: str) -> dict[str, Any]:
     }
 
 
+def _check_code_piece_self_containment(
+    code_content: str, source_label: str, issues: list[dict[str, Any]], is_formal_file: bool = False
+) -> None:
+    """检查单个代码片段是否包含私有依赖或路径篡改，并在为正式源程序时拦截语法错误。"""
+    visitor = CodeImportDependencyVisitor()
+    try:
+        tree = ast.parse(code_content)
+        visitor.visit(tree)
+    except SyntaxError as exc:
+        if is_formal_file:
+            issues.append({
+                "source": source_label,
+                "type": "formal_solver_syntax_error",
+                "line": exc.lineno or 0,
+                "message": f"[{source_label}] 正式求解器代码存在语法错误: {exc.msg} (第 {exc.lineno} 行)。",
+            })
+        # 正则兜底匹配
+        for match in re.finditer(r"(?m)^\s*(?:from\s+(app(?:\.\w+)*)\s+import|import\s+(app(?:\.\w+)*))", code_content):
+            mod = match.group(1) or match.group(2)
+            visitor.private_imports.append({
+                "type": "regex_fallback_import_app",
+                "module": mod,
+                "lineno": 0,
+                "statement": match.group(0).strip(),
+            })
+        for match in re.finditer(r"(?m)^\s*sys\.path\.(?:append|insert)\s*\(", code_content):
+            visitor.sys_path_modifications.append({
+                "type": "regex_fallback_sys_path",
+                "method": "sys.path.modify",
+                "lineno": 0,
+            })
+
+    for item in visitor.private_imports:
+        issues.append({
+            "source": source_label,
+            "type": "private_repo_import",
+            "module": item["module"],
+            "line": item["lineno"],
+            "message": f"[{source_label}] 发现仓库私有模块引用: '{item.get('statement')}'。求解器代码必须单文件自包含（静态私有依赖检查未通过）。",
+        })
+    for item in visitor.sys_path_modifications:
+        issues.append({
+            "source": source_label,
+            "type": "sys_path_modification",
+            "line": item["lineno"],
+            "message": f"[{source_label}] 发现外部路径追加调用 ({item.get('method')})。代码严禁依赖仓库私有工作目录路径。",
+        })
+
+
+def audit_code_self_containment(
+    work_dir: str | None = None,
+    markdown_text: str | None = None,
+    code_sources: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """审计求解器与附录代码的静态私有依赖与自包含规范。
+
+    严格拦截对仓库内部私有模块（如 `from app.` / `import app`）及 `sys.path` 外部路径的依赖，
+    并对正式 Python 源文件进行语法有效性与工作目录边界校验。
+    """
+    issues: list[dict[str, Any]] = []
+    audited_sources: list[str] = []
+
+    # 1. 扫描 Markdown 附录代码围栏内的源码（最终交付文本）
+    if markdown_text:
+        in_python_fence = False
+        fence_lines: list[str] = []
+        fence_start = 0
+        for line_idx, line in enumerate(markdown_text.splitlines(), start=1):
+            stripped = line.strip()
+            if stripped.startswith("```python") or stripped.startswith("```py"):
+                in_python_fence = True
+                fence_lines = []
+                fence_start = line_idx
+                continue
+            elif in_python_fence and stripped.startswith("```"):
+                in_python_fence = False
+                code_content = "\n".join(fence_lines)
+                fence_lines = []
+                if code_content.strip():
+                    src_tag = f"res.md:L{fence_start}"
+                    audited_sources.append(src_tag)
+                    _check_code_piece_self_containment(code_content, src_tag, issues, is_formal_file=False)
+                continue
+            if in_python_fence:
+                fence_lines.append(line)
+
+    # 2. 扫描 code_sources 列表
+    if code_sources:
+        for src in code_sources:
+            if isinstance(src, dict):
+                code = src.get("code", "")
+                name = src.get("name", "code_source")
+                if code:
+                    audited_sources.append(name)
+                    _check_code_piece_self_containment(code, name, issues, is_formal_file=False)
+
+    # 3. 扫描 work_dir 下的正式求解器与 declared executed_code_sources
+    if work_dir and os.path.isdir(work_dir):
+        candidates = ["master_solver.py"]
+        frozen_path = os.path.join(work_dir, "frozen_results.json")
+        has_frozen_sources = False
+        if os.path.isfile(frozen_path):
+            try:
+                with open(frozen_path, encoding="utf-8") as f:
+                    frozen = json.load(f)
+                executed_sources = frozen.get("executed_code_sources", [])
+                if executed_sources:
+                    has_frozen_sources = True
+                    candidates.extend(executed_sources)
+            except Exception:
+                pass
+
+        # 扫描明确命名的求解器脚本（如 ques1_solver.py, ques2_solver.py 等）
+        try:
+            for fname in sorted(os.listdir(work_dir)):
+                if fname.endswith("_solver.py") or (not has_frozen_sources and fname.startswith("ques") and fname.endswith(".py")):
+                    candidates.append(fname)
+        except OSError:
+            pass
+
+        for cand in dict.fromkeys(candidates):
+            if not cand or not str(cand).endswith(".py"):
+                continue
+
+            # 路径边界校验
+            safe_cand_path = _safe_path(work_dir, str(cand))
+            if safe_cand_path is None:
+                issues.append({
+                    "source": str(cand),
+                    "type": "out_of_bounds_source_path",
+                    "message": f"代码源路径越出任务目录边界: {cand}",
+                })
+                continue
+
+            if os.path.isfile(safe_cand_path):
+                try:
+                    with open(safe_cand_path, encoding="utf-8", errors="replace") as f:
+                        code = f.read()
+                    audited_sources.append(str(cand))
+                    _check_code_piece_self_containment(code, str(cand), issues, is_formal_file=True)
+                except Exception as read_exc:
+                    issues.append({
+                        "source": str(cand),
+                        "type": "unreadable_code_source",
+                        "message": f"无法读取代码源文件: {read_exc}",
+                    })
+
+    passed = len(issues) == 0
+    return {
+        "status": "PASS" if passed else "FAIL",
+        "passed": passed,
+        "audited_sources": list(dict.fromkeys(audited_sources)),
+        "issues": issues,
+        "issue_count": len(issues),
+    }
+
+
+def extract_keywords_from_markdown(text: str) -> list[str]:
+    """从 Markdown 论文中提取关键词列表。"""
+    if not text:
+        return []
+    keywords_raw = ""
+    kw_match = re.search(r"(?:\*\*|\#\#\s*)?关键词(?:\*\*|\#\#)?\s*[:：]\s*([^\n\r]+)", text)
+    if kw_match:
+        keywords_raw = kw_match.group(1).strip()
+    else:
+        tex_kw = re.search(r"\\keywords\{([^{}]+)\}", text)
+        if tex_kw:
+            keywords_raw = tex_kw.group(1).strip()
+
+    if not keywords_raw:
+        return []
+
+    delims = re.compile(r"[；;、,\|\t]|\s{2,}|\\quad|\\qquad")
+    tokens = [tok.strip() for tok in delims.split(keywords_raw) if tok.strip()]
+    clean_tokens: list[str] = []
+    for t in tokens:
+        cleaned = re.sub(r"[\*\_`]", "", t).strip()
+        if cleaned:
+            clean_tokens.append(cleaned)
+    return clean_tokens
+
+
+def audit_keywords_modeling_compliance(markdown_text: str) -> dict[str, Any]:
+    """审计论文关键词是否全部采用正规数学建模术语，拦截纯题目背景词。"""
+    keywords = extract_keywords_from_markdown(markdown_text)
+    if not keywords:
+        return {
+            "status": "PASS",
+            "passed": True,
+            "keywords": [],
+            "issues": [],
+            "issue_count": 0,
+            "message": "未在正文中检测到显式关键词行，跳过建模术语审计。",
+        }
+
+    issues: list[dict[str, Any]] = []
+    bad_keywords: list[str] = []
+    domain_only: list[str] = []
+
+    for kw in keywords:
+        compact = re.sub(r"\s+", "", kw)
+        lower = kw.lower()
+
+        is_domain = any(hint in compact for hint in DOMAIN_ONLY_HINTS)
+        is_modeling = False
+
+        if is_domain:
+            # 领域词如果仅包含"优化"或"模型"等宽泛字眼，不得无条件放行，必须匹配明确的复合数模算法
+            is_modeling = any(
+                term in compact
+                for term in (
+                    "混合整数规划", "线性规划", "非线性规划", "整数规划", "目标规划",
+                    "动态规划", "随机规划", "鲁棒优化", "多目标优化", "蒙特卡洛",
+                    "灵敏度分析", "敏感性分析", "层次分析法", "TOPSIS", "元胞自动机"
+                )
+            )
+        else:
+            is_modeling = (
+                compact in {"优化", "最优化", "数学建模", "建模"}
+                or any(term in compact for term in MODELING_TERMS_CN)
+                or any(term in lower for term in MODELING_TERMS_EN)
+            )
+
+        if not is_modeling:
+            bad_keywords.append(kw)
+            if is_domain or any(hint in compact for hint in DOMAIN_ONLY_HINTS):
+                domain_only.append(kw)
+
+    if len(keywords) < 3:
+        issues.append(
+            {
+                "type": "too_few_keywords",
+                "message": f"关键词数量偏少 ({len(keywords)} < 3)。",
+            }
+        )
+    elif len(keywords) > 6:
+        issues.append(
+            {
+                "type": "too_many_keywords",
+                "message": f"关键词数量偏多 ({len(keywords)} > 6)。",
+            }
+        )
+
+    if domain_only:
+        issues.append(
+            {
+                "type": "domain_only_keywords",
+                "message": f"关键词包含纯赛题背景词，未体现数模专业方法: {', '.join(domain_only)}。建议替换为标准建模术语（如混合整数规划、蒙特卡洛模拟、灵敏度分析）。",
+                "domain_keywords": domain_only,
+            }
+        )
+    elif bad_keywords:
+        issues.append(
+            {
+                "type": "non_modeling_keywords",
+                "message": f"关键词未匹配到标准数模专业词库: {', '.join(bad_keywords)}。",
+                "bad_keywords": bad_keywords,
+            }
+        )
+
+    has_issues = len(issues) > 0
+    return {
+        "status": "WARN" if has_issues else "PASS",
+        "passed": True,  # 警告不导致 passed=False
+        "keywords": keywords,
+        "issues": issues,
+        "issue_count": len(issues),
+    }
+
+
 def audit_cross_modal(
     work_dir: str,
     markdown_text: str | None = None,
@@ -511,22 +862,115 @@ def audit_cross_modal(
     )
     optimality_result = audit_optimality_certificates(work_dir)
     latex_integrity_result = audit_latex_formatting_integrity(md_content)
+    code_self_containment_result = audit_code_self_containment(
+        work_dir=work_dir,
+        markdown_text=md_content,
+        code_sources=code_sources,
+    )
+    keywords_compliance_result = audit_keywords_modeling_compliance(md_content)
 
-    all_passed = (
-        parity_result["passed"]
-        and optimality_result["passed"]
-        and latex_integrity_result["passed"]
+    disk_text_mismatch = False
+    md_path = os.path.join(work_dir, "res.md")
+    disk_bytes = b""
+    if os.path.isfile(md_path):
+        try:
+            with open(md_path, "rb") as mf:
+                disk_bytes = mf.read()
+            if markdown_text is not None:
+                disk_norm = disk_bytes.replace(b"\r\n", b"\n").strip()
+                mem_norm = markdown_text.encode("utf-8").replace(b"\r\n", b"\n").strip()
+                if disk_norm != mem_norm:
+                    disk_text_mismatch = True
+        except OSError:
+            pass
+
+    # 判定阻断项与预警项
+    blocking_passed = (
+        not disk_text_mismatch
+        and optimality_result.get("passed", True)
+        and optimality_result.get("status") != "FAIL"
+        and latex_integrity_result.get("passed", True)
+        and latex_integrity_result.get("status") != "FAIL"
+        and code_self_containment_result.get("passed", True)
+        and code_self_containment_result.get("status") != "FAIL"
+        and parity_result.get("status") != "FAIL"
     )
-    overall_status = "PASS" if all_passed else (
-        "FAIL" if (not optimality_result["passed"] or not latex_integrity_result["passed"]) else parity_result["status"]
+    has_warning = (
+        parity_result.get("status") == "WARN"
+        or keywords_compliance_result.get("status") == "WARN"
+        or code_self_containment_result.get("status") == "WARN"
+        or latex_integrity_result.get("status") == "WARN"
+        or optimality_result.get("status") == "WARN"
     )
+
+    if disk_text_mismatch:
+        parity_result.setdefault("issues", []).append({
+            "type": "audit_text_disk_mismatch",
+            "message": "显式传入的审计正文与磁盘 res.md 内容不一致，存在哈希替换风险，门禁阻断！",
+        })
+
+    if not blocking_passed:
+        overall_status = "FAIL"
+        overall_passed = False
+    elif has_warning:
+        overall_status = "WARN"
+        overall_passed = True
+    else:
+        overall_status = "PASS"
+        overall_passed = True
+
+    if os.path.isfile(md_path) and not disk_text_mismatch:
+        md_sha256 = hashlib.sha256(disk_bytes).hexdigest() if disk_bytes else ""
+    else:
+        md_sha256 = (
+            hashlib.sha256(md_content.encode("utf-8")).hexdigest()
+            if md_content
+            else ""
+        )
+
+    # 收集需要计算哈希的代码源文件清单
+    target_code_srcs: list[str] = []
+    if code_sources:
+        for s in code_sources:
+            if isinstance(s, dict) and s.get("name"):
+                target_code_srcs.append(str(s["name"]))
+            elif isinstance(s, str):
+                target_code_srcs.append(s)
+    else:
+        frozen_path = os.path.join(work_dir, "frozen_results.json")
+        if os.path.isfile(frozen_path):
+            try:
+                with open(frozen_path, encoding="utf-8") as f:
+                    frozen_doc = json.load(f)
+                exec_srcs = frozen_doc.get("executed_code_sources", [])
+                if isinstance(exec_srcs, list):
+                    target_code_srcs.extend([str(x) for x in exec_srcs])
+            except Exception:
+                pass
+        if not target_code_srcs and os.path.isfile(os.path.join(work_dir, "master_solver.py")):
+            target_code_srcs.append("master_solver.py")
+
+    code_hashes: dict[str, str] = {}
+    for src in dict.fromkeys(target_code_srcs):
+        full_src = _safe_path(work_dir, src)
+        if full_src and os.path.isfile(full_src):
+            try:
+                with open(full_src, "rb") as sf:
+                    code_hashes[src] = hashlib.sha256(sf.read()).hexdigest()
+            except OSError:
+                pass
 
     report = {
         "status": overall_status,
-        "passed": all_passed,
+        "passed": overall_passed,
+        "markdown_sha256": md_sha256,
+        "code_source_hashes": code_hashes,
+        "generated_at": datetime.datetime.now().isoformat(),
         "code_text_parity": parity_result,
         "optimality_consistency": optimality_result,
         "latex_formatting_integrity": latex_integrity_result,
+        "code_self_containment": code_self_containment_result,
+        "keywords_modeling_compliance": keywords_compliance_result,
         "fact_store_fact_count": len(fact_store.list_facts()),
     }
 

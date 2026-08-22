@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from pathlib import Path
 import tempfile
 import unittest
+
 
 import nbformat
 from nbformat import v4 as nbf
@@ -2039,6 +2041,162 @@ class PressureTargetEvidenceTest(unittest.TestCase):
                 if item["id"] == "ques3.pressure_target_evidence"
             )
             self.assertFalse(check["passed"])
+
+
+class TestFloatToleranceProtocol(unittest.TestCase):
+    def test_evaluate_simple_comparison_supports_float_tolerance(self):
+        from app.tools.execution_validation import _evaluate_simple_comparison
+        # Float arithmetic: 0.1 + 0.2 != 0.3 strictly, but should pass with tolerance
+        self.assertTrue(_evaluate_simple_comparison(0.1 + 0.2, "eq", 0.3))
+        self.assertTrue(_evaluate_simple_comparison(1.0000001, "lte", 1.0, abs_tol=1e-5))
+        self.assertTrue(_evaluate_simple_comparison(0.9999999, "gte", 1.0, abs_tol=1e-5))
+        # 实际求解与展示四舍五入数值 2366.6667 vs 2366.67 (diff 0.0033 <= 0.0055) 必须通过
+        self.assertTrue(_evaluate_simple_comparison(2366.6667, "eq", 2366.67))
+        # 明显错误数值 2368.0 vs 2366.67 (diff 1.33 > 0.0055) 必须拒绝（阻断假阳性）
+        self.assertFalse(_evaluate_simple_comparison(2368.0, "eq", 2366.67))
+        # 离散/整数目标值 2200 vs 2201 必须拒绝，2200 vs 2200.0 必须通过
+        self.assertFalse(_evaluate_simple_comparison(2201.0, "eq", 2200))
+        self.assertTrue(_evaluate_simple_comparison(2200.0, "eq", 2200))
+        # 整数目标转换为 2200.0 后不得误推导为 0.055 容差而放过 2200.05
+        self.assertFalse(_evaluate_simple_comparison(2200.05, "eq", 2200.0))
+        self.assertFalse(_evaluate_simple_comparison(2200.05, "eq", 2200))
+        self.assertTrue(_evaluate_simple_comparison(2200.0, "eq", 2200.0))
+        # 大数不应因相对容差被放过错误数值（如 1000000050 vs 1000000000 差值 50 必须拒绝）
+        self.assertFalse(_evaluate_simple_comparison(1000000050, "eq", 1000000000))
+        self.assertTrue(_evaluate_simple_comparison(1000000000.0, "eq", 1000000000))
+        # 科学计数法目标 1e-9 精度应被正确解析为 9 位小数（0 vs 1e-9 差值 1e-9 > 5.5e-10 必须拒绝）
+        self.assertFalse(_evaluate_simple_comparison(0, "eq", 1e-9))
+        self.assertTrue(_evaluate_simple_comparison(1e-9, "eq", 1e-9))
+
+    def test_check_constraint_rejects_loose_tolerance_false_positives(self):
+        from app.tools.execution_validation import _check_constraint
+        with tempfile.TemporaryDirectory() as work_dir:
+            root = Path(work_dir)
+            source_file = root / "res.csv"
+            source_file.write_text("x,y\n1,2368.0\n", encoding="utf-8")
+            h = hashlib.sha256(source_file.read_bytes()).hexdigest()
+            constraint = {
+                "id": "profit",
+                "actual": 2368.0,
+                "comparison": "eq",
+                "target": 2366.67,
+                "source": {"path": "res.csv", "sha256": h},
+            }
+            passed, msg, ev = _check_constraint(constraint, root, require_source_value=True)
+            self.assertFalse(passed)
+
+    def test_bind_plan_constraints_uses_float_tolerance(self):
+        from app.tools.execution_validation import _bind_plan_constraints_from_acceptance_table
+        with tempfile.TemporaryDirectory() as work_dir:
+            root = Path(work_dir)
+            (root / "modeler_plan.json").write_text(
+                json.dumps({
+                    "model_plan": {
+                        "subtasks": {
+                            "ques1": {
+                                "acceptance_metrics": [
+                                    {"key": "objective_value", "target": 2366.67, "comparator": "eq"}
+                                ]
+                            }
+                        }
+                    }
+                }),
+                encoding="utf-8",
+            )
+            csv_path = root / "ques1_acceptance_metrics.csv"
+            # 真实求解器计算值 2366.6667 vs 表格声明目标值 2366.67
+            csv_path.write_text("指标ID,数值,目标值,单位\nobjective_value,2366.6667,2366.67,元\n", encoding="utf-8")
+            bound, errors = _bind_plan_constraints_from_acceptance_table(root, "ques1", [])
+            self.assertEqual(errors, [])
+            self.assertEqual(len(bound), 1)
+            self.assertIn("abs_tol", bound[0])
+            self.assertIn("rel_tol", bound[0])
+            self.assertGreater(bound[0]["tolerance"], 0.0)
+
+
+    def test_explicit_precision_protocol_end_to_end(self):
+        from app.tools.execution_validation import record_execution_evidence, _evaluate_simple_comparison
+        # 1. precision=2, target=1.2345, actual=1.239 按两位展示精度通过
+        self.assertTrue(_evaluate_simple_comparison(1.239, "eq", 1.2345, precision=2))
+        # 2. integer target=2200, actual=2200.05 必须失败
+        self.assertFalse(_evaluate_simple_comparison(2200.05, "eq", 2200, metric_kind="integer"))
+        self.assertFalse(_evaluate_simple_comparison(2200.05, "eq", 2200.0, metric_kind="integer"))
+
+        # 3. record_execution_evidence 证据清单保留最终生效精度协议且不允许 Coder 篡改放宽
+        with tempfile.TemporaryDirectory() as work_dir:
+            root = Path(work_dir)
+            (root / "modeler_plan.json").write_text(
+                json.dumps({
+                    "model_plan": {
+                        "subtasks": {
+                            "ques1": {
+                                "acceptance_metrics": [
+                                    {
+                                        "key": "profit",
+                                        "target": 2200.0,
+                                        "comparator": "eq",
+                                        "metric_kind": "integer",
+                                        "precision": 0,
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }),
+                encoding="utf-8",
+            )
+            res_csv = root / "res.csv"
+            res_csv.write_text("x,val\n1,2200.0\n", encoding="utf-8")
+            # 3a. Coder 尝试传入宽松的 tolerance=100 必须被拒绝拦截
+            res_rejected = record_execution_evidence(
+                work_dir,
+                subtask_id="ques1",
+                constraints=[
+                    {
+                        "id": "profit",
+                        "actual": 2200.0,
+                        "comparison": "eq",
+                        "target": 2200.0,
+                        "tolerance": 100.0,
+                        "source_path": "res.csv",
+                    }
+                ],
+                metrics=[{"id": "profit", "value": 2200.0, "source_path": "res.csv"}],
+                figures=[],
+            )
+            self.assertFalse(res_rejected["ok"])
+            self.assertIn("超出允许范围", " ".join(res_rejected["errors"]))
+
+            # 3b. 正常记录证据时，manifest 自动固化来自 ModelPlan 的精度协议
+            res_ok = record_execution_evidence(
+                work_dir,
+                subtask_id="ques1",
+                constraints=[
+                    {
+                        "id": "profit",
+                        "actual": 2200.0,
+                        "comparison": "eq",
+                        "target": 2200.0,
+                        "tolerance": 0.0,
+                        "source_path": "res.csv",
+                    }
+                ],
+                metrics=[{
+                    "id": "profit",
+                    "label": "利润",
+                    "value": 2200.0,
+                    "unit": "元",
+                    "explanation": "最优利润",
+                    "source_path": "res.csv",
+                }],
+                figures=[],
+            )
+            self.assertTrue(res_ok["ok"], res_ok.get("errors"))
+            manifest = json.loads((root / "execution_validation.json").read_text(encoding="utf-8"))
+            c_entry = manifest["subtasks"][0]["constraints"][0]
+            self.assertEqual(c_entry["metric_kind"], "integer")
+            self.assertEqual(c_entry["precision"], 0)
+            self.assertAlmostEqual(c_entry["abs_tol"], 1e-6, places=7)
 
 
 if __name__ == "__main__":

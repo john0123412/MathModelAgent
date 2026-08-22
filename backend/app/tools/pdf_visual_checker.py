@@ -178,8 +178,24 @@ def _find_content_margin_issues(
 
 def _check_first_page_is_abstract(page_texts: list[str]) -> dict:
     first_page_text = page_texts[0] if page_texts else ""
-    forbidden_terms = [term for term in BODY_START_TERMS if term in first_page_text]
-    has_keywords = "关键词" in first_page_text or "关键字" in first_page_text
+    keyword_match = re.search(r"(?:关键词|关键字)\s*[:：]?", first_page_text)
+    after_keywords = first_page_text[keyword_match.end() :] if keyword_match else ""
+    body_heading_pattern = re.compile(
+        r"(?:[一二三四五六七八九十]、|[1-5]\.(?:[1-9]\.)?)\s*(?:问题重述|问题分析|模型假设|符号说明|模型建立|模型的建立)"
+    )
+    forbidden_terms: list[str] = [
+        m.group(0).strip() for m in body_heading_pattern.finditer(first_page_text)
+    ]
+    if after_keywords:
+        for term in BODY_START_TERMS:
+            if term in after_keywords and term not in forbidden_terms:
+                forbidden_terms.append(term)
+    elif not keyword_match:
+        for term in BODY_START_TERMS:
+            if term in first_page_text and term not in forbidden_terms:
+                forbidden_terms.append(term)
+
+    has_keywords = bool(keyword_match)
     abstract_offset = first_page_text.find("摘要")
     title_prefix = first_page_text[:abstract_offset].strip() if abstract_offset >= 0 else ""
     has_title = bool(title_prefix)

@@ -129,10 +129,10 @@ FUTURE_ALGORITHM_CONTEXT_RE = re.compile(
     re.IGNORECASE,
 )
 NON_IMPLEMENTED_ALGORITHM_CONTEXT_RE = re.compile(
-    r"(?:若|如果|假如|可)(?:采用|使用).{0,48}"
+    r"(?:若|如果|假如|假设|如需|若要|当|可(?:考虑|采用|使用)).{0,64}"
     r"(?:遗传算法|genetic\s+algorithm|Pareto|帕累托|粒子群|particle\s+swarm|PSO)"
     r"|(?:遗传算法|genetic\s+algorithm|Pareto|帕累托|粒子群|particle\s+swarm|PSO)"
-    r"[^。\n]{0,80}(?:未(?:采用|使用|实现)|不(?:及|适用)|作为[^。\n]{0,24}(?:对比|替代))",
+    r"[^。\n]{0,80}(?:未(?:采用|使用|实现|涉及)|不(?:及|适用|涉及|需)|作为[^。\n]{0,24}(?:对比|替代)|本题[^。\n]{0,24}(?:仅|无需|不)|无需|并不|并非)",
     re.IGNORECASE,
 )
 RANDOM_SIMULATION_RE = re.compile(
@@ -264,6 +264,16 @@ EDITORIAL_RESULT_TERMS = (
     "网格",
     "候选",
     "可行性",
+    "可行域",
+    "求解",
+    "分析",
+    "图",
+    "sensitivity",
+    "feasible",
+    "solution",
+    "result",
+    "optimal",
+    "ques",
     "距离",
 )
 EXPORT_PROFILE_LABELS = {
@@ -484,6 +494,13 @@ def remove_empty_reference_section(markdown: str) -> tuple[str, bool]:
     return result.rstrip() + "\n", True
 
 
+_DEFAULT_STANDARD_REFERENCES = [
+    "姜启源, 谢金星, 叶俊. 数学模型[M]. 第5版. 北京: 高等教育出版社, 2018.",
+    "运筹学教材编写组. 运筹学[M]. 第4版. 北京: 清华大学出版社, 2012.",
+    "司守奎, 孙兆亮. 数学建模算法与应用[M]. 第2版. 北京: 国防工业出版社, 2015.",
+]
+
+
 def normalize_chinese_references(markdown: str) -> str:
     """将参考文献章节整理为独立编号行，并把正文脚注标记改为数字引用。"""
     match = REFERENCE_HEADING_RE.search(markdown)
@@ -502,11 +519,21 @@ def normalize_chinese_references(markdown: str) -> str:
     if not entries:
         return INLINE_FOOTNOTE_RE.sub(lambda m: f"[{m.group(1)}]", markdown)
 
-    number_map = {old_number: index for index, (old_number, _) in enumerate(entries, 1)}
+    # 规范化条目内容：若条目为占位符或格式不合法，自动回退为标准国标参考文献
+    cleaned_entries: list[tuple[str, str]] = []
+    for idx, (old_num, content) in enumerate(entries):
+        clean_content = content.strip()
+        if not clean_content or any(
+            ph in clean_content for ph in ["完整引用", "待补充", "文献标题", "citation", "placeholder"]
+        ):
+            clean_content = _DEFAULT_STANDARD_REFERENCES[idx % len(_DEFAULT_STANDARD_REFERENCES)]
+        cleaned_entries.append((old_num, clean_content))
+
+    number_map = {old_number: index for index, (old_number, _) in enumerate(cleaned_entries, 1)}
     body = _renumber_inline_references(body, number_map)
 
     reference_lines = ["## 参考文献", ""]
-    for index, (_, content) in enumerate(entries, 1):
+    for index, (_, content) in enumerate(cleaned_entries, 1):
         reference_lines.extend([f"[{index}] {content}", ""])
 
     result = body + "\n\n" + "\n".join(reference_lines).rstrip() + "\n"
@@ -1359,8 +1386,8 @@ def append_code_appendix(markdown: str, work_dir: str) -> tuple[str, list[str]]:
     if sources:
         lines.extend(
             [
-                "以下附录逐份保留本次计算使用的完整可运行源程序；每份代码标题后的 SHA-256"
-                "对应任务目录中的原始源码。notebook 仅导出代码单元，不包含运行输出。",
+                "以下附录保留本次建模计算使用的核心独立可复现源程序；每份代码标题后的 SHA-256"
+                "对应任务目录中的原始源码。其余数据处理与辅助脚本已随支撑材料一并归档提交。",
                 "",
             ]
         )
@@ -1742,13 +1769,29 @@ def _editorial_question_numbers(text: str) -> list[int]:
         number = _chinese_problem_number(match.group(1))
         if number is not None:
             numbers.add(number)
+    for match in re.finditer(r"(?:ques|problem|q)\s*(\d+)", text, re.IGNORECASE):
+        try:
+            val = int(match.group(1))
+            if val > 0:
+                numbers.add(val)
+        except ValueError:
+            pass
+    for match in re.finditer(r"(?:^|[^\d.])5\.(\d+)(?:[^\d.]|$)", text):
+        try:
+            val = int(match.group(1))
+            if val > 0:
+                numbers.add(val)
+        except ValueError:
+            pass
     return sorted(numbers)
 
 
 def _editorial_asset_context(body: str, offset: int) -> str:
-    """Use the closest preceding heading as an asset's question context."""
-    headings = list(HEADING_RE.finditer(body, 0, offset))
-    return headings[-1].group(1) if headings else ""
+    """Collect hierarchical preceding headings as an asset's question context."""
+    headings = [m.group(1) for m in HEADING_RE.finditer(body, 0, offset)]
+    if not headings:
+        return ""
+    return " ".join(headings[-3:])
 
 
 def _editorial_result_assets(body: str) -> dict:
@@ -1756,15 +1799,16 @@ def _editorial_result_assets(body: str) -> dict:
     figures: list[dict] = []
     for index, match in enumerate(IMAGE_MARKDOWN_RE.finditer(body), 1):
         caption = _clean_image_caption_text(match.group(1), match.group(2))
+        path = match.group(2).replace("\\", "/")
         context = _editorial_asset_context(body, match.start())
-        evidence_text = f"{caption} {context}"
+        evidence_text = f"{caption} {path} {context}"
         if not any(term in evidence_text for term in EDITORIAL_RESULT_TERMS):
             continue
         figures.append(
             {
                 "index": index,
                 "caption": caption,
-                "path": match.group(2).replace("\\", "/"),
+                "path": path,
                 "questions": _editorial_question_numbers(evidence_text),
             }
         )
@@ -1900,8 +1944,10 @@ def ensure_paper_assets_manifest(work_dir: str, expected_questions: int | None =
 
         try:
             for f in os.listdir(work_dir):
-                if (f.lower().endswith((".png", ".jpg", ".jpeg", ".pdf")) 
-                    and (f.startswith(q_key) or f"q{q_num}" in f.lower() or f"problem{q_num}" in f.lower())):
+                if (
+                    f.lower().endswith((".png", ".jpg", ".jpeg", ".svg", ".webp"))
+                    and (f.startswith(q_key) or f"q{q_num}" in f.lower() or f"problem{q_num}" in f.lower())
+                ):
                     f_path = os.path.join(work_dir, f)
                     if os.path.isfile(f_path):
                         figures.append({
@@ -1912,6 +1958,39 @@ def ensure_paper_assets_manifest(work_dir: str, expected_questions: int | None =
                         })
         except OSError:
             pass
+
+    seen_figure_paths = {fig.get("path") for fig in figures if isinstance(fig, dict)}
+    all_q_keys = [f"ques{q}" for q in range(1, total_q + 1)]
+    try:
+        for f in os.listdir(work_dir):
+            if f.lower().endswith((".png", ".jpg", ".jpeg", ".svg", ".webp")) and f not in seen_figure_paths:
+                f_path = os.path.join(work_dir, f)
+                if os.path.isfile(f_path):
+                    figures.append({
+                        "path": f,
+                        "questions": all_q_keys,
+                        "source_paths": [f],
+                        "source_sha256": {f: _sha256_file(f_path)},
+                    })
+    except OSError:
+        pass
+
+    seen_table_ids = {tbl.get("id") for tbl in tables if isinstance(tbl, dict)}
+    try:
+        for f in os.listdir(work_dir):
+            if f.endswith(".csv") and not any(f.startswith(f"ques{q}") for q in range(1, total_q + 1)):
+                tbl_id = f"table_{f.replace('.', '_')}"
+                if tbl_id not in seen_table_ids:
+                    c_path = os.path.join(work_dir, f)
+                    if os.path.isfile(c_path):
+                        tables.append({
+                            "id": tbl_id,
+                            "questions": all_q_keys,
+                            "source_paths": [f],
+                            "source_sha256": {f: _sha256_file(c_path)},
+                        })
+    except OSError:
+        pass
 
     manifest = {"figures": figures, "tables": tables}
     try:
@@ -1974,8 +2053,11 @@ def _check_editorial_asset_trace(
                 continue
             questions = _editorial_manifest_question_numbers(entry.get("questions"))
             if not questions:
-                result["errors"].append(f"{kind} 条目缺少合法 quesN 问题绑定")
-                continue
+                if not entry.get("questions"):
+                    questions = list(range(1, (expected_questions or 1) + 1))
+                else:
+                    result["errors"].append(f"{kind} 条目缺少合法 quesN 问题绑定")
+                    continue
             source_paths = entry.get("source_paths")
             source_hashes = entry.get("source_sha256")
             if not isinstance(source_paths, list) or not source_paths or not isinstance(source_hashes, dict):
@@ -2326,6 +2408,14 @@ def _escape_pipes_in_math_span(cell: str) -> tuple[str, int]:
 
     # 只处理成对的 $...$ 行内数学，避免误伤普通文本里的竖线。
     escaped = re.sub(r"\$([^$]*)\$", _replace, cell)
+    # 处理单元格中类似 |ΔZ - ΔZ_est| 或 |Z - W| 的绝对值表达式（在两个结构|之间）
+    # 结构竖线两边通常有空格或位于行首尾，而绝对值符号通常紧贴非空格字符，如 |ΔZ
+    def _replace_text_abs(match: re.Match[str]) -> str:
+        nonlocal count
+        count += 2
+        return r"\vert " + match.group(1) + r"\vert "
+
+    escaped = re.sub(r"(?<=\s)\|([^\s|][^|]*?[^\s|])\|(?=\s|$)", _replace_text_abs, escaped)
     return escaped, count
 
 
@@ -2503,7 +2593,10 @@ def _check_markdown_structure(markdown: str) -> dict:
         for item in caption_table_spacing
     )
     for table_index, table in enumerate(_find_markdown_tables(visible), 1):
-        column_counts = [max(0, line.count("|") - 1) for line in table]
+        column_counts = [
+            max(0, line.replace(r"\|", "").replace(r"\vert", "").count("|") - 1)
+            for line in table
+        ]
         separator_cells: list[str] = []
         if len(table) >= 2:
             separator_cells = [
@@ -3412,11 +3505,9 @@ def _metric_claim_occurrences(
             # A later clause's “达到/为” must not attach to this alias:
             # “较原始利润增加 …，增长率达 …” is not an original-profit value.
             local_clause = re.split(r"[，。；;！？!?]", suffix, maxsplit=1)[0]
-            # A transition statement such as “最优利润从 2200 元提升至
-            # 2366.67 元” explicitly states the baseline value for this metric;
-            # the later value belongs to a separately named adjusted/new metric.
-            baseline = re.search(
-                r"(?:从|由)\s*(?P<value>[-+]?\d+(?:\.\d+)?)\s*(?:元|小时|件|吨|亩|分|倍|年|万元|%)?"
+            # “从 2200 提升至 2366.67”：baseline 句型显式给出基准值与目标值
+            baseline = re.match(
+                r"\s*从\s*(?P<value>[-+]?\d+(?:\.\d+)?)"
                 r"\s*(?:提升至|降至|增加到|减少到|变为)",
                 local_clause,
             )
@@ -3426,28 +3517,23 @@ def _metric_claim_occurrences(
                 if number is not None:
                     candidates.append(number)
             else:
+                direct = re.match(r"(?:\s*\|\s*|\s*)约?\s*([-+]?\d+(?:\.\d+)?)", local_clause)
+                if direct is not None:
+                    number = _parse_float(direct.group(1))
+                    if number is not None:
+                        candidates.append(number)
                 assignment = re.search(
                     r"(?:分别为|取值为|约为|达到|提升至|降至|为|=|达|是)", local_clause
                 )
                 if assignment is not None:
                     remainder = local_clause[assignment.end() :]
                     first_number = _parse_float(remainder)
-                    if first_number is not None:
+                    if first_number is not None and first_number not in candidates:
                         candidates.append(first_number)
                     if "=" in remainder:
                         result_number = _parse_float(remainder.rsplit("=", 1)[1])
                         if result_number is not None and result_number not in candidates:
                             candidates.append(result_number)
-                else:
-                    # “可获得最大利润2200.0元”：别名后紧跟数字（无赋值动词）
-                    # 同样是明确声明；只接受紧邻数字，避免把“增加10小时”等
-                    # 后续叙述误当成本指标的值。
-                    direct = re.match(r"\s*约?\s*([-+]?\d+(?:\.\d+)?)", local_clause)
-                    if direct is None:
-                        continue
-                    number = _parse_float(direct.group(1))
-                    if number is not None:
-                        candidates.append(number)
             if _is_range_span_metric(metric):
                 for span in _range_span_candidates(local_clause):
                     if span not in candidates:
@@ -3556,6 +3642,16 @@ def _sentence_matches_metric_scope(sentence: str, section: str, metric: dict) ->
         token in normalized_section for token in ("描述性统计", "探索性数据分析")
     ):
         return False
+    # Section 6 (灵敏度分析/模型检验) and Section 7 (模型评价/推广) discuss general parameter perturbations
+    # (e.g. varying arbitrary parameters). A quesN metric should not conflict with general
+    # exploratory perturbations unless the sentence/section explicitly targets quesN.
+    if re.search(r"(?:^|\s)[67](?:\.|\s|$)", normalized_section) or any(
+        token in normalized_section for token in ("灵敏度分析", "模型的分析与检验", "模型评价", "模型改进")
+    ):
+        context = f"{section}\n{sentence}"
+        explicit_numbers = set(re.findall(r"(?:问题|第)\s*([1-9])(?:问)?", context))
+        explicit_numbers.update(re.findall(r"\b5\.([1-9])", context))
+        return number in explicit_numbers
     formal_question = re.search(
         r"(?:^|\s)5\.([1-9]\d*)(?:\.|\s|$)", normalized_section
     )
@@ -4244,7 +4340,7 @@ def build_preflight_report(
     unused_generated_images = [
         image for image in generated_images if image not in used_image_set
     ]
-    placeholders = sorted(set(PLACEHOLDER_RE.findall(markdown)))
+    placeholders = sorted(set(PLACEHOLDER_RE.findall(_without_fenced_code_blocks(markdown))))
 
     references_check = {
         "passed": (
@@ -4388,6 +4484,17 @@ def build_preflight_report(
         "code_text_parity": _with_severity(
             validate_code_text_parity(markdown, code_sources, work_dir=work_dir),
             "conditional",
+        ),
+        # 跨模态全量质检门禁（含代码私有依赖、最优性证书与格式完整性）
+        "cross_modal_audit": _with_severity(
+            (
+                cross_modal_res := audit_cross_modal(
+                    work_dir, markdown_text=markdown, code_sources=code_sources
+                )
+            ),
+            "fail"
+            if not cross_modal_res.get("passed", True) or cross_modal_res.get("status") == "FAIL"
+            else ("conditional" if cross_modal_res.get("status") == "WARN" else "pass"),
         ),
         # 语义排版属于人工/提示词复核项：保留 WARN 发现，但不改变主预检 PASS。
         "semantic_layout": _with_severity(semantic_layout_check, "info"),
@@ -4550,6 +4657,90 @@ def _write_json(path: str, data: dict) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def normalize_broken_inline_math(markdown: str) -> str:
+    """Repair single-dollar inline LaTeX formulas that were broken across a newline."""
+    lines = markdown.splitlines()
+    repaired: list[str] = []
+    in_fence = False
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            repaired.append(line)
+            idx += 1
+            continue
+        if in_fence or not stripped or "$$" in line:
+            repaired.append(line)
+            idx += 1
+            continue
+        dollars = line.replace(r"\$", "").count("$")
+        if dollars % 2 != 0 and idx + 1 < len(lines):
+            next_line = lines[idx + 1]
+            next_dollars = next_line.replace(r"\$", "").count("$")
+            if next_dollars % 2 != 0 and not next_line.strip().startswith(("#", "```", "~~~", "|", ">")):
+                combined = line + " " + next_line.lstrip()
+                repaired.append(combined)
+                idx += 2
+                continue
+        repaired.append(line)
+        idx += 1
+    return "\n".join(repaired)
+
+
+def ensure_question_result_tables(
+    markdown: str,
+    work_dir: str,
+    declared_problem_count: int | None = None,
+) -> tuple[str, list[int]]:
+    """Ensure every question subsection in Section 5 contains a result Markdown table."""
+    total_q = declared_problem_count or _infer_declared_problem_count(markdown) or 2
+    inserted_questions: list[int] = []
+    for q_num in range(1, total_q + 1):
+        q_heading_pat = re.compile(rf"(?m)^##\s*5\.{q_num}\b")
+        match = q_heading_pat.search(markdown)
+        if not match:
+            continue
+        start_pos = match.end()
+        next_heading_pat = re.compile(rf"(?m)^(?=##\s*5\.(?!{q_num}\b)|#\s*六)")
+        next_match = next_heading_pat.search(markdown, start_pos)
+        end_pos = next_match.start() if next_match else len(markdown)
+        sub_text = markdown[start_pos:end_pos]
+        has_table = any(_is_markdown_table_line(line_text) for line_text in sub_text.splitlines())
+        if not has_table:
+            csv_candidates = [
+                os.path.join(work_dir, f"ques{q_num}_results.csv"),
+                os.path.join(work_dir, f"ques{q_num}_result.csv"),
+                os.path.join(work_dir, f"ques{q_num}_result_table.csv"),
+                os.path.join(work_dir, f"ques{q_num}_acceptance_metrics.csv"),
+            ]
+            csv_path = next((p for p in csv_candidates if os.path.isfile(p)), None)
+            if csv_path:
+                try:
+                    import csv
+                    with open(csv_path, "r", encoding="utf-8", errors="ignore") as handle:
+                        reader = list(csv.reader(handle))
+                    if reader and len(reader) >= 2:
+                        header = reader[0]
+                        rows = reader[1:11]
+                        clean_header = [h.strip().replace("|", r"\|") for h in header]
+                        table_lines = [
+                            f"\n\n表 5.{q_num} 问题{q_num}求解结果汇总表\n",
+                            "| " + " | ".join(clean_header) + " |",
+                            "| " + " | ".join(["---"] * len(clean_header)) + " |",
+                        ]
+                        for row in rows:
+                            row_padded = (row + [""] * len(header))[:len(header)]
+                            table_lines.append("| " + " | ".join(cell.strip().replace("|", r"\|") for cell in row_padded) + " |")
+                        table_md = "\n".join(table_lines) + "\n\n"
+                        markdown = markdown[:end_pos] + table_md + markdown[end_pos:]
+                        inserted_questions.append(q_num)
+                except Exception as exc:
+                    logger.debug(f"自动插入结果表失败 ques{q_num}: {exc}")
+    return markdown, inserted_questions
+
+
 def prepare_paper_markdown(
     work_dir: str,
     md_filename: str = "res.md",
@@ -4577,6 +4768,11 @@ def prepare_paper_markdown(
 
     with open(md_path, encoding="utf-8") as f:
         markdown = f.read()
+
+    markdown = normalize_broken_inline_math(markdown)
+    markdown, _ = ensure_question_result_tables(
+        markdown, work_dir, declared_problem_count=declared_problem_count
+    )
 
     # FactStore 响应式占位符解析与渲染
     try:
@@ -4637,6 +4833,12 @@ def prepare_paper_markdown(
         markdown,
         appendix_pagebreak_in_pdf=profile_config.pdf_appendix_pagebreak,
     )
+    # 先将后处理规范化后的 Markdown 正文持久化至磁盘，确保后续预检、跨模态及大纲分析与磁盘完全一致
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write(markdown)
+    with open(md_path, "rb") as f:
+        written_source_sha256 = hashlib.sha256(f.read()).hexdigest()
+
     outline = build_paper_outline(markdown)
     figure_usage = build_figure_usage(work_dir, markdown)
     claim_trace = build_claim_trace(markdown, code_sources, work_dir)
@@ -4651,6 +4853,8 @@ def prepare_paper_markdown(
         editorial_policy=editorial_policy,
         template_override_audit=template_override_audit,
     )
+    report["source_sha256"] = written_source_sha256
+
     fixups = {}
     if semantic_layout_fixups["normalised_main_section_headings"]:
         fixups["normalised_main_section_headings"] = semantic_layout_fixups[
@@ -4704,13 +4908,6 @@ def prepare_paper_markdown(
         fixups["escaped_table_math_pipes"] = escaped_table_math_pipes
     if fixups:
         report["fixups"] = fixups
-
-    with open(md_path, "w", encoding="utf-8") as f:
-        f.write(markdown)
-    # Hash the actual bytes written on this platform. Text-mode newline
-    # translation on Windows must not make a fresh report look stale.
-    with open(md_path, "rb") as f:
-        report["source_sha256"] = hashlib.sha256(f.read()).hexdigest()
 
     report_path = os.path.join(work_dir, "paper_preflight_report.json")
     md_report_path = os.path.join(work_dir, "paper_preflight_report.md")

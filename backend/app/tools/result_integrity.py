@@ -8,8 +8,10 @@ computed numbers that a writer may use once the file is present.
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
+import math
 import os
 import re
 from typing import Any
@@ -222,3 +224,384 @@ def build_frozen_result_summary(work_dir: str, subtask_id: str | None = None) ->
 def metric_aliases(metric: dict[str, Any]) -> list[str]:
     """Public, deterministic aliases used by the prose and figure checks."""
     return _metric_aliases(metric)
+
+
+def _extract_rows_from_source(
+    source_path: str,
+) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """从 CSV、Excel (XLSX/XLS) 或 JSON 数据源提取结构化行记录列表（含 Sheet 与嵌套结构支持）。"""
+    ext = os.path.splitext(source_path)[1].lower()
+    if ext == ".csv":
+        try:
+            with open(source_path, encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            if not content.strip():
+                return None, "CSV 数据源文件为空"
+            reader = csv.DictReader(content.splitlines())
+            rows = list(reader)
+            if not rows:
+                return None, "CSV 数据源无有效数据行"
+            return rows, None
+        except Exception as exc:
+            return None, f"无法解析 CSV 数据源: {exc}"
+
+    if ext in (".xlsx", ".xlsm", ".xltx", ".xltm"):
+        try:
+            import openpyxl
+
+            wb = openpyxl.load_workbook(source_path, data_only=True, read_only=True)
+            rows: list[dict[str, Any]] = []
+            for sheet in wb.worksheets:
+                sheet_name = str(sheet.title)
+                iter_rows = sheet.iter_rows(values_only=True)
+                header_row = next(iter_rows, None)
+                if not header_row:
+                    continue
+                headers = [str(h).strip() if h is not None else "" for h in header_row]
+                for row_idx, r in enumerate(iter_rows, start=2):
+                    if r is None or not any(x is not None for x in r):
+                        continue
+                    row_dict: dict[str, Any] = {"_sheet": sheet_name, "_row": row_idx}
+                    for i, h in enumerate(headers):
+                        if h and i < len(r):
+                            val = r[i]
+                            if val is not None:
+                                row_dict[h] = val
+                    if len(row_dict) > 2:
+                        rows.append(row_dict)
+            wb.close()
+            if not rows:
+                return None, "Excel 数据源未提取到有效数据行"
+            return rows, None
+        except Exception as openpyxl_exc:
+            try:
+                import pandas as pd
+
+                excel_file = pd.ExcelFile(source_path)
+                clean_rows = []
+                for sheet_name in excel_file.sheet_names:
+                    df = pd.read_excel(excel_file, sheet_name=sheet_name)
+                    records = df.to_dict(orient="records")
+                    for row_idx, rec in enumerate(records, start=1):
+                        clean_rec = {
+                            str(k).strip(): v
+                            for k, v in rec.items()
+                            if pd.notna(v)
+                        }
+                        if clean_rec:
+                            clean_rec["_sheet"] = str(sheet_name)
+                            clean_rec["_row"] = row_idx
+                            clean_rows.append(clean_rec)
+                if not clean_rows:
+                    return None, "Excel 数据源未提取到有效数据行"
+                return clean_rows, None
+            except Exception as pd_exc:
+                return None, f"无法解析 Excel 数据源 ({openpyxl_exc}; {pd_exc})"
+
+    if ext == ".xls":
+        try:
+            import pandas as pd
+
+            excel_file = pd.ExcelFile(source_path)
+            clean_rows = []
+            for sheet_name in excel_file.sheet_names:
+                df = pd.read_excel(excel_file, sheet_name=sheet_name)
+                records = df.to_dict(orient="records")
+                for row_idx, rec in enumerate(records, start=1):
+                    clean_rec = {
+                        str(k).strip(): v
+                        for k, v in rec.items()
+                        if pd.notna(v)
+                    }
+                    if clean_rec:
+                        clean_rec["_sheet"] = str(sheet_name)
+                        clean_rec["_row"] = row_idx
+                        clean_rows.append(clean_rec)
+            if not clean_rows:
+                return None, "XLS 数据源未提取到有效数据行"
+            return clean_rows, None
+        except Exception as exc:
+            return None, f"无法解析 XLS 数据源: {exc}"
+
+    if ext == ".json":
+        try:
+            with open(source_path, encoding="utf-8", errors="replace") as f:
+                data = json.load(f)
+
+            flat_records: list[dict[str, Any]] = []
+
+            def _traverse_json(node: Any, prefix: str = "") -> None:
+                if isinstance(node, dict):
+                    if "id" in node or "metric_id" in node or "name" in node:
+                        flat_records.append(dict(node))
+                    row_entry: dict[str, Any] = {}
+                    for k, v in node.items():
+                        full_k = f"{prefix}.{k}" if prefix else str(k)
+                        if isinstance(v, (int, float, str, bool)) or v is None:
+                            row_entry[full_k] = v
+                        elif isinstance(v, (dict, list)):
+                            _traverse_json(v, full_k)
+                    if row_entry:
+                        flat_records.append(row_entry)
+                elif isinstance(node, list):
+                    for idx, item in enumerate(node):
+                        item_prefix = f"{prefix}[{idx}]" if prefix else f"[{idx}]"
+                        _traverse_json(item, item_prefix)
+
+            _traverse_json(data)
+            if not flat_records:
+                return None, "JSON 数据源未解析出结构化键值"
+            return flat_records, None
+        except Exception as exc:
+            return None, f"无法解析 JSON 数据源: {exc}"
+
+    return None, f"unsupported_format:{ext}"
+
+
+def _check_source_metrics_equivalence(
+    source_path: str,
+    metrics: list[dict[str, Any]],
+) -> tuple[bool, str]:
+    """核验数据源文件重新生成后，其关键数值是否与原 frozen_results 声明的指标保持等价（严格 fail-closed）。"""
+    if not metrics:
+        return False, "未指定可供核验的绑定指标"
+
+    if not os.path.isfile(source_path):
+        return False, f"数据源文件不存在: {os.path.basename(source_path)}"
+
+    rows, err = _extract_rows_from_source(source_path)
+    if err:
+        return False, f"数据源解析失败: {err}"
+
+    if not rows:
+        return False, "数据源提取结果为空，无法进行等价性比对"
+
+    for metric in metrics:
+        metric_id = str(metric.get("id", "")).strip()
+        metric_label = str(metric.get("label", "")).strip()
+        expected_val = metric.get("value")
+
+        if not metric_id:
+            return False, "待核验指标缺少 id 字段"
+
+        if (
+            expected_val is None
+            or isinstance(expected_val, bool)
+            or not isinstance(expected_val, (int, float))
+            or not math.isfinite(expected_val)
+        ):
+            return False, f"指标 '{metric_id}' 的期望值非有效有限数: {expected_val}"
+
+        expected_float = float(expected_val)
+        metric_id_lower = metric_id.lower()
+        metric_label_lower = metric_label.lower() if metric_label else ""
+
+        matches: list[tuple[str, float]] = []
+
+        for row in rows:
+            sheet_tag = f"[{row.get('_sheet')}]" if "_sheet" in row else ""
+            row_tag = f"row {row.get('_row')}" if "_row" in row else ""
+            loc = f"{sheet_tag} {row_tag}".strip() or "record"
+
+            # 场景 1: 单行宽表或包含对应列名
+            for col_name, val_str in row.items():
+                if col_name.startswith("_") or val_str is None or isinstance(val_str, bool):
+                    continue
+                clean_col = col_name.strip().lower()
+                matched = False
+                if metric_id_lower == clean_col or clean_col.endswith(f".{metric_id_lower}"):
+                    matched = True
+                elif metric_label_lower and (metric_label_lower == clean_col or clean_col.endswith(f".{metric_label_lower}")):
+                    # 仅在整行无任何显式匹配 ID 列且该列名精确匹配标签时允许兼容匹配
+                    if not any(c.strip().lower() == metric_id_lower or c.strip().lower().endswith(f".{metric_id_lower}") for c in row if not c.startswith("_")):
+                        matched = True
+
+                if matched:
+                    try:
+                        parsed = float(val_str)
+                        if not math.isfinite(parsed):
+                            return False, f"指标 '{metric_id}' 在 {os.path.basename(source_path)} 中解析为非有限数值 (NaN/Infinity)"
+                        matches.append((f"{loc}:{col_name}", parsed))
+                    except (ValueError, TypeError):
+                        return False, f"指标 '{metric_id}' 在 {os.path.basename(source_path)} 中的值无法解析为浮点数: {val_str!r}"
+
+            # 场景 2: 键值对长表结构（如 指标ID, 指标名称, 数值）
+            row_id = str(
+                row.get("指标ID")
+                or row.get("metric_id")
+                or row.get("id")
+                or row.get("metric")
+                or ""
+            ).strip().lower()
+            row_label = str(
+                row.get("指标名称")
+                or row.get("name")
+                or row.get("label")
+                or ""
+            ).strip().lower()
+
+            long_matched = False
+            if row_id:
+                # 存在显式 ID 字段时，必须严格匹配 metric_id，绝不允许通过标签覆盖冲突的 ID
+                if metric_id_lower == row_id:
+                    long_matched = True
+            elif metric_label_lower and metric_label_lower == row_label:
+                # 仅在行中无任何 ID 字段时，才允许按标签别名匹配
+                long_matched = True
+
+            if long_matched:
+                raw_val = row.get("数值") or row.get("value") or row.get("actual")
+                if raw_val is not None and not isinstance(raw_val, bool):
+                    try:
+                        parsed = float(raw_val)
+                        if not math.isfinite(parsed):
+                            return False, f"指标 '{metric_id}' 在长表行中解析为非有限数值 (NaN/Infinity)"
+                        matches.append((f"{loc}:long_row", parsed))
+                    except (ValueError, TypeError):
+                        return False, f"指标 '{metric_id}' 对应长表数值无法解析为浮点数: {raw_val!r}"
+
+        # 校验唯一定位与数值等价
+        if len(matches) == 0:
+            return (
+                False,
+                f"指标 '{metric_id}' 在 {os.path.basename(source_path)} 中缺失或无法定位（可能已被删除或改名）",
+            )
+
+        if len(matches) > 1:
+            locs = ", ".join(m[0] for m in matches[:5])
+            return (
+                False,
+                f"指标 '{metric_id}' 在 {os.path.basename(source_path)} 中定位到 {len(matches)} 处匹配 ({locs})，存在多行/跨Sheet重复或一旧一新定义，无法唯一定位",
+            )
+
+        found_loc, found_val = matches[0]
+        tol = max(1e-5, abs(expected_float) * 1e-4)
+        if abs(found_val - expected_float) > tol:
+            return (
+                False,
+                f"指标 '{metric_id}' 在 {os.path.basename(source_path)} ({found_loc}) 中的数值已变更为 {found_val}（原冻结值: {expected_val}），属于实质性数据变更，禁止静默刷新哈希！",
+            )
+
+    return True, "metrics_equivalent"
+
+
+def refresh_frozen_results_hashes(
+    work_dir: str,
+    verify_equivalence: bool = True,
+) -> dict[str, Any]:
+    """扫描任务目录下已存在的数据源文件，在保证数值严格等价的前提下同步刷新 frozen_results.json 中的 SHA-256 哈希。
+
+    若检测到关键指标缺失、多重冲突、数据源文件缺失、路径越界或实质性数值变化，一律 fail-closed，拒绝改写文件。
+    """
+    for relative_path in FREEZE_FILENAMES:
+        path = os.path.join(work_dir, relative_path)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as handle:
+                document = json.load(handle)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(document, dict):
+            continue
+
+        sources = document.get("sources", [])
+        metrics_list = document.get("metrics", [])
+        if not isinstance(sources, list):
+            continue
+
+        updated_count = 0
+        updated_sources = []
+        conflicts = []
+
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            rel_path = source.get("relative_path") or source.get("path")
+            if not rel_path:
+                continue
+            source_path = _safe_path(work_dir, str(rel_path))
+            if source_path is None:
+                conflicts.append({
+                    "path": rel_path,
+                    "reason": "数据源路径越界或非法",
+                })
+                continue
+
+            if not os.path.isfile(source_path):
+                conflicts.append({
+                    "path": rel_path,
+                    "reason": f"数据源文件缺失或不存在: {rel_path}",
+                })
+                continue
+
+            fresh_hash = _sha256(source_path)
+            old_hash = source.get("sha256")
+            if old_hash != fresh_hash:
+                norm_rel = str(rel_path).replace("\\", "/").strip().lstrip("./")
+                # 查找严格绑定到该相对路径的 metrics（严禁使用 basename 兜底）
+                bound_metrics = [
+                    m
+                    for m in metrics_list
+                    if isinstance(m, dict)
+                    and (
+                        str(m.get("source_path", "")).replace("\\", "/").strip().lstrip("./") == norm_rel
+                        or str(m.get("source", "")).replace("\\", "/").strip().lstrip("./") == norm_rel
+                    )
+                ]
+
+                if not bound_metrics:
+                    conflicts.append({
+                        "path": rel_path,
+                        "old_sha256": old_hash,
+                        "new_sha256": fresh_hash,
+                        "reason": "未找到绑定指标，无法证明等价性",
+                    })
+                    continue
+
+                is_equiv, reason = _check_source_metrics_equivalence(
+                    source_path, bound_metrics
+                )
+                if not is_equiv:
+                    conflicts.append({
+                        "path": rel_path,
+                        "old_sha256": old_hash,
+                        "new_sha256": fresh_hash,
+                        "reason": reason,
+                    })
+                    continue
+
+                source["sha256"] = fresh_hash
+                updated_count += 1
+                updated_sources.append({
+                    "path": rel_path,
+                    "old_sha256": old_hash,
+                    "new_sha256": fresh_hash,
+                    "status": "EQUIVALENT_REFRESH",
+                })
+
+        if updated_count > 0 and not conflicts:
+            try:
+                with open(path, "w", encoding="utf-8") as handle:
+                    json.dump(document, handle, ensure_ascii=False, indent=2)
+            except OSError:
+                return {
+                    "active": True,
+                    "updated": False,
+                    "updated_count": 0,
+                    "error": f"写入 {relative_path} 失败",
+                    "conflicts": conflicts,
+                    "has_conflicts": True,
+                }
+
+        return {
+            "active": True,
+            "updated": updated_count > 0 and not conflicts,
+            "updated_count": updated_count if not conflicts else 0,
+            "path": relative_path,
+            "updated_sources": updated_sources if not conflicts else [],
+            "conflicts": conflicts,
+            "has_conflicts": len(conflicts) > 0,
+        }
+
+    return {"active": False, "updated": False, "updated_count": 0, "conflicts": [], "has_conflicts": False}

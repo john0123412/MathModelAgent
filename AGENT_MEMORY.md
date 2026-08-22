@@ -1405,3 +1405,11 @@ uv run python scripts/smoke_pdf_export.py
   1. `_find_cross_task_path` stem 误报修复：移除对受保护文件名 stem（如 `checkpoint`、`frozen_results`）的裸子串匹配回退逻辑，保留字符串字面量精确 basename 匹配。合法变量名 `checkpoint = load_checkpoint()` 等不再被误拦截为跨任务路径访问。新增 6 个负例单测覆盖。
   2. Modeler prompt `constraints` 字段加固：在 `modeler.py` 中明确禁止把敏感性分析、情景假设、推论结论或非约束语义数学表达式写入 `constraints` 列表；要求所有敏感性分析内容必须且只能输出到顶层 `sensitivity_analysis` 字段，防止一维不等式边界审计误判为不可行。
   3. 验证：后端全量 827 unittest OK（skipped=2 为环境跳过），Ruff All checks passed。
+
+- [2026-08-23] **P3 Docker 轻量真实案例端到端验收完成**（任务 `20260822-155413-ca33dbff1e6239c4e3c512fece64bada`）：
+  1. 首轮真实任务在 EDA/ques1 求解与变量快照保存均成功后，因 Writer 生成假引用 `[1][2]` 被 preflight 自动 fixup 移除，导致 `reference_format` 硬门禁 FAIL（参考文献数=0），任务终态 `failed`。按 workflow 设计 reference 失败属于 hard stop，只能人工修复，Writer 自动返修不处理。
+  2. 人工修复：在线核验 Vanderbei《Linear Programming: Foundations and Extensions》5th ed. Springer 2020 (DOI:10.1007/978-3-030-39415-8) 真实存在后，在 `res.md` 正文补充 `[1]` 引用标记并插入真实参考文献条目；清理第17行空引用标记 `{}`。
+  3. 通过 `backend\.venv\Scripts\python.exe -m app.tools.export_cli task-refresh --profile cumcm2026 --local` 无 Provider 重建全链路：preflight=PASS、pdf_visual=PASS、submission_audit=PASS、final_acceptance=TECHNICAL_PASS。
+  4. 产物完整：res.md/res.json/res.docx/res.pdf/latex_project/main.tex/candidate_manifest.json/support_materials.zip/checkpoint.json/variable_snapshot.pkl 全部齐备；`/tasks` 状态 `completed`。
+  5. 独立数学核验（scipy linprog）：原最优解 x_A=40, x_B=20, Z=2200；机器+10h 后 x_A=46.67, x_B=16.67, Z=2366.67, ΔZ=+166.67，与论文一致。
+  6. 哈希链复核：manifest artifact_set_id=`b3707643...bde4871` 与 final_acceptance 一致；frozen_results.json/res.docx/res.json/res.md/res.pdf 的 SHA-256 全部 OK；submission_file=res.pdf SHA-256=`9670d3ae7b9f5426c5c74961014fb45335b2469474b37e4c9a0a6e63995db878` 与实际一致。

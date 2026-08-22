@@ -26,13 +26,15 @@ from app.tools.candidate_exporter import write_candidate_manifest
 from app.tools.submission_audit import write_submission_audit_report
 from app.tools.final_acceptance import write_final_acceptance_report
 import os
+import re
 import asyncio
 import shutil
 import datetime
 import hashlib
 import json
 import uuid
-from typing import Dict, Literal, Tuple
+from pathlib import Path
+from typing import Any, Dict, Literal, Tuple
 from fastapi import HTTPException
 from icecream import ic  # type: ignore[import-unresolved]
 from app.schemas.request import ExampleRequest
@@ -54,6 +56,14 @@ UPLOAD_CHUNK_SIZE_BYTES = 1024 * 1024
 # 若改成多 worker，cancel / approve / resume 可能路由到不持有任务的进程而失效，
 # 需要先把活动任务注册与取消信号迁移到 Redis 或其他跨进程协调机制。
 _active_tasks: Dict[str, Tuple[asyncio.Task, asyncio.Event]] = {}
+_task_locks: Dict[str, asyncio.Lock] = {}
+
+
+def _get_task_lock(task_id: str) -> asyncio.Lock:
+    if task_id not in _task_locks:
+        _task_locks[task_id] = asyncio.Lock()
+    return _task_locks[task_id]
+
 
 
 def _finalize_docx_and_manifest(
@@ -457,6 +467,26 @@ async def validate_openalex_email(request: ValidateOpenalexEmailRequest):
         )
 
 
+def _write_input_manifest(
+    work_dir: str | Path,
+    task_id: str,
+    files_info: list[dict[str, Any]],
+) -> Path:
+    """持久化任务初始输入文件清单（含安全文件名、相对路径、文件大小与 SHA-256 哈希）。"""
+    manifest_data = {
+        "schema_version": "mathmodel.input-manifest.v1",
+        "task_id": task_id,
+        "created_at": datetime.datetime.now().isoformat(),
+        "files": files_info,
+    }
+    manifest_path = Path(work_dir) / "input_manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest_data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return manifest_path
+
+
 @router.post("/example")
 async def exampleModeling(
     example_request: ExampleRequest,
@@ -469,12 +499,22 @@ async def exampleModeling(
     with open(os.path.join(example_dir, "questions.txt"), "r", encoding="utf-8") as f:
         ques_all = f.read()
 
+    example_records: list[dict[str, Any]] = []
     current_files = get_current_files(example_dir, "data")
     for file in current_files:
         safe_filename = ensure_safe_filename(file)
         src_file = os.path.join(example_dir, file)
         dst_file = os.path.join(work_dir, safe_filename)
         shutil.copy2(src_file, dst_file)
+        with open(dst_file, "rb") as f_in:
+            f_bytes = f_in.read()
+            example_records.append({
+                "name": safe_filename,
+                "relative_path": safe_filename,
+                "size_bytes": len(f_bytes),
+                "sha256": hashlib.sha256(f_bytes).hexdigest(),
+            })
+    _write_input_manifest(work_dir, task_id, example_records)
     # 存储任务ID
     await redis_manager.set(f"task_id:{task_id}", task_id)
 
@@ -516,6 +556,7 @@ async def modeling(
 
     try:
         # 如果有上传文件，流式保存，避免将不受信任内容整体读入进程内存。
+        uploaded_records: list[dict[str, Any]] = []
         if files:
             logger.info(f"开始处理上传的文件，工作目录: {work_dir}")
             total_uploaded_bytes = 0
@@ -537,9 +578,18 @@ async def modeling(
                     total_uploaded_bytes=total_uploaded_bytes,
                 )
                 total_uploaded_bytes += file_size
+                with open(data_file_path, "rb") as f_in:
+                    f_hash = hashlib.sha256(f_in.read()).hexdigest()
+                uploaded_records.append({
+                    "name": safe_filename,
+                    "relative_path": safe_filename,
+                    "size_bytes": file_size,
+                    "sha256": f_hash,
+                })
                 logger.info(f"上传文件已保存: {safe_filename} ({file_size} bytes)")
         else:
             logger.warning("没有上传文件")
+        _write_input_manifest(work_dir, task_id, uploaded_records)
     except HTTPException:
         shutil.rmtree(work_dir, ignore_errors=True)
         raise
@@ -1096,68 +1146,278 @@ async def revise_modeling(
     return ResumeTaskResponse(task_id=safe_task_id, status="revising")
 
 
+_PRISTINE_FRAMEWORK_MANAGEMENT_FILES: frozenset[str] = frozenset({
+    "task_status.json",
+    "checkpoint.json",
+    "task_request.json",
+    "problem_contract.json",
+    "modeler_plan.json",
+    "modeler_plan.md",
+    "modeling_decision.json",
+    "modeling_decision.md",
+    "input_manifest.json",
+    "internal_guidance_audit.jsonl",
+    "guidance.json",
+    "questions.txt",
+})
+
+
+_WINDOWS_RESERVED_DEVICES: frozenset[str] = frozenset({
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+})
+
+
+def is_task_pristine_for_takeover(
+    checkpoint: TaskCheckpoint | None,
+    work_dir: str | Path,
+) -> tuple[bool, str]:
+    """严格判定任务是否处于未发生任何代码执行、求解产物生成或返修记录的 Pristine 状态。"""
+    if checkpoint is None:
+        return False, "该任务未启用可审计的建模人工门禁"
+    if not checkpoint.require_model_review:
+        return False, "该任务未启用可审计的建模人工门禁"
+    if checkpoint.workflow_state in {"frozen", "completed"}:
+        return False, "任务处于已冻结或已完成状态，禁止越权重置已冻结任务"
+    if (
+        checkpoint.completed_phases
+        or checkpoint.solution_coder_responses
+        or checkpoint.executed_cell_indices
+        or checkpoint.has_variable_snapshot
+        or checkpoint.targeted_repair_attempts > 0
+        or checkpoint.paper_repair_attempts > 0
+        or checkpoint.editorial_repair_attempts > 0
+        or checkpoint.presentation_reflow_attempts > 0
+        or checkpoint.format_compliance_attempts > 0
+        or checkpoint.manual_recovery_attempts > 0
+        or bool(checkpoint.last_validation_failure)
+        or bool(checkpoint.last_paper_preflight_failure)
+        or bool(checkpoint.last_editorial_quality_failure)
+        or bool(checkpoint.last_presentation_reflow)
+        or bool(checkpoint.last_format_compliance)
+        or bool(checkpoint.last_manual_recovery)
+        or checkpoint.quality_review_status not in {"not_run", ""}
+        or bool(checkpoint.quality_review_id)
+        or checkpoint.quality_review_repairs > 0
+        or bool(checkpoint.quality_review_history)
+        or checkpoint.quality_repair_source_prepared
+        or checkpoint.workflow_state not in {"solving", "modeling"}
+    ):
+        return False, "任务已有求解、执行单元、变量快照、质量复核或返修记录，禁止越权重置已有执行状态"
+
+    work_dir_path = Path(work_dir)
+    static_artifacts = {
+        "res.json",
+        "res.md",
+        "res.docx",
+        "res.pdf",
+        "res.tex",
+        "frozen_results.json",
+        "variable_snapshot.pkl",
+        "variable_snapshot_meta.json",
+        "checkpoint.ipynb",
+        "execution_validation.json",
+        "execution_validation_report.json",
+        "paper_preflight_report.json",
+        "paper_preflight_report.md",
+        "pdf_visual_check.json",
+        "submission_audit_report.json",
+        "submission_audit_report.md",
+        "cross_modal_audit.json",
+        "final_acceptance_report.json",
+        "final_acceptance_report.md",
+        "execution_validation_report.json",
+        "execution_quality_review.json",
+        "execution_quality_review.md",
+        "candidate_manifest.json",
+        "support_materials.zip",
+        "evidence_failure_budget.json",
+        "fact_store.json",
+    }
+    if work_dir_path.exists():
+        for item in work_dir_path.rglob("*"):
+            if item.is_dir():
+                if item.name == "support_materials":
+                    return False, "任务目录已存在执行产物（support_materials/），禁止越权重置已有执行状态"
+                continue
+            rel_name = item.name
+            if rel_name == "frozen_results.json":
+                return False, "任务已存在冻结结果（frozen_results.json），禁止越权重置已冻结任务"
+            if rel_name in static_artifacts:
+                return False, f"任务目录已存在执行产物（{rel_name}），禁止越权重置已有执行状态"
+
+    # 读取并严格校验不可歧义的输入清单
+    manifest_file = work_dir_path / "input_manifest.json"
+    if not manifest_file.is_file():
+        return False, "输入清单（input_manifest.json）缺失，拒绝接管"
+    try:
+        manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
+    except Exception:
+        return False, "输入清单（input_manifest.json）损坏，拒绝接管"
+    if not isinstance(manifest_data, dict):
+        return False, "输入清单格式非法，拒绝接管"
+    if manifest_data.get("schema_version") != "mathmodel.input-manifest.v1":
+        return False, "输入清单 schema_version 不受支持，拒绝接管"
+    manifest_task_id = manifest_data.get("task_id")
+    if not isinstance(manifest_task_id, str) or not manifest_task_id.strip():
+        return False, "输入清单 task_id 缺失或非法，拒绝接管"
+    if manifest_task_id != checkpoint.task_id:
+        return False, f"输入清单 task_id ({manifest_task_id}) 与检查点 task_id ({checkpoint.task_id}) 不一致，拒绝接管"
+    files = manifest_data.get("files")
+    if not isinstance(files, list):
+        return False, "输入清单 files 字段必须为列表，拒绝接管"
+
+    allowed_inputs: set[str] = set()
+    seen_names: set[str] = set()
+    resolved_work_dir = work_dir_path.resolve()
+
+    for f_entry in files:
+        if (
+            not isinstance(f_entry, dict)
+            or not isinstance(f_entry.get("name"), str)
+            or not isinstance(f_entry.get("relative_path"), str)
+            or isinstance(f_entry.get("size_bytes"), bool)
+            or not isinstance(f_entry.get("size_bytes"), int)
+            or not isinstance(f_entry.get("sha256"), str)
+        ):
+            return False, "输入清单记录字段不完整或类型错误（size_bytes 必须为整数且非布尔值），拒绝接管"
+        f_name = f_entry["name"]
+        f_rel = f_entry["relative_path"]
+        size_bytes = f_entry["size_bytes"]
+        sha256 = f_entry["sha256"]
+
+        # name 与 relative_path 一致性校验
+        if f_name != f_rel:
+            return False, f"输入清单文件名 ({f_name}) 与相对路径 ({f_rel}) 不一致，拒绝接管"
+
+        # 与系统保留生产管理文件重名校验
+        if f_name in _PRISTINE_FRAMEWORK_MANAGEMENT_FILES:
+            return False, f"输入清单登记的文件与系统保留管理文件重名: {f_name}，拒绝接管"
+
+        # 严格拦截冒号与 NTFS 备用数据流 (ADS)
+        if ":" in f_name or ":" in f_rel:
+            return False, f"输入清单文件路径包含冒号或备用数据流(ADS): {f_name}，拒绝接管"
+
+        # Windows 盘符、UNC、POSIX 绝对路径与反斜杠校验
+        if f_name.startswith(("/", "\\")) or f_rel.startswith(("/", "\\")):
+            return False, f"输入清单包含绝对路径或 UNC 路径: {f_name}，拒绝接管"
+        if "\\" in f_name or "\\" in f_rel:
+            return False, f"输入清单路径不安全（包含反斜杠）: {f_name}，拒绝接管"
+
+        # 校验各级路径片段：路径遍历、保留设备名、尾随空格与尾随句点
+        parts = Path(f_name).parts
+        if ".." in parts or ".." in Path(f_rel).parts:
+            return False, f"输入清单文件路径包含路径遍历: {f_name}，拒绝接管"
+
+        for part in parts:
+            if part.endswith(" ") or part.endswith("."):
+                return False, f"输入清单文件路径包含尾随空格或句点: {f_name}，拒绝接管"
+            part_stem = part.split(".")[0].upper()
+            if part_stem in _WINDOWS_RESERVED_DEVICES or part.upper() in _WINDOWS_RESERVED_DEVICES:
+                return False, f"输入清单文件路径包含 Windows 保留设备名: {f_name}，拒绝接管"
+
+        # 非法特殊字符校验
+        if any(c in f_name for c in '<>"|?*'):
+            return False, f"输入清单文件路径包含非法字符: {f_name}，拒绝接管"
+
+        # 解析后路径必须严格位于 work_dir.resolve() 之内
+        try:
+            f_resolved = (work_dir_path / f_name).resolve()
+            f_resolved.relative_to(resolved_work_dir)
+            if f_resolved == resolved_work_dir:
+                return False, f"输入清单文件指向工作目录本身: {f_name}，拒绝接管"
+        except Exception:
+            return False, f"输入清单文件解析路径超出工作目录范围: {f_name}，拒绝接管"
+
+        if f_name in seen_names:
+            return False, f"输入清单包含重复文件名登记: {f_name}，拒绝接管"
+        seen_names.add(f_name)
+
+        # 大小与十六进制 SHA-256 校验
+        if size_bytes < 0:
+            return False, f"输入文件（{f_name}）size_bytes 为负数，拒绝接管"
+        if not re.fullmatch(r"^[0-9a-f]{64}$", sha256):
+            return False, f"输入文件（{f_name}）SHA-256 格式非法（必须为64位小写十六进制），拒绝接管"
+
+        f_path = work_dir_path / f_name
+        if not f_path.is_file():
+            return False, f"输入清单中登记的输入文件（{f_name}）缺失，拒绝接管"
+        try:
+            if f_path.stat().st_size != size_bytes:
+                return False, f"输入文件（{f_name}）大小与登记不一致（被篡改），拒绝接管"
+            actual_sha = hashlib.sha256(f_path.read_bytes()).hexdigest()
+            if actual_sha != sha256:
+                return False, f"输入文件（{f_name}）哈希与登记不一致（被篡改），拒绝接管"
+        except Exception as exc:
+            return False, f"校验输入文件（{f_name}）异常: {exc}，拒绝接管"
+        allowed_inputs.add(f_name)
+
+    if work_dir_path.exists():
+        for item in work_dir_path.rglob("*"):
+            if item.is_dir():
+                continue
+
+            rel_str = str(item.relative_to(work_dir_path)).replace("\\", "/")
+            if rel_str not in _PRISTINE_FRAMEWORK_MANAGEMENT_FILES and rel_str not in allowed_inputs:
+                return False, f"任务目录存在未登记的非输入文件（{rel_str}），禁止越权重置已有状态"
+
+    return True, ""
+
+
 @router.post("/modeling/{task_id}/codex-modeling", response_model=ResumeTaskResponse)
 async def submit_codex_modeling(task_id: str, request: CodexModelingRequest):
     """Place a Codex-authored, contract-validated plan behind normal approval.
 
-    The endpoint is intentionally limited to a Modeler-failed task, a paused
-    reviewer task, or a pristine cancelled task at the pre-execution boundary.
-    It is not a route around ModelPlan validation or downstream execution gates.
+    The endpoint is strictly limited to a Modeler-failed task.
+    It is not a route around ModelPlan validation or downstream execution gates,
+    and cannot override a frozen or executing task.
     """
     safe_task_id = _require_safe_task_id(task_id)
     try:
         work_dir = get_work_dir(safe_task_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if safe_task_id in _active_tasks:
-        raise HTTPException(status_code=409, detail="任务仍在运行中")
-    prior_state = (read_task_status(work_dir) or {}).get("status")
-    if prior_state not in {"failed", "waiting_review", "cancelled"}:
-        raise HTTPException(
-            status_code=409,
-            detail="仅 Modeler 失败、等待建模审查或满足安全前置条件的取消任务可由 Codex 接管",
-        )
-    checkpoint = CheckpointManager(work_dir).load()
-    if checkpoint is None:
-        detail = (
-            "取消任务缺少检查点，不能安全接管"
-            if prior_state == "cancelled"
-            else "该任务未启用可审计的建模人工门禁"
-        )
-        raise HTTPException(status_code=409, detail=detail)
-    if not checkpoint.require_model_review:
-        detail = (
-            "取消任务未启用可审计的建模人工门禁，不能安全接管"
-            if prior_state == "cancelled"
-            else "该任务未启用可审计的建模人工门禁"
-        )
-        raise HTTPException(status_code=409, detail=detail)
-    if prior_state == "cancelled":
-        cancelled_issues = _cancelled_codex_modeling_issues(checkpoint)
-        if cancelled_issues:
+
+    lock = _get_task_lock(safe_task_id)
+    async with lock:
+        if safe_task_id in _active_tasks:
+            raise HTTPException(status_code=409, detail="任务仍在运行中")
+
+        status_info = read_task_status(work_dir) or {}
+        prior_state = status_info.get("status")
+        if prior_state != "failed":
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "取消任务已越过 Codex 安全接管边界，不能接管："
-                    + "；".join(cancelled_issues)
-                ),
+                detail="仅 failed 状态下可触发 Codex 建模接管，禁止越权重置其他状态或已冻结任务",
             )
-    workflow = MathModelWorkFlow()
-    try:
-        workflow.accept_codex_modeling(safe_task_id, request.modeler_response)
-    except (FileNotFoundError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    note = request.comment.strip()[:1000] or "当前 Codex 在 Modeler 失败或安全取消点提交结构化建模方案。"
-    _append_guidance_audit(
-        work_dir, task_id=safe_task_id, target="modeler", purpose="review", source="codex", content=note
-    )
-    write_task_status(safe_task_id, "waiting_review", "Codex 建模方案已写入，等待人工确认")
-    await redis_manager.set(f"task_id:{safe_task_id}", safe_task_id)
-    await redis_manager.publish_message(
-        safe_task_id,
-        SystemMessage(content="Codex 建模方案已通过题面契约校验，等待人工确认", type="warning"),
-    )
-    return ResumeTaskResponse(task_id=safe_task_id, status="waiting_review")
+
+        checkpoint_manager = CheckpointManager(work_dir)
+        checkpoint = checkpoint_manager.load()
+        pristine_ok, reason = is_task_pristine_for_takeover(checkpoint, work_dir)
+        if not pristine_ok:
+            raise HTTPException(status_code=409, detail=reason)
+
+        if not (checkpoint.require_model_review or settings.HUMAN_MODEL_GATE_ENABLED):
+            raise HTTPException(status_code=409, detail="未启用人工审核门禁的任务不支持接管")
+
+        workflow = MathModelWorkFlow()
+        try:
+            workflow.accept_codex_modeling(safe_task_id, request.modeler_response)
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        note = request.comment.strip()[:1000] or "当前 Codex 在 Modeler 失败状态提交结构化建模方案。"
+        _append_guidance_audit(
+            work_dir, task_id=safe_task_id, target="modeler", purpose="review", source="codex", content=note
+        )
+        write_task_status(safe_task_id, "waiting_review", "Codex 建模方案已写入，等待人工确认")
+        await redis_manager.set(f"task_id:{safe_task_id}", safe_task_id)
+        await redis_manager.publish_message(
+            safe_task_id,
+            SystemMessage(content="Codex 建模方案已通过题面契约校验，等待人工确认", type="warning"),
+        )
+        return ResumeTaskResponse(task_id=safe_task_id, status="waiting_review")
+
 
 
 @router.post(

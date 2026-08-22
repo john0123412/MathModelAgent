@@ -201,6 +201,31 @@ python "<本 skill 目录>/scripts/check_pdf_anon.py" "$OUTPUT_PDF" \
 python "<本 skill 目录>/scripts/check_latex_keywords.py" "$MAIN_FILE"
 ```
 
+**3) 参考文献与交叉引用一致性（仅 LaTeX 引擎）**
+
+```bash
+# 检查 \ref/\eqref/\cite 标签与 .bib 键一致性（悬空引用 / 重复 label / bib 缺项）
+python "<本 skill 目录>/scripts/check_latex_refs.py" "$MAIN_FILE" --bib references.bib
+```
+
+脚本递归读取 `\input`/`\include` 的章节，抽取 `\label` 与 `\cite` 键，比对 `\bibitem`/`@entry`：
+- 悬空引用（`\ref`/`\cite` 指向不存在的键）→ FAIL；
+- 重复 `\label` → FAIL；
+- `.bib` 中声明但正文未引用、或正文引用但 `.bib` 缺失 → WARN。
+
+**4) 本地 LaTeX 编译环境可用性（仅 LaTeX 引擎）**
+
+```bash
+# CUMCM 要求 cumcmthesis.cls；缺失即 FAIL（除非显式 --strict-class 关闭回退）
+python "<本 skill 目录>/scripts/check_latex_env.py" --contest cumcm --use-ref-bib
+# MCM/ICM 要求 mcmthesis
+python "<本 skill 目录>/scripts/check_latex_env.py" --contest mcm-icm
+```
+
+脚本用 `kpsewhich` 探测 cls 是否可解析，并检测 BibTeX 可用性（`--use-ref-bib` 时）。
+国赛类缺少 `cumcmthesis.cls`（且未设置 `--strict-class`）会回退到 `ctexart` 并 WARN；
+若明确要求官方类，加 `--strict-class` 使缺失即 FAIL。
+
 脚本校验关键词是否建模术语（优化模型/回归分析/聚类分析/层次分析法/TOPSIS/蒙特卡洛模拟/灵敏度分析等），而非题目对象或行业背景词（如“农作物种植策略”“乡村农业”）。
 命中题目词时输出建议修订，默认判 `WARN`；若比赛规则明确要求关键词必须为建模术语，写入 `VERIFY_REPORT.md` 并人工确认接受，否则保持 `WARN`。
 

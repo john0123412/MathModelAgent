@@ -158,17 +158,17 @@ FIG_COMPOSITE = (10, 8)  # 复合图表默认尺寸
        margin = (z * np.sqrt((p * (1.0 - p) + z * z / (4.0 * total)) / total)) / denom
        return p, max(0.0, center - margin), min(1.0, center + margin)
    ```
-7. **一维上确界全局边界排除证明与自适应序贯采样（Sequential Sampling）**：在解决非线性/双变量成本优化并宣称“全局最低成本解”时，必须保证统计样本量与检力的一致性与公平性：
-   - 采用自适应序贯抽样（粗筛 $M_1=200$，若候选点接近阈值且可能挑战最优解，自适应提升至 $M_2=1000 \to M_3=5000$ 消除样本量不对称带来的假性排除）；
-   - 在附录主求解代码中内嵌生成对应的证书 CSV（如 `ques4_global_frontier_certificate.csv`）；
+7. **一维上确界全局边界排除证明与分层自适应两阶段抽样（Layered Adaptive MC）**：在解决非线性/双变量成本优化并宣称“全局最低成本解”时，必须保证统计样本量与检力的一致性与公平性：
+   - 采用基于临界加密的分层自适应两阶段抽样：远端区采用基准初筛样本量，若候选点接近阈值且可能挑战最优解时，自适应加密深度抽样，消除样本量不对称带来的假性排除；
+   - 在附录主求解代码中内嵌生成对应的证书 CSV（如 `quesN_frontier_certificate.csv`）；
    - 严格断言：若声称某解为全局最优，证书中所有更低成本方案的 Wilson 下界必须严格小于可靠性阈值：
    ```python
-   # 对任意 N_A 计算保证总成本严格低于当前最优解所允许的最大 N_B_max
+   # 对任意主决策变量计算保证总成本严格低于当前最优解所允许的最大副决策变量上限
    cert_records = []
-   # 遍历所有可能的 N_A 候选，计算 N_B_max 并评估 Wilson 下界
+   # 遍历所有可能的候选解，计算上限并评估 Wilson 下界
    # ...
    cert_df = pd.DataFrame(cert_records)
-   cert_df.to_csv("ques4_global_frontier_certificate.csv", index=False)
+   cert_df.to_csv("quesN_frontier_certificate.csv", index=False)
    assert (cert_df["wilson_low"] < target_reliability).all(), "存在未被排除的潜在更优可行解！"
    ```
 
@@ -326,7 +326,7 @@ print("=" * 60)
 - 多目标压力、时段或情景可把明细行写为 `原指标键_情景`（例如
   `pressure_stability_100MPa` / `pressure_stability_150MPa`）；每行仍必须填写精确数值和真实
   状态。后端会按 ModelPlan 比较方向取所有情景中的最坏值，并把这些行的 metric/constraint
-  来源强制绑定到验收表，不能改用未包含该数值的概览文件。
+  来源绑定到验收表。
 - The ModelPlan's `expected_artifacts` are completion requirements, not
   optional scratch files: create every declared numerical artefact, keep CSV
   files parseable and nonempty, and ensure a declared scan contains a varying
@@ -413,6 +413,46 @@ print("=" * 60)
   - 两个有限圆柱/胶囊体（底半径 r1, r2，轴段 P1P2 与 Q1Q2）之间的表面间隙距离必须使用 `max(0.0, d_seg - r1 - r2)`，其中 `d_seg` 为有限线段间的最短欧氏距离（严格处理端点夹紧与退化单点）。严禁粗暴使用“轴线距离 - (r1+r2)”冒充空间非平行平端帽圆柱体最短距离。
   - **独立交叉复算（Crosscheck）必须真实独立**：独立复算表中的两个算法必须采用完全不同的数学机理（例如：算法 A 为封闭解析几何，算法 B 为一维数值黄金分割搜索或离散点云采样优化）。严禁仅调换入参（如 `dist(a,b)` 与 `dist(b,a)`）或重复调用相同函数冒充独立复算。
 
+# SELF-CONTAINED SOLVER PROTOCOL (MANDATORY FOR MASTER SOLVERS & APPENDIX CODE)
+附录中收录的主求解程序（如 `master_solver.py`）必须是**单文件自包含（静态私有依赖检查通过）**的可运行程序：
+1. **零内部私有依赖**：严禁在求解代码中使用 `sys.path.append(...)`、`from app.` 或引入仓库内部私有模块/工具；
+2. **轻量算法自建**：若需使用特定空间网格分箱、快速检索或邻域搜索结构，必须直接在单文件内部实现轻量类或辅助函数，仅依赖公开第三方标准库（NumPy, SciPy, pandas, openpyxl, matplotlib 等）；
+3. **脱机一键可复现**：确保任何评委将该单文件代码下载到全新脱机环境后，无需配置项目路径即可直接运行并复现全部数据表与图表。
+
+# GENTLE CONCURRENCY PROTOCOL (MANDATORY FOR LARGE MONTE CARLO / SWEEPS)
+对大规模 Monte Carlo 仿真或大规模参数扫描，**必须采用温和并发策略（Gentle Concurrency）**：
+1. **Worker 数量控制**：统一使用 `concurrent.futures.ProcessPoolExecutor`，将最大进程数限制在 `max(1, min(8, (os.cpu_count() or 4) // 2))` 范围内，严禁无节制拉满全部核心导致 CPU 温度激增（过热降频）与系统卡死；
+2. **批量并发与断点增量落盘**：将抽样分批提交给 Worker 池，并在批次完成后及时增量追加写入 CSV，保证主机负载受控且中断安全；
+3. **标准温和并发模板**：
+```python
+import os
+import concurrent.futures
+from pathlib import Path
+import pandas as pd
+
+def run_simulation_batch(seed_batch: list[int]) -> list[dict]:
+    results = []
+    for seed in seed_batch:
+        results.append(simulate_single_case(seed))
+    return results
+
+def run_parallel_mc(total_seeds: int, batch_size: int = 50, output_csv: str = "ques2_mc_samples.csv"):
+    csv_path = Path(output_csv)
+    completed_seeds = set(pd.read_csv(csv_path)["sample_id"].unique()) if csv_path.exists() else set()
+    pending_seeds = [s for s in range(total_seeds) if s not in completed_seeds]
+    if not pending_seeds:
+        return
+    batches = [pending_seeds[i:i + batch_size] for i in range(0, len(pending_seeds), batch_size)]
+    max_workers = max(1, min(8, (os.cpu_count() or 4) // 2))
+    print(f"[CONCURRENCY] 启动温和多进程: workers={{max_workers}}, 待计算样本={{len(pending_seeds)}}")
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(run_simulation_batch, b) for b in batches]
+        for fut in concurrent.futures.as_completed(futures):
+            batch_res = fut.result()
+            df_chunk = pd.DataFrame(batch_res)
+            df_chunk.to_csv(csv_path, mode="a", header=not csv_path.exists(), index=False)
+```
+
 # INCREMENTAL PERSISTENCE & RESUME PROTOCOL (MANDATORY FOR MONTE CARLO / SWEEPS)
 所有涉及多样本、蒙特卡洛（MC）模拟、批量随机试验或参数大扫描的任务，**必须采用逐样本/分批增量落盘与断点续跑机制**：
 ```python
@@ -432,7 +472,7 @@ for sample_id in range(total_samples):
     if sample_id in completed_seeds:
         continue
     result_record = run_single_simulation(sample_id)
-    # 即时追加写入磁盘，确保即使超时被中断，已计算的样本 100% 保留
+    # 即时追加写入磁盘，确保即使超时被中断，已计算的样本完整保留落盘
     df_row = pd.DataFrame([result_record])
     df_row.to_csv(mc_csv, mode="a", header=not mc_csv.exists(), index=False)
 ```

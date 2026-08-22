@@ -1324,6 +1324,421 @@ class CoderAgentToolHandlingTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result.execution_succeeded)
 
 
+class TestPersistentFailureBudget(unittest.IsolatedAsyncioTestCase):
+    def test_load_and_save_evidence_failure_count(self):
+        from app.core.agents.coder_agent import (
+            _load_evidence_failure_count,
+            _save_evidence_failure_count,
+            _reset_evidence_failure_count,
+        )
+        with tempfile.TemporaryDirectory() as work_dir:
+            self.assertEqual(_load_evidence_failure_count(work_dir, "ques1"), 0)
+            _save_evidence_failure_count(work_dir, "ques1", 2, task_id="task-test")
+            self.assertEqual(_load_evidence_failure_count(work_dir, "ques1", task_id="task-test"), 2)
+            # Other subtasks independent
+            self.assertEqual(_load_evidence_failure_count(work_dir, "ques2"), 0)
+            _save_evidence_failure_count(work_dir, "ques2", 1, task_id="task-test")
+            self.assertEqual(_load_evidence_failure_count(work_dir, "ques1", task_id="task-test"), 2)
+            self.assertEqual(_load_evidence_failure_count(work_dir, "ques2", task_id="task-test"), 1)
+            # Reset ques1
+            _reset_evidence_failure_count(work_dir, "ques1", task_id="task-test")
+            self.assertEqual(_load_evidence_failure_count(work_dir, "ques1", task_id="task-test"), 0)
+            self.assertEqual(_load_evidence_failure_count(work_dir, "ques2", task_id="task-test"), 1)
+
+    def test_fail_closed_on_corrupt_budget_json(self):
+        from app.core.agents.coder_agent import _load_evidence_failure_count
+        with tempfile.TemporaryDirectory() as work_dir:
+            budget_file = Path(work_dir) / "evidence_failure_budget.json"
+            budget_file.write_text("{corrupt json ...", encoding="utf-8")
+            # 异常 JSON 触发 fail-closed，直接返回最大限制 3
+            self.assertEqual(_load_evidence_failure_count(work_dir, "ques1"), 3)
+
+    def test_fail_closed_on_invalid_count_or_plan_mismatch(self):
+        from app.core.agents.coder_agent import (
+            _load_evidence_failure_count,
+            _find_cross_task_path,
+            _save_evidence_failure_count,
+        )
+        with tempfile.TemporaryDirectory() as work_dir:
+            budget_file = Path(work_dir) / "evidence_failure_budget.json"
+            # 1. String count
+            budget_file.write_text(
+                json.dumps({"task_id": "t1", "subtasks": {"ques1": {"count": "2", "plan_sha256": "sha1"}}}),
+                encoding="utf-8",
+            )
+            self.assertEqual(_load_evidence_failure_count(work_dir, "ques1", task_id="t1", plan_sha256="sha1"), 3)
+
+            # 2. Negative count
+            budget_file.write_text(
+                json.dumps({"task_id": "t1", "subtasks": {"ques1": {"count": -100, "plan_sha256": "sha1"}}}),
+                encoding="utf-8",
+            )
+            self.assertEqual(_load_evidence_failure_count(work_dir, "ques1", task_id="t1", plan_sha256="sha1"), 3)
+
+            # 3. Plan sha256 mismatch
+            budget_file.write_text(
+                json.dumps({"task_id": "t1", "subtasks": {"ques1": {"count": 1, "plan_sha256": "wrong_sha"}}}),
+                encoding="utf-8",
+            )
+            self.assertEqual(_load_evidence_failure_count(work_dir, "ques1", task_id="t1", plan_sha256="correct_sha"), 3)
+
+            # 4. Missing task_id or plan_sha256
+            budget_file.write_text(
+                json.dumps({"subtasks": {"ques1": {"count": 1, "plan_sha256": "sha1"}}}),
+                encoding="utf-8",
+            )
+            self.assertEqual(_load_evidence_failure_count(work_dir, "ques1", task_id="t1", plan_sha256="sha1"), 3)
+
+            budget_file.write_text(
+                json.dumps({"task_id": "t1", "subtasks": {"ques1": {"count": 1}}}),
+                encoding="utf-8",
+            )
+            self.assertEqual(_load_evidence_failure_count(work_dir, "ques1", task_id="t1", plan_sha256="sha1"), 3)
+
+            # 5. Legacy bare integer subtask record
+            budget_file.write_text(
+                json.dumps({"task_id": "t1", "subtasks": {"ques1": 2}}),
+                encoding="utf-8",
+            )
+            self.assertEqual(_load_evidence_failure_count(work_dir, "ques1", task_id="t1", plan_sha256="sha1"), 3)
+
+            # 6. Anti-tampering check (including string concatenation)
+            self.assertIsNotNone(_find_cross_task_path('open("evidence_failure_budget.json", "w")'))
+            self.assertIsNotNone(_find_cross_task_path('os.remove("evidence_failure_budget.json")'))
+            self.assertIsNotNone(_find_cross_task_path('name = "evidence_failure_" + "budget.json"\nopen(name, "w")'))
+
+            # 7. Runtime protected files snapshot & auto-restoration integrity test
+            from app.core.agents.coder_agent import _snapshot_protected_files, _verify_and_restore_protected_files
+            budget_file.write_text(json.dumps({"task_id": "t1", "subtasks": {"ques1": {"count": 2, "plan_sha256": "sha1"}}}), encoding="utf-8")
+            snapshots = _snapshot_protected_files(work_dir)
+            # 模拟执行代码通过动态变量或系统调用篡改文件
+            tampered_name = "evidence_" + "failure_" + "budget.json"
+            (Path(work_dir) / tampered_name).write_text(json.dumps({"task_id": "t1", "subtasks": {"ques1": {"count": 0, "plan_sha256": "sha1"}}}), encoding="utf-8")
+            ok, err = _verify_and_restore_protected_files(work_dir, snapshots)
+            self.assertFalse(ok)
+            self.assertIn("非法篡改", err)
+            # 验证已被自动恢复为原内容
+            restored = json.loads(budget_file.read_text(encoding="utf-8"))
+            self.assertEqual(restored["subtasks"]["ques1"]["count"], 2)
+
+            # 8. Save failure raises RuntimeError fail-closed
+            with patch("builtins.open", side_effect=OSError("Disk full")):
+                with self.assertRaises(RuntimeError) as caught:
+                    _save_evidence_failure_count(work_dir, "ques1", 1, task_id="t1")
+                self.assertIn("FAIL_CLOSED", str(caught.exception))
+
+    async def test_circuit_breaker_immediately_raises_on_resumed_instance_without_calling_llm(self):
+        from app.core.agents.coder_agent import CoderAgent, _save_evidence_failure_count
+        with tempfile.TemporaryDirectory() as work_dir:
+            _save_evidence_failure_count(work_dir, "ques1", 3, task_id="task-circuit")
+            chat_mock = AsyncMock()
+            agent = CoderAgent(
+                task_id="task-circuit",
+                model=chat_mock,
+                work_dir=work_dir,
+                code_interpreter=FinalOutputInterpreter(),
+            )
+            with patch("app.core.agents.coder_agent.redis_manager.publish_message", AsyncMock()):
+                with self.assertRaises(RuntimeError) as caught:
+                    await agent.run("求解ques1", "ques1")
+            self.assertIn("PLAN_CONFLICT", str(caught.exception))
+            chat_mock.assert_not_called()
+
+
+    def test_protected_files_integrity_four_paths(self):
+        from app.core.agents.coder_agent import _snapshot_protected_files, _verify_and_restore_protected_files
+        with tempfile.TemporaryDirectory() as work_dir:
+            root = Path(work_dir)
+
+            # 1. 路径一：原本不存在的文件被新建 -> 必须检测、删除并返回 False
+            before = _snapshot_protected_files(work_dir)
+            self.assertIsNone(before.get("checkpoint.json"))
+            # 模拟代码执行非法创建 checkpoint.json
+            (root / "checkpoint.json").write_text("{}", encoding="utf-8")
+            ok, err = _verify_and_restore_protected_files(work_dir, before)
+            self.assertFalse(ok)
+            self.assertIn("新建，已清理", err)
+            self.assertFalse((root / "checkpoint.json").exists())
+
+            # 2. 路径二：原本存在的文件被修改 -> 必须检测、恢复并返回 False
+            (root / "evidence_failure_budget.json").write_text('{"count": 1}', encoding="utf-8")
+            before_mod = _snapshot_protected_files(work_dir)
+            # 模拟代码篡改
+            (root / "evidence_failure_budget.json").write_text('{"count": 0}', encoding="utf-8")
+            ok, err = _verify_and_restore_protected_files(work_dir, before_mod)
+            self.assertFalse(ok)
+            self.assertIn("篡改，已恢复", err)
+            self.assertEqual((root / "evidence_failure_budget.json").read_text(encoding="utf-8"), '{"count": 1}')
+
+            # 3. 路径三：原本存在的文件被删除 -> 必须检测、恢复并返回 False
+            before_del = _snapshot_protected_files(work_dir)
+            (root / "evidence_failure_budget.json").unlink()
+            ok, err = _verify_and_restore_protected_files(work_dir, before_del)
+            self.assertFalse(ok)
+            self.assertIn("删除，已恢复", err)
+            self.assertEqual((root / "evidence_failure_budget.json").read_text(encoding="utf-8"), '{"count": 1}')
+
+            # 4. 路径四：执行抛出异常 -> finally 块中复核仍能恢复被修改的文件
+            before_exc = _snapshot_protected_files(work_dir)
+            try:
+                (root / "evidence_failure_budget.json").write_text('{"tampered": true}', encoding="utf-8")
+                raise RuntimeError("Interpreter error")
+            except RuntimeError:
+                pass
+            finally:
+                ok_exc, err_exc = _verify_and_restore_protected_files(work_dir, before_exc)
+            self.assertFalse(ok_exc)
+            self.assertIn("篡改，已恢复", err_exc)
+            self.assertEqual((root / "evidence_failure_budget.json").read_text(encoding="utf-8"), '{"count": 1}')
+
+    def test_protected_files_concurrent_multi_file_tamper_restoration(self):
+        """同时篡改 checkpoint.json、frozen_results.json 并新建 evidence_failure_budget.json，三项必须一次性全部恢复与清理。"""
+        from app.core.agents.coder_agent import _snapshot_protected_files, _verify_and_restore_protected_files
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            root = Path(work_dir)
+            (root / "checkpoint.json").write_text('{"task": "orig_checkpoint"}', encoding="utf-8")
+            (root / "frozen_results.json").write_text('{"task": "orig_frozen"}', encoding="utf-8")
+
+            # 初始快照：checkpoint 与 frozen_results 存在，evidence_failure_budget 不存在
+            before = _snapshot_protected_files(work_dir)
+            self.assertIsNotNone(before["checkpoint.json"])
+            self.assertIsNotNone(before["frozen_results.json"])
+            self.assertIsNone(before["evidence_failure_budget.json"])
+
+            # 模拟代码同时篡改两者并新建第三者
+            (root / "checkpoint.json").write_text('{"task": "tampered_checkpoint"}', encoding="utf-8")
+            (root / "frozen_results.json").write_text('{"task": "tampered_frozen"}', encoding="utf-8")
+            (root / "evidence_failure_budget.json").write_text('{"task": "illegal_created"}', encoding="utf-8")
+
+            ok, err = _verify_and_restore_protected_files(work_dir, before)
+            self.assertFalse(ok)
+            # 必须收集到全部 3 个违规项
+            self.assertIn("checkpoint.json", err)
+            self.assertIn("frozen_results.json", err)
+            self.assertIn("evidence_failure_budget.json", err)
+
+            # 两个篡改文件必须已原子恢复原始内容
+            self.assertEqual((root / "checkpoint.json").read_text(encoding="utf-8"), '{"task": "orig_checkpoint"}')
+            self.assertEqual((root / "frozen_results.json").read_text(encoding="utf-8"), '{"task": "orig_frozen"}')
+            # 非法新建文件必须已被清理删除
+            self.assertFalse((root / "evidence_failure_budget.json").exists())
+
+    def test_protected_files_snapshot_read_failure_raises_snapshot_failed(self):
+        """反例：快照时存在受保护文件但读取失败，必须 fail-closed 抛出 PROTECTED_FILE_SNAPSHOT_FAILED。"""
+        from app.core.agents.coder_agent import _snapshot_protected_files
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            root = Path(work_dir)
+            target = root / "checkpoint.json"
+            target.write_text("{}", encoding="utf-8")
+
+            with patch.object(Path, "read_bytes", side_effect=PermissionError("Permission Denied")):
+                with self.assertRaises(RuntimeError) as caught:
+                    _snapshot_protected_files(work_dir)
+                self.assertIn("PROTECTED_FILE_SNAPSHOT_FAILED", str(caught.exception))
+
+    def test_protected_files_recovery_failure_does_not_report_restored(self):
+        """反例：原子恢复失败时不得报告'已恢复'，必须明确包含 PROTECTED_FILE_RECOVERY_FAILED。"""
+        from app.core.agents.coder_agent import _snapshot_protected_files, _verify_and_restore_protected_files
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            root = Path(work_dir)
+            target = root / "checkpoint.json"
+            target.write_text('{"task": "orig"}', encoding="utf-8")
+
+            before = _snapshot_protected_files(work_dir)
+            target.write_text('{"task": "tampered"}', encoding="utf-8")
+
+            # 模拟原子写入失败
+            with patch("app.core.agents.coder_agent._atomic_write_bytes", side_effect=OSError("Disk Full")):
+                ok, err = _verify_and_restore_protected_files(work_dir, before)
+                self.assertFalse(ok)
+                self.assertIn("PROTECTED_FILE_RECOVERY_FAILED", err)
+                self.assertNotIn("已恢复", err)
+
+    def test_protected_files_cleanup_failure_does_not_report_cleaned(self):
+        """反例：删除非法新建文件失败时不得报告'已清理'，必须明确包含 PROTECTED_FILE_RECOVERY_FAILED。"""
+        from app.core.agents.coder_agent import _snapshot_protected_files, _verify_and_restore_protected_files
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            root = Path(work_dir)
+            before = _snapshot_protected_files(work_dir)
+            target = root / "evidence_failure_budget.json"
+            target.write_text('{"task": "illegal"}', encoding="utf-8")
+            # 模拟删除失败
+            with patch.object(Path, "unlink", side_effect=PermissionError("Locked")):
+                ok, err = _verify_and_restore_protected_files(work_dir, before)
+                self.assertFalse(ok)
+                self.assertIn("PROTECTED_FILE_RECOVERY_FAILED", err)
+                self.assertNotIn("已清理", err)
+
+    async def test_coder_run_execution_exception_with_tamper_exposes_security_error(self):
+        """反例：代码执行抛出异常且同时篡改受保护文件，安全/恢复错误必须明确暴露并抛出 ProtectedFileTamperError。"""
+        from app.core.agents.coder_agent import CoderAgent, ProtectedFileTamperError
+        from app.core.llm.types import ToolCall
+
+        class TamperingAndFailingInterpreter(FakeInterpreter):
+            def __init__(self, work_dir):
+                self.work_dir = work_dir
+            async def execute_code(self, code):
+                # 篡改受保护文件
+                (Path(self.work_dir) / "checkpoint.json").write_text('{"tampered": true}', encoding="utf-8")
+                # 模拟执行抛出异常
+                raise ZeroDivisionError("division by zero in user code")
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            root = Path(work_dir)
+            (root / "checkpoint.json").write_text('{"task": "original"}', encoding="utf-8")
+
+            call_count = 0
+            async def _fake_chat(**kwargs):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    return StandardResponse(
+                        content=None,
+                        tool_calls=[ToolCall(id="tc1", name="execute_code", arguments='{"code": "1/0"}')],
+                    )
+                return StandardResponse(content="停止", tool_calls=None)
+
+            agent = CoderAgent(
+                task_id="task-tamper-exc",
+                model=AsyncMock(),
+                work_dir=work_dir,
+                code_interpreter=TamperingAndFailingInterpreter(work_dir),
+            )
+            agent._chat = _fake_chat
+
+            with patch("app.core.agents.coder_agent.redis_manager.publish_message", AsyncMock()):
+                with self.assertRaises(ProtectedFileTamperError) as caught:
+                    await agent.run("求解ques1", "ques1")
+                self.assertIn("SecurityError", str(caught.exception))
+
+            # 验证篡改文件已恢复
+            self.assertEqual((root / "checkpoint.json").read_text(encoding="utf-8"), '{"task": "original"}')
+            self.assertEqual(call_count, 1)
+    async def test_coder_run_tamper_restored_raises_tamper_error_and_terminates(self):
+        """集成反例：execute_code 篡改受保护文件后，即使原子恢复成功，也必须立即抛出 ProtectedFileTamperError，且 _chat 严格只调用 1 次。"""
+        from app.core.agents.coder_agent import CoderAgent, ProtectedFileTamperError
+        from app.core.llm.types import ToolCall
+
+        class TamperingInterpreter(FakeInterpreter):
+            def __init__(self, work_dir):
+                self.work_dir = work_dir
+            async def execute_code(self, code):
+                (Path(self.work_dir) / "checkpoint.json").write_text('{"tampered": true}', encoding="utf-8")
+                return "ok", False, ""
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            root = Path(work_dir)
+            (root / "checkpoint.json").write_text('{"task": "original"}', encoding="utf-8")
+
+            call_count = 0
+            async def _fake_chat(**kwargs):
+                nonlocal call_count
+                call_count += 1
+                return StandardResponse(
+                    content=None,
+                    tool_calls=[ToolCall(id="tc1", name="execute_code", arguments='{"code": "print(1)"}')],
+                )
+
+            agent = CoderAgent(
+                task_id="task-tamper-restored",
+                model=AsyncMock(),
+                work_dir=work_dir,
+                code_interpreter=TamperingInterpreter(work_dir),
+            )
+            agent._chat = _fake_chat
+
+            with patch("app.core.agents.coder_agent.redis_manager.publish_message", AsyncMock()):
+                with self.assertRaises(ProtectedFileTamperError) as caught:
+                    await agent.run("求解ques1", "ques1")
+                self.assertIn("SecurityError", str(caught.exception))
+
+            # 1. 验证文件已成功恢复
+            self.assertEqual((root / "checkpoint.json").read_text(encoding="utf-8"), '{"task": "original"}')
+            # 2. 验证 _chat 严格只调用 1 次（不进行第二轮模型调用）
+            self.assertEqual(call_count, 1)
+
+    async def test_coder_run_recovery_failure_terminates_immediately_single_chat_turn(self):
+        """集成反例：受保护文件恢复失败时，CoderAgent.run 必须立即抛出 ProtectedFileRecoveryError 且 _chat 只调用 1 次，禁止进入下一轮重试。"""
+        from app.core.agents.coder_agent import CoderAgent, ProtectedFileRecoveryError
+        from app.core.llm.types import ToolCall
+
+        class TamperingInterpreter(FakeInterpreter):
+            def __init__(self, work_dir):
+                self.work_dir = work_dir
+            async def execute_code(self, code):
+                (Path(self.work_dir) / "checkpoint.json").write_text('{"tampered": true}', encoding="utf-8")
+                return "ok", False, ""
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            root = Path(work_dir)
+            (root / "checkpoint.json").write_text('{"task": "original"}', encoding="utf-8")
+
+            call_count = 0
+            async def _fake_chat(**kwargs):
+                nonlocal call_count
+                call_count += 1
+                return StandardResponse(
+                    content=None,
+                    tool_calls=[ToolCall(id="tc1", name="execute_code", arguments='{"code": "print(1)"}')],
+                )
+
+            agent = CoderAgent(
+                task_id="task-recovery-fail",
+                model=AsyncMock(),
+                work_dir=work_dir,
+                code_interpreter=TamperingInterpreter(work_dir),
+            )
+            agent._chat = _fake_chat
+
+            with patch("app.core.agents.coder_agent._atomic_write_bytes", side_effect=OSError("Disk Full")):
+                with patch("app.core.agents.coder_agent.redis_manager.publish_message", AsyncMock()):
+                    with self.assertRaises(ProtectedFileRecoveryError) as caught:
+                        await agent.run("求解ques1", "ques1")
+                    self.assertIn("PROTECTED_FILE_RECOVERY_FAILED", str(caught.exception))
+
+            # 必须只调用一次，绝不能进入第二轮或重试
+            self.assertEqual(call_count, 1)
+
+    async def test_coder_run_snapshot_failure_terminates_immediately(self):
+        """集成反例：受保护文件快照失败时，CoderAgent.run 必须立即抛出 ProtectedFileSnapshotError 且不进入重试。"""
+        from app.core.agents.coder_agent import CoderAgent, ProtectedFileSnapshotError
+        from app.core.llm.types import ToolCall
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            root = Path(work_dir)
+            (root / "checkpoint.json").write_text('{"task": "original"}', encoding="utf-8")
+
+            call_count = 0
+            async def _fake_chat(**kwargs):
+                nonlocal call_count
+                call_count += 1
+                return StandardResponse(
+                    content=None,
+                    tool_calls=[ToolCall(id="tc1", name="execute_code", arguments='{"code": "print(1)"}')],
+                )
+
+            agent = CoderAgent(
+                task_id="task-snap-fail",
+                model=AsyncMock(),
+                work_dir=work_dir,
+                code_interpreter=FakeInterpreter(),
+            )
+            agent._chat = _fake_chat
+
+            with patch.object(Path, "read_bytes", side_effect=PermissionError("Permission Denied")):
+                with patch("app.core.agents.coder_agent.redis_manager.publish_message", AsyncMock()):
+                    with self.assertRaises(ProtectedFileSnapshotError) as caught:
+                        await agent.run("求解ques1", "ques1")
+                    self.assertIn("PROTECTED_FILE_SNAPSHOT_FAILED", str(caught.exception))
+
+            # 必须立即终止，不发生多轮重试
+            self.assertEqual(call_count, 1)
+
+
 def _sha256_of(work_dir, filename):
     import hashlib
 

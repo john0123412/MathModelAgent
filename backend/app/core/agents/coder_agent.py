@@ -3,10 +3,15 @@
 import asyncio
 import ast
 import datetime
+import hashlib
 import json
+import os
 import re
+import shutil
+import uuid
 from pathlib import Path
 from typing import Callable
+
 from nbformat import v4 as nbf
 from app.core.agents.agent import Agent
 from app.core.checkpoint import CheckpointManager
@@ -24,6 +29,19 @@ from app.core.functions import coder_tools, coder_tools_anthropic
 from app.tools.execution_validation import record_execution_evidence
 from app.tools.json_repair import repair_json
 from app.tools.result_integrity import validate_result_freeze
+
+
+class ProtectedFileSnapshotError(RuntimeError):
+    """受保护文件快照阶段失败异常（严格 fail-closed，禁止进入模型重试）。"""
+
+
+class ProtectedFileRecoveryError(RuntimeError):
+    """受保护文件恢复/清理阶段失败异常（严格 fail-closed，禁止进入模型重试）。"""
+
+
+class ProtectedFileTamperError(RuntimeError):
+    """代码非法篡改受保护文件异常（严格 fail-closed，禁止静默或循环返修）。"""
+
 
 # TODO: 时间等待过久，stop 进程
 # TODO: 支持 cuda
@@ -56,6 +74,25 @@ def _looks_like_final_tool_output(output: str) -> bool:
     return any(marker in output for marker in _FINAL_OUTPUT_MARKERS)
 
 
+def _evaluate_string_expr(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _evaluate_string_expr(node.left)
+        right = _evaluate_string_expr(node.right)
+        if left is not None and right is not None:
+            return left + right
+    if isinstance(node, ast.JoinedStr):
+        parts = []
+        for val_node in node.values:
+            part = _evaluate_string_expr(val_node)
+            if part is not None:
+                parts.append(part)
+        if parts:
+            return "".join(parts)
+    return None
+
+
 def _iter_string_literals(code: str):
     try:
         tree = ast.parse(code)
@@ -63,22 +100,179 @@ def _iter_string_literals(code: str):
         yield code
         return
     for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            yield node.value
+        val = _evaluate_string_expr(node)
+        if val is not None:
+            yield val
+
+
+_PROTECTED_TASK_FILES = {
+    "evidence_failure_budget.json",
+    "checkpoint.json",
+    "variable_snapshot.pkl",
+    "variable_snapshot_meta.json",
+    "frozen_results.json",
+    "input_manifest.json",
+    "task_status.json",
+    "problem_contract.json",
+    "modeler_plan.json",
+}
 
 
 def _find_cross_task_path(code: str) -> str | None:
-    """检测模型生成代码是否试图读取当前任务目录之外的历史任务文件。"""
+    """检测模型生成代码是否试图读取当前任务目录之外的历史任务文件或篡改受保护文件。"""
     for value in _iter_string_literals(code):
         normalized = value.replace("\\", "/")
         if _PARENT_PATH_PATTERN.search(normalized):
             return value
         if _WORK_DIR_PATH_PATTERN.search(normalized):
             return value
+        base_name = os.path.basename(normalized.rstrip("/"))
+        if base_name in _PROTECTED_TASK_FILES:
+            return value
+    for protected in _PROTECTED_TASK_FILES:
+        stem = protected.split(".")[0]
+        if stem in code:
+            return stem
     return None
 
 
+def _read_evidence_failure_file(
+    budget_file: Path,
+    subtask_id: str,
+    task_id: str = "",
+    plan_sha256: str = "",
+) -> int:
+    """读取并严格校验预算文件（fail-closed）。"""
+    if not budget_file.is_file():
+        return 0
+    try:
+        raw = budget_file.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            logger.error(f"evidence_failure_budget 格式非字典，fail-closed 熔断: {raw[:200]}")
+            return _EVIDENCE_FAILURE_LIMIT
+        saved_task_id = data.get("task_id")
+        if not saved_task_id or not isinstance(saved_task_id, str):
+            logger.error("evidence_failure_budget task_id 缺失，fail-closed 熔断")
+            return _EVIDENCE_FAILURE_LIMIT
+        if task_id and saved_task_id != task_id:
+            logger.error(f"evidence_failure_budget task_id 不匹配: {saved_task_id} vs {task_id}")
+            return _EVIDENCE_FAILURE_LIMIT
+        subtasks = data.get("subtasks")
+        if not isinstance(subtasks, dict):
+            logger.error("evidence_failure_budget subtasks 缺失或非字典，fail-closed 熔断")
+            return _EVIDENCE_FAILURE_LIMIT
+        if subtask_id not in subtasks:
+            return 0
+        entry = subtasks.get(subtask_id)
+        if not isinstance(entry, dict) or isinstance(entry, bool):
+            logger.error(f"evidence_failure_budget subtask {subtask_id} 记录非字典格式（拒绝旧格式），fail-closed 熔断")
+            return _EVIDENCE_FAILURE_LIMIT
+        saved_plan_sha = entry.get("plan_sha256")
+        if plan_sha256:
+            if not saved_plan_sha or not isinstance(saved_plan_sha, str) or saved_plan_sha != plan_sha256:
+                logger.error(f"evidence_failure_budget plan_sha256 缺失或不匹配: {saved_plan_sha!r} vs {plan_sha256!r}")
+                return _EVIDENCE_FAILURE_LIMIT
+        val = entry.get("count")
+        if isinstance(val, bool) or not isinstance(val, int):
+            return _EVIDENCE_FAILURE_LIMIT
+        if val < 0 or val > _EVIDENCE_FAILURE_LIMIT:
+            return _EVIDENCE_FAILURE_LIMIT
+        return val
+    except Exception as exc:
+        logger.error(f"读取 evidence_failure_budget 异常，fail-closed 熔断: {exc}")
+        return _EVIDENCE_FAILURE_LIMIT
+
+
+def _load_evidence_failure_count(
+    work_dir: str | Path | None,
+    subtask_id: str | None,
+    task_id: str = "",
+    plan_sha256: str = "",
+) -> int:
+    """从任务持久化文件中读取当前子题的执行证据连续失败次数（fail-closed）。"""
+    if not work_dir or not subtask_id:
+        return 0
+    budget_file = Path(work_dir) / "evidence_failure_budget.json"
+    if not plan_sha256:
+        plan_file = Path(work_dir) / "modeler_plan.json"
+        if plan_file.is_file():
+            try:
+                plan_sha256 = hashlib.sha256(plan_file.read_bytes()).hexdigest()
+            except Exception:
+                pass
+    return _read_evidence_failure_file(
+        budget_file, subtask_id, task_id=task_id, plan_sha256=plan_sha256
+    )
+
+
+def _save_evidence_failure_count(
+    work_dir: str | Path | None,
+    subtask_id: str | None,
+    count: int,
+    task_id: str = "",
+    plan_sha256: str = "",
+) -> None:
+    """持久化记录当前子题的执行证据失败次数，跨 resume 续传不重置。"""
+    if not work_dir or not subtask_id:
+        return
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise ValueError(f"count 必须为非布尔非负整数: {count}")
+    count = min(count, _EVIDENCE_FAILURE_LIMIT)
+    budget_file = Path(work_dir) / "evidence_failure_budget.json"
+    data: dict = {}
+    if budget_file.is_file():
+        try:
+            data = json.loads(budget_file.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        except Exception:
+            data = {}
+    data["task_id"] = task_id or data.get("task_id", "")
+    if not plan_sha256:
+        plan_file = Path(work_dir) / "modeler_plan.json"
+        if plan_file.is_file():
+            try:
+                plan_sha256 = hashlib.sha256(plan_file.read_bytes()).hexdigest()
+            except Exception:
+                pass
+    subtasks = data.setdefault("subtasks", {})
+    if not isinstance(subtasks, dict):
+        subtasks = {}
+        data["subtasks"] = subtasks
+    subtasks[subtask_id] = {
+        "count": int(count),
+        "plan_sha256": plan_sha256,
+        "updated_at": datetime.datetime.now().isoformat(),
+    }
+    tmp_file = budget_file.with_suffix(".json.tmp")
+    try:
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            import os
+            os.fsync(f.fileno())
+        tmp_file.replace(budget_file)
+    except Exception as exc:
+        logger.error(f"持久化 evidence_failure_budget 失败: {exc}")
+        raise RuntimeError(f"FAIL_CLOSED: 持久化 evidence_failure_budget 失败: {exc}") from exc
+
+
+def _reset_evidence_failure_count(
+    work_dir: str | Path | None,
+    subtask_id: str | None,
+    task_id: str = "",
+    plan_sha256: str = "",
+) -> None:
+    """执行证据合格后重置当前子题的失败计数。"""
+    _save_evidence_failure_count(
+        work_dir, subtask_id, 0, task_id=task_id, plan_sha256=plan_sha256
+    )
+
+
 def _formal_subtask_id(subtask_title: str) -> str | None:
+
+
     """Return the formal ``quesN`` id for a normal or directed-repair turn."""
     matched = _FORMAL_SUBTASK_PATTERN.fullmatch(subtask_title.strip())
     return matched.group(1) if matched else None
@@ -225,6 +419,112 @@ def _snapshot_task_files(work_dir: str) -> dict[str, tuple[int, int]]:
         relative = str(path.relative_to(root)).replace("\\", "/")
         snapshots[relative] = (stat.st_size, stat.st_mtime_ns)
     return snapshots
+
+
+def _snapshot_protected_files(
+    work_dir: str | Path,
+) -> dict[str, tuple[str, bytes] | None]:
+    """Capture sha256 checksums and backup bytes of protected state files, or None if non-existent."""
+    root = Path(work_dir).resolve()
+    protected_snapshots: dict[str, tuple[str, bytes] | None] = {}
+    for filename in _PROTECTED_TASK_FILES:
+        target = root / filename
+        if target.exists():
+            try:
+                raw_bytes = target.read_bytes()
+                protected_snapshots[filename] = (
+                    hashlib.sha256(raw_bytes).hexdigest(),
+                    raw_bytes,
+                )
+            except Exception as exc:
+                logger.error(f"读取受保护文件快照失败 ({filename}): {exc}")
+                raise ProtectedFileSnapshotError(
+                    f"PROTECTED_FILE_SNAPSHOT_FAILED: 无法读取受保护文件（{filename}）快照: {exc}"
+                ) from exc
+        else:
+            protected_snapshots[filename] = None
+    return protected_snapshots
+
+
+def _atomic_write_bytes(target: Path, data: bytes) -> None:
+    """原子化写入文件：同目录临时文件写入、flush、fsync 并 os.replace 替换。"""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = target.with_name(f"{target.name}.tmp.{uuid.uuid4().hex}")
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, target)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def _verify_and_restore_protected_files(
+    work_dir: str | Path,
+    before_snapshots: dict[str, tuple[str, bytes] | None],
+) -> tuple[bool, str]:
+    """遍历全量受保护系统状态文件，执行后完整性检测、删除非法新建文件并原子恢复受损文件。"""
+    root = Path(work_dir).resolve()
+    errors: list[str] = []
+
+    for filename, snapshot in before_snapshots.items():
+        target = root / filename
+        if snapshot is None:
+            # 原本不存在的文件：若执行后被新建，必须全部清理删除
+            if target.exists():
+                try:
+                    if target.is_file():
+                        target.unlink(missing_ok=True)
+                    elif target.is_dir():
+                        shutil.rmtree(target, ignore_errors=True)
+                except Exception as exc:
+                    logger.error(f"清理非法新建受保护文件（{filename}）异常: {exc}")
+                if target.exists():
+                    errors.append(f"PROTECTED_FILE_RECOVERY_FAILED: 清理非法新建受保护文件（{filename}）失败")
+                else:
+                    errors.append(f"受保护系统状态文件（{filename}）被代码非法新建，已清理")
+        else:
+            expected_hash, backup_bytes = snapshot
+            if not target.is_file():
+                # 原子恢复被删除的文件
+                restore_ok = False
+                try:
+                    _atomic_write_bytes(target, backup_bytes)
+                    if target.is_file() and hashlib.sha256(target.read_bytes()).hexdigest() == expected_hash:
+                        restore_ok = True
+                except Exception as exc:
+                    logger.error(f"恢复被删除受保护文件 {filename} 失败: {exc}")
+                if restore_ok:
+                    errors.append(f"受保护系统状态文件（{filename}）被代码非法删除，已恢复")
+                else:
+                    errors.append(f"PROTECTED_FILE_RECOVERY_FAILED: 恢复被删除受保护文件（{filename}）失败")
+            else:
+                try:
+                    current_hash = hashlib.sha256(target.read_bytes()).hexdigest()
+                except Exception:
+                    current_hash = None
+
+                if current_hash != expected_hash:
+                    restore_ok = False
+                    try:
+                        _atomic_write_bytes(target, backup_bytes)
+                        if target.is_file() and hashlib.sha256(target.read_bytes()).hexdigest() == expected_hash:
+                            restore_ok = True
+                    except Exception as exc:
+                        logger.error(f"恢复被篡改受保护文件 {filename} 失败: {exc}")
+                    if restore_ok:
+                        errors.append(f"受保护系统状态文件（{filename}）被代码非法篡改，已恢复")
+                    else:
+                        errors.append(f"PROTECTED_FILE_RECOVERY_FAILED: 恢复受保护文件（{filename}）失败")
+
+    if errors:
+        return False, " | ".join(errors)
+    return True, ""
 
 
 def _changed_task_files(
@@ -550,8 +850,28 @@ class CoderAgent(Agent):
         execution_error_occurred = False
         evidence_commit_required = False
         evidence_changed_paths: set[str] = set()
-        evidence_failure_count = 0
+        evidence_failure_count = _load_evidence_failure_count(
+            self.work_dir, formal_subtask_id, task_id=self.task_id
+        )
+        if formal_subtask_id and evidence_failure_count >= _EVIDENCE_FAILURE_LIMIT:
+            logger.error(
+                "受控执行证据失败预算已耗尽，立即熔断拒绝启动 Coder: "
+                f"subtask={formal_subtask_id}, failures={evidence_failure_count}"
+            )
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(
+                    content=f"子任务 {formal_subtask_id} 执行证据失败预算已耗尽（{evidence_failure_count} 次），已触发熔断保护",
+                    type="error",
+                ),
+            )
+            raise RuntimeError(
+                f"PLAN_CONFLICT: 子任务 {formal_subtask_id} 受控执行证据已连续失败 {evidence_failure_count} 次，"
+                "可能存在 ModelPlan 与真实求解结果冲突；熔断保护已触发，请修正计划或切换 provider 后重试。"
+            )
         last_closeout_warning_remaining: int | None = None
+
+
         consecutive_agent_exceptions = 0
         no_tool_response_count = 0
         saw_tool_calls = False
@@ -895,6 +1215,9 @@ class CoderAgent(Agent):
                         # can correct only the failing source/record on its next
                         # turn.  This call never counts as code execution itself.
                         if evidence_accepted:
+                            _reset_evidence_failure_count(
+                                self.work_dir, formal_subtask_id, task_id=self.task_id
+                            )
                             # A formal Coder turn owns one question.  Once its
                             # backend-owned evidence is persisted, stop this
                             # turn before a later model response can overwrite
@@ -910,7 +1233,7 @@ class CoderAgent(Agent):
                                     subtask_title=subtask_title,
                                     formal_subtask_id=formal_subtask_id,
                                     evidence_arguments=arguments,
-                                )
+                                 )
                             return CoderToWriter(
                                 code_response=closeout_response,
                                 created_images=await self.code_interpreter.get_created_images(
@@ -921,7 +1244,14 @@ class CoderAgent(Agent):
                                 execution_error_occurred=execution_error_occurred,
                             )
                         evidence_failure_count += 1
+                        _save_evidence_failure_count(
+                            self.work_dir,
+                            formal_subtask_id,
+                            evidence_failure_count,
+                            task_id=self.task_id,
+                        )
                         errors = result.get("errors") or ["未知证据错误"]
+
                         evidence_error = "；".join(str(error) for error in errors)
                         # 拒绝原因此前只进模型对话历史，人工排障时无从查起；
                         # 记录到日志便于诊断模型为何连续提交不合格证据。
@@ -1059,11 +1389,29 @@ class CoderAgent(Agent):
                             if formal_subtask_id is not None
                             else {}
                         )
-                        (
-                            text_to_gpt,
-                            error_occurred,
-                            error_message,
-                        ) = await self.code_interpreter.execute_code(code)
+                        before_protected_snapshots = _snapshot_protected_files(self.work_dir)
+                        integrity_ok = True
+                        integrity_err = ""
+                        try:
+                            (
+                                text_to_gpt,
+                                error_occurred,
+                                error_message,
+                            ) = await self.code_interpreter.execute_code(code)
+                        except Exception as exec_exc:
+                            error_occurred = True
+                            error_message = f"执行异常: {exec_exc}"
+                            text_to_gpt = ""
+                        finally:
+                            # 无论执行成功、报错、超时或异常，均强制复核并原子恢复受保护系统状态文件
+                            integrity_ok, integrity_err = _verify_and_restore_protected_files(
+                                self.work_dir, before_protected_snapshots
+                            )
+                        if not integrity_ok:
+                            logger.error(f"代码手执行检测到受保护文件篡改或恢复失败: {integrity_err}")
+                            if "PROTECTED_FILE_RECOVERY_FAILED" in integrity_err:
+                                raise ProtectedFileRecoveryError(f"PROTECTED_FILE_RECOVERY_FAILED: {integrity_err}")
+                            raise ProtectedFileTamperError(f"SecurityError: {integrity_err}，禁止篡改系统状态与预算文件。")
 
                         # 添加工具执行结果
                         if error_occurred:
@@ -1327,8 +1675,13 @@ class CoderAgent(Agent):
                         execution_error_occurred=execution_error_occurred,
                     )
                     
-            except asyncio.CancelledError:
-                # 用户主动停止任务，向上传播，不做退避重试
+            except (
+                asyncio.CancelledError,
+                ProtectedFileSnapshotError,
+                ProtectedFileRecoveryError,
+                ProtectedFileTamperError,
+            ):
+                # 用户主动停止任务或受保护系统状态文件安全/恢复硬错误，向上传播，绝不进入退避重试
                 raise
             except Exception as exc:
                 logger.error(f"执行过程中发生异常: {type(exc).__name__}")

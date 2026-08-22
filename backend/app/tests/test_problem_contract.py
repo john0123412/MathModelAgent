@@ -704,6 +704,7 @@ class TestStructuredModelPlan(unittest.TestCase):
                     inputs=["题面机器时间、人工时间和单位利润"],
                     method="定义决策变量，写出目标函数和全部资源约束，采用线性规划求解并逐项回代约束。",
                     constraints=["产品数量非负", "机器与人工资源不得超过题设上限"],
+                    diagnostic_profile="optimization",
                     expected_artifacts=[
                         ExpectedArtifact(path="ques1_results.csv", kind="result_table", description="最优决策变量与目标函数值"),
                         ExpectedArtifact(path="ques1_constraints.csv", kind="constraint_table", description="各资源约束的松弛量"),
@@ -717,6 +718,7 @@ class TestStructuredModelPlan(unittest.TestCase):
             },
             sensitivity_analysis="将机器时间增加10小时，比较最优目标值变化。",
         )
+
 
     def _simulation_plan(self) -> ModelPlan:
         return ModelPlan(
@@ -869,6 +871,7 @@ class TestStructuredModelPlan(unittest.TestCase):
             inputs=["问题一最优解与机器时间增加10小时的情景"],
             method="在同一线性规划模型下替换机器时间上限，重新求解并比较目标值变化。",
             constraints=["人工时间约束保持不变", "产品数量保持非负"],
+            diagnostic_profile="optimization",
             expected_artifacts=[
                 ExpectedArtifact(
                     path="ques2_results.csv",
@@ -876,6 +879,7 @@ class TestStructuredModelPlan(unittest.TestCase):
                     description="扩容情景的最优解与利润变化",
                 )
             ],
+
             acceptance_metrics=[
                 AcceptanceMetric(
                     key="profit_change",
@@ -1273,6 +1277,177 @@ class TestStructuredModelPlan(unittest.TestCase):
             "physical_simulation_evidence",
             {item.key for item in physics_contract.required_requirements},
         )
+
+    def test_audit_model_plan_semantics_rejects_duplicate_metric_keys(self):
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(key="dup_key", label="指标1", comparator="ge", target=0, description="由线性规划得到"),
+            AcceptanceMetric(key="dup_key", label="指标2", comparator="le", target=10, description="由线性规划得到"),
+        ]
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertFalse(result.valid)
+        self.assertIn("重复的验收指标 key", " ".join(result.violations))
+
+    def test_audit_model_plan_semantics_rejects_path_traversal_in_artifacts(self):
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].expected_artifacts = [
+            ExpectedArtifact(path="../evil.csv", kind="result_table", description="越界产物"),
+        ]
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertFalse(result.valid)
+        self.assertIn("非法越界或绝对路径", " ".join(result.violations))
+
+    def test_audit_model_plan_semantics_rejects_duplicate_artifact_paths(self):
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].expected_artifacts = [
+            ExpectedArtifact(path="ques1_results.csv", kind="result_table", description="产物1"),
+            ExpectedArtifact(path="ques1_results.csv", kind="constraint_table", description="产物2"),
+        ]
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertFalse(result.valid)
+        self.assertIn("重复的预期产物路径", " ".join(result.violations))
+
+    def test_audit_model_plan_semantics_rejects_empty_inputs_or_constraints(self):
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].inputs = ["  "]
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertFalse(result.valid)
+        self.assertIn("inputs 为空或全为空白", " ".join(result.violations))
+
+    def test_audit_model_plan_semantics_rejects_lp_without_tables(self):
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].expected_artifacts = [
+            ExpectedArtifact(path="ques1_plot.png", kind="figure", description="仅有图片"),
+        ]
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertFalse(result.valid)
+        self.assertIn("线性规划子任务", " ".join(result.violations))
+
+    def test_audit_model_plan_semantics_rejects_lp_without_optimization_profile(self):
+        plan = self._linear_plan()
+        plan.subtasks["ques1"].diagnostic_profile = "not_applicable"
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertFalse(result.valid)
+        self.assertIn("必须使用 optimization", " ".join(result.violations))
+
+    def test_audit_model_plan_semantics_allows_reasonable_resource_narrative(self):
+        plan = self._linear_plan()
+        # "机器时间保持为 100 小时" 不应被误判为利润与 2200 冲突
+        plan.subtasks["ques1"].method = "机器时间保持为 100 小时，人工时间为 80 小时，求解得到最优利润为 2200 元。"
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(key="objective_value", label="最优利润", comparator="eq", target=2200.0, unit="元", description="目标函数"),
+        ]
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertTrue(result.valid, result.violations)
+
+    def test_audit_model_plan_semantics_rejects_infeasible_math_constraints(self):
+        plan = self._linear_plan()
+        # 1. 明显不可行约束 x <= 1 且 x >= 2
+        plan.subtasks["ques1"].constraints = ["决策变量非负", "x <= 1", "x >= 2"]
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertFalse(result.valid)
+        self.assertIn("不可行的数学约束矛盾", " ".join(result.violations))
+
+        # 2. 严格不等式开区间矛盾 x < 1 且 x >= 1
+        plan.subtasks["ques1"].constraints = ["决策变量非负", "x < 1", "x >= 1"]
+        result2 = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertFalse(result2.valid)
+        self.assertIn("严格开区间约束矛盾", " ".join(result2.violations))
+
+        # 3. 单等号约束矛盾 x = 1 且 x >= 2
+        plan.subtasks["ques1"].constraints = ["决策变量非负", "x = 1", "x >= 2"]
+        result3 = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertFalse(result3.valid)
+        self.assertIn("不可行的数学约束矛盾", " ".join(result3.violations))
+
+    def test_audit_model_plan_semantics_rejects_predicted_narrative_metric_contradiction(self):
+        plan = self._linear_plan()
+        # 方法声称最大利润预计为 2200，但验收指标 target 却设为 2366.67
+        plan.subtasks["ques1"].method = "根据线性规划模型求解，最大利润预计为 2200。"
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(key="objective_value", label="最优利润", comparator="eq", target=2366.67, unit="元", description="目标函数"),
+        ]
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertFalse(result.valid)
+        self.assertIn("冲突", " ".join(result.violations))
+
+    def test_audit_model_plan_semantics_allows_sensitivity_analysis_scenario_narrative(self):
+        plan = self._linear_plan()
+        # 基准问题 ques1 利润 target=2200，全局敏感性分析说明机器时间增加后利润为 2366.67
+        plan.subtasks["ques1"].method = "建立线性规划模型求解基准最优解。"
+        plan.subtasks["ques1"].acceptance_metrics = [
+            AcceptanceMetric(key="objective_value", label="最优利润", comparator="eq", target=2200.0, unit="元", description="目标函数"),
+        ]
+        plan.sensitivity_analysis = "基准利润为 2200 元，当机器时间增加 10 小时后，测算最优利润达到 2366.67 元。"
+        result = validate_modeler_plan(
+            ProblemContract(),
+            ModelerToCoder(model_plan=plan),
+            expected_question_keys={"ques1"},
+        )
+        self.assertTrue(result.valid, result.violations)
+
+
+    def test_acceptance_metric_schema_cross_field_validation(self):
+        from pydantic import ValidationError
+        # 1. 整数指标 target 必须为数学整数
+        with self.assertRaises(ValidationError):
+            AcceptanceMetric(key="profit", label="利润", comparator="eq", target=2200.5, description="目标", metric_kind="integer")
+        # 2. 整数指标 precision 必须为 0 或 None
+        with self.assertRaises(ValidationError):
+            AcceptanceMetric(key="profit", label="利润", comparator="eq", target=2200.0, description="目标", metric_kind="integer", precision=2)
+        # 3. 布尔指标 target 必须为 0 或 1
+        with self.assertRaises(ValidationError):
+            AcceptanceMetric(key="is_feasible", label="可行性", comparator="eq", target=2.0, description="目标", metric_kind="boolean")
+        # 4. 布尔指标 comparator 必须为 eq / within
+        with self.assertRaises(ValidationError):
+            AcceptanceMetric(key="is_feasible", label="可行性", comparator="lt", target=1.0, description="目标", metric_kind="boolean")
+        # 5. precision 与 abs_tol 冲突拒绝
+        with self.assertRaises(ValidationError):
+            AcceptanceMetric(key="cost", label="成本", comparator="eq", target=100.0, description="目标", precision=2, abs_tol=5.0)
 
 
 if __name__ == "__main__":

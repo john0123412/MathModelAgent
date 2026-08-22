@@ -1,5 +1,7 @@
 """Agent 间通信数据模型定义。"""
 
+import decimal
+import math
 import re
 from typing import Any, Literal
 
@@ -44,6 +46,49 @@ class AcceptanceMetric(BaseModel):
     target: float = Field(allow_inf_nan=False)
     unit: str | None = None
     description: str = Field(min_length=3)
+    metric_kind: Literal["integer", "discrete", "float", "boolean", "flag"] | None = None
+    precision: int | None = Field(default=None, ge=0)
+    abs_tol: float | None = Field(default=None, ge=0.0)
+    rel_tol: float | None = Field(default=None, ge=0.0)
+
+    @model_validator(mode="after")
+    def validate_metric_contract(self) -> "AcceptanceMetric":
+        # 1. 整数/离散指标校验
+        if self.metric_kind in ("integer", "discrete"):
+            d = decimal.Decimal(str(self.target).strip())
+            if d != d.to_integral():
+                raise ValueError(
+                    f"指标 {self.key} 声明为 {self.metric_kind}，但 target={self.target} 不是整数"
+                )
+            if self.precision is not None and self.precision != 0:
+                raise ValueError(
+                    f"指标 {self.key} 声明为 {self.metric_kind}，但指定了非零 precision={self.precision}"
+                )
+
+        # 2. 布尔/Flag 指标校验
+        if self.metric_kind in ("boolean", "flag"):
+            if self.target not in (0.0, 1.0):
+                raise ValueError(
+                    f"指标 {self.key} 声明为 {self.metric_kind}，但 target={self.target} 既非 0 也非 1"
+                )
+            if self.comparator not in ("eq", "within"):
+                raise ValueError(
+                    f"指标 {self.key} 声明为 {self.metric_kind}，仅支持 eq/within 比较，不支持 comparator={self.comparator}"
+                )
+            if self.precision is not None and self.precision != 0:
+                raise ValueError(
+                    f"指标 {self.key} 声明为 {self.metric_kind}，但指定了非零 precision={self.precision}"
+                )
+
+        # 3. precision 与 abs_tol 冲突校验
+        if self.precision is not None and self.abs_tol is not None:
+            expected_abs_tol = 0.55 * (10 ** (-self.precision)) if self.precision > 0 else 1e-6
+            if not math.isclose(self.abs_tol, expected_abs_tol, rel_tol=0.1, abs_tol=1e-7):
+                raise ValueError(
+                    f"指标 {self.key} 同时指定了冲突的 precision={self.precision} 与 abs_tol={self.abs_tol}"
+                )
+
+        return self
 
 
 class SubtaskPlan(BaseModel):

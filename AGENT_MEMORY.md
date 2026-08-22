@@ -1,5 +1,18 @@
 # AGENT_MEMORY
 
+- [2026-08-22] **PR B 集成合并完成（`feat/6verity-latex-preflight-scripts` → `main`，合并提交 `0911293`）**：
+  - 合并方式：创建集成分支 `codex/integrate-pr-audit` → fast-forward merge PR B（无冲突）→ `--no-ff` 合回 `main`
+  - **PR A（`feat/skills-integration-and-compliance-hardening` / `cfde442`）不合并**：独立审计确认 PR A 独有功能性内容为零（PR B 已覆盖），`check_skills_health.ps1` 是 PR B 主动删除的设计决策，不是遗漏
+  - **验收门禁全绿**：
+    - Gate A（AGENTS.md 核心套件）：49 tests, OK
+    - Gate B（PR B 新增套件 9 个模块）：315 tests, OK (skipped=1)
+    - Gate C：Ruff All checks passed
+    - Gate D（6verity LaTeX preflight）：4 tests, OK
+  - **已知遗留 Backlog（下一 PR 处理）**：
+    1. `_find_cross_task_path` 的 `checkpoint` stem 匹配无负例测试覆盖（在数学建模场景中实际误报概率极低，但属已知缺口）
+    2. Modeler Prompt 缺"敏感性分析结论只写入 `sensitivity_analysis` 字段"的显式约束
+    3. `docs/md/网络环境极差时的MathModelAgent配置过程.md` PR A 有修改但 PR B 未合入，待评估是否需要同步
+
 - [2026-08-22] **第十七轮 PR 审查发现修复（冻结哈希刷新多文件覆盖 + 零值等价 + sys.path 变体门禁，827 项单测全绿）**：
   1. **审查背景**：对 skills 合并分支的代码审查发现 5 项问题；核实后确认匿名门禁误报（HIGH_CONF_* 锚定正则分层）与 cross-modal status/passed 状态机已在既有加固轮次中修复，本轮定点修复其余 3 项。
   2. **冻结哈希刷新覆盖全部冻结文件**：`result_integrity.refresh_frozen_results_hashes` 原在循环内首个存在的冻结文件处理后即 return，`reports/frozen_numbers.json`（skill 3a 兼容路径）永不被刷新或审计。现遍历 `FREEZE_FILENAMES` 全部成员并聚合结果（新增 `paths`/`written_paths` 字段），各文件写回决策相互隔离：仅当该文件自身无冲突且存在等价刷新时落盘，单文件冲突不阻断其他文件的独立刷新。

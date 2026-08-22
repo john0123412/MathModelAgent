@@ -1,5 +1,11 @@
 # AGENT_MEMORY
 
+- [2026-08-22] **三大数模外部技能库并入 `feat/6verity-latex-preflight-scripts` 分支（分支整合收口）**：
+  1. 从 `feat/skills-integration-and-compliance-hardening` 分支（cfde442）提取 `.agents/skills/` 下 138 个文件（math-modeling-contest-route-selection、mathmodel-latex-skill、mathmodel-skill），以 `git checkout <branch> -- .agents/skills/` 方式合入本分支，保留本分支第 13–16 轮深度安全硬化提交历史不变。
+  2. 合并可行性预检：使用 `git merge-tree --write-tree` 确认两分支直接合并将产生 13 个后端核心门禁/测试文件冲突，因此选择反向操作（以硬化分支为基底，仅叠加技能库资源），冲突面为零。
+  3. `SyntaxWarning: invalid escape sequence '\h'` 在本分支全量测试中不存在，无需修复。
+  4. 全量回归验收：693 tests OK (skipped=1)，Ruff All checks passed!。
+  5. 后续处理：旧分支 `feat/skills-integration-and-compliance-hardening` 暂时保留不删，待用户确认后再清理。
 - [2026-08-22] **第十六轮 端到端建模任务监控与闭环验收（真实轻量案例全链路技术通过，修复 4 项后处理/导出/视觉边界误报，全量 821 项单测 100% PASS）**：
   1. **端到端建模任务闭环交付**（任务 ID `20260822-101333-5c44fb89e1637bc630d6230e71c04b90`）：
      - 经典工厂生产 A/B 两产品资源配置问题（$Z=2200, Z'=2366.67$）端到端求解并成功通过 `task-refresh` 完整导出；

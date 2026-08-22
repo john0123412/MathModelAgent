@@ -1,5 +1,12 @@
 # AGENT_MEMORY
 
+- [2026-08-22] **第十七轮 PR 审查发现修复（冻结哈希刷新多文件覆盖 + 零值等价 + sys.path 变体门禁，827 项单测全绿）**：
+  1. **审查背景**：对 skills 合并分支的代码审查发现 5 项问题；核实后确认匿名门禁误报（HIGH_CONF_* 锚定正则分层）与 cross-modal status/passed 状态机已在既有加固轮次中修复，本轮定点修复其余 3 项。
+  2. **冻结哈希刷新覆盖全部冻结文件**：`result_integrity.refresh_frozen_results_hashes` 原在循环内首个存在的冻结文件处理后即 return，`reports/frozen_numbers.json`（skill 3a 兼容路径）永不被刷新或审计。现遍历 `FREEZE_FILENAMES` 全部成员并聚合结果（新增 `paths`/`written_paths` 字段），各文件写回决策相互隔离：仅当该文件自身无冲突且存在等价刷新时落盘，单文件冲突不阻断其他文件的独立刷新。
+  3. **长表零值等价修复**：`_check_source_metrics_equivalence` 中 `raw_val = row.get("数值") or row.get("value") ...` 的 or 链将合法数值 0 当 falsy 跳过，导致指标值恰为 0 时被误判"指标缺失"而拒绝等价刷新。改为显式 `is not None` 逐键探测。
+  4. **sys.path 变体绕过收口**：`CodeImportDependencyVisitor` 原仅识别 `sys.path.append/insert`。新增拦截：`from sys import path [as p]` 后的 `path.append/insert/extend(...)`、`import sys as s` 别名、`sys.path += [...]`、`sys.path = [...]` 直接重绑定；正则兜底同步覆盖语法错误片段中的上述变体（裸 `path = ...` 赋值不拦截以防误伤普通同名变量）。回归测试证实修复前 `from sys import path; path.append(...)` 可完全绕过自包含门禁。
+  5. **回归测试与验证**：新增 `ReviewFindingsRegressionTest` 6 项测试（from-import 变体、别名+augassign+直接赋值、同名变量不误报、语法错误兜底、零值等价、多冻结文件覆盖与冲突隔离）；验证流程为"先还原源码跑出 3 失败+1 错误证明测试有效，再恢复修复跑全绿"。全量后端单测 **827 项全部通过**（`Ran 827 tests in 75.784s, OK (skipped=2)`），Ruff 全部通过。
+
 - [2026-08-22] **三大数模外部技能库并入 `feat/6verity-latex-preflight-scripts` 分支（分支整合收口）**：
   1. 从 `feat/skills-integration-and-compliance-hardening` 分支（cfde442）提取 `.agents/skills/` 下 138 个文件（math-modeling-contest-route-selection、mathmodel-latex-skill、mathmodel-skill），以 `git checkout <branch> -- .agents/skills/` 方式合入本分支，保留本分支第 13–16 轮深度安全硬化提交历史不变。
   2. 合并可行性预检：使用 `git merge-tree --write-tree` 确认两分支直接合并将产生 13 个后端核心门禁/测试文件冲突，因此选择反向操作（以硬化分支为基底，仅叠加技能库资源），冲突面为零。

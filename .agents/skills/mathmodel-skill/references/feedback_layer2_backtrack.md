@@ -71,7 +71,7 @@ OUTPUT JSON:
 - concern 是"小漂移", 不影响主体
 - 处理: 在后续 stage 7 (评价) 或 stage 8 (写作) 显式记录, 例如:
   ```
-  "本模型假设 X, 在 stage 6 灵敏度中发现实际数据呈现 Y 趋势, 
+  "本模型假设 X, 在 stage 6 灵敏度中发现实际数据呈现 Y 趋势,
   但 ±10% 内主结论不变。详细讨论见 §7.2 缺点分析。"
   ```
 
@@ -96,7 +96,7 @@ def apply_patch(target_stage, concern):
     new_artifact = apply_diff(artifact, diff)
     write_decision_log(target_stage, new_artifact)
     log_event("patch", target_stage, concern.id, concern.field)
-    
+
     # 检查是否触发后续阶段连锁更新
     downstream = stages_after(target_stage)
     for s in downstream:

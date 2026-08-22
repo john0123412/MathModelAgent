@@ -129,10 +129,6 @@ def _find_cross_task_path(code: str) -> str | None:
         base_name = os.path.basename(normalized.rstrip("/"))
         if base_name in _PROTECTED_TASK_FILES:
             return value
-    for protected in _PROTECTED_TASK_FILES:
-        stem = protected.split(".")[0]
-        if stem in code:
-            return stem
     return None
 
 

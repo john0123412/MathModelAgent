@@ -1400,3 +1400,8 @@ uv run python scripts/smoke_pdf_export.py
 - [2026-08-17] 第八个全新隔离任务 `20260816-173947-45c85e69ba0eecca85a2b4b2e676f9b0` 经受控方案接管与 Luna Max APPROVE 后进入 Coder；任务内低成本求解器已通过 AST 校验，SHA-256=`33557C95C74F84DAEFAB93A219835E0E1E9FD088F0EC74C31815309AA00511A8`，其独立预检曾得到 Q1 组1不导通、组2/3导通且双实现差异0。正式任务却在 EDA 前两次执行即因 OpenBLAS 无法创建线程失败，第三次等待300秒看门狗后仍失败，3/3耗尽并于本地 `02:05:58` 终态 `failed`，未进入正式 Q1，未生成 Q1--Q4、冻结或论文。只读资源核查显示 backend 容器 `pids.max=256`、当时 `pids.current=242`，PID 1 未回收的大量 `[sleep] <defunct>` 进程占满配额，属于容器运行资源耗尽而非建模算法错误。当前处置：绝不 `/resume`；先重启 backend 清空僵尸进程并复核健康度/进程余量，再创建全新隔离任务，要求 EDA 只用当前内核直接读取附件且禁止 `subprocess`，四问正式单元直接调用已校验的任务级低成本求解器。
 
 - [2026-08-17] backend 重启后进程占用由 `242/256` 降至 `10/256`，随后创建第九个全新隔离任务 `20260816-180843-aeab4849e0f2f38d28cbf7acf1dc99b8`；附件、修正算法文档和任务级求解器哈希均与源文件一致，初始目录无旧 notebook/CSV/结果。Coordinator 正常拆出四问，但自动 Modeler 两轮因 Q4 numerical 诊断“搜索网格步长和范围（n_A/n_B 枚举范围）”及“求解器状态、最优性证明或近似最优性说明”缺少逐词对应 acceptance metric 而在任何 Coder 执行前终态 `failed`。当前处置：不调用 `/resume`、不放宽门禁；仅在该任务未执行代码的安全边界使用受控 `codex-modeling` 写入此前 Luna Max 已批准的38项计划，再重新走正常方案审批，仍不复用任何旧数值产物。
+
+- [2026-08-22] **P1 安全与 Prompt 加固修复**：
+  1. `_find_cross_task_path` stem 误报修复：移除对受保护文件名 stem（如 `checkpoint`、`frozen_results`）的裸子串匹配回退逻辑，保留字符串字面量精确 basename 匹配。合法变量名 `checkpoint = load_checkpoint()` 等不再被误拦截为跨任务路径访问。新增 6 个负例单测覆盖。
+  2. Modeler prompt `constraints` 字段加固：在 `modeler.py` 中明确禁止把敏感性分析、情景假设、推论结论或非约束语义数学表达式写入 `constraints` 列表；要求所有敏感性分析内容必须且只能输出到顶层 `sensitivity_analysis` 字段，防止一维不等式边界审计误判为不可行。
+  3. 验证：后端全量 827 unittest OK（skipped=2 为环境跳过），Ruff All checks passed。

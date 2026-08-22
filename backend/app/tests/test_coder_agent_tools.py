@@ -1407,6 +1407,14 @@ class TestPersistentFailureBudget(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(_find_cross_task_path('os.remove("evidence_failure_budget.json")'))
             self.assertIsNotNone(_find_cross_task_path('name = "evidence_failure_" + "budget.json"\nopen(name, "w")'))
 
+            # 6b. Legitimate variable names / comments must NOT be falsely rejected (stem fix)
+            self.assertIsNone(_find_cross_task_path('checkpoint = load_checkpoint()'))
+            self.assertIsNone(_find_cross_task_path('# checkpoint.json stores workflow state'))
+            self.assertIsNone(_find_cross_task_path('from my_module import checkpoint_manager'))
+            self.assertIsNone(_find_cross_task_path('frozen_results = compute_freeze()'))
+            self.assertIsNone(_find_cross_task_path('modeler_plan = build_plan()'))
+            self.assertIsNone(_find_cross_task_path('task_status = get_status()'))
+
             # 7. Runtime protected files snapshot & auto-restoration integrity test
             from app.core.agents.coder_agent import _snapshot_protected_files, _verify_and_restore_protected_files
             budget_file.write_text(json.dumps({"task_id": "t1", "subtasks": {"ques1": {"count": 2, "plan_sha256": "sha1"}}}), encoding="utf-8")

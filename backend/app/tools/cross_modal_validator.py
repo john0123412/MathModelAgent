@@ -170,6 +170,17 @@ class CodeImportDependencyVisitor(ast.NodeVisitor):
     def __init__(self) -> None:
         self.private_imports: list[dict[str, Any]] = []
         self.sys_path_modifications: list[dict[str, Any]] = []
+        # 绑定到 sys 模块的对象名（含 import sys as s 的别名）
+        self.sys_module_names: set[str] = {"sys"}
+        # 绑定到 sys.path 对象的变量名（来自 from sys import path [as p]）
+        self.path_binding_names: set[str] = set()
+
+    def _record_sys_path_modification(self, method: str, node: ast.AST) -> None:
+        self.sys_path_modifications.append({
+            "type": "sys_path_modification",
+            "method": method,
+            "lineno": getattr(node, "lineno", 0),
+        })
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
@@ -181,6 +192,9 @@ class CodeImportDependencyVisitor(ast.NodeVisitor):
                     "lineno": getattr(node, "lineno", 0),
                     "statement": f"import {name}",
                 })
+            elif name == "sys":
+                bound = alias.asname or alias.name
+                self.sys_module_names.add(bound)
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
@@ -193,18 +207,43 @@ class CodeImportDependencyVisitor(ast.NodeVisitor):
                 "lineno": getattr(node, "lineno", 0),
                 "statement": f"from {mod} import {names_str}",
             })
+        elif mod == "sys":
+            for alias in node.names:
+                if alias.name == "path":
+                    bound = alias.asname or alias.name
+                    self.path_binding_names.add(bound)
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
-        # 检测 sys.path.append(...) / sys.path.insert(...)
-        if isinstance(node.func, ast.Attribute) and node.func.attr in {"append", "insert"}:
-            if isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "path":
-                if isinstance(node.func.value.value, ast.Name) and node.func.value.value.id == "sys":
-                    self.sys_path_modifications.append({
-                        "type": "sys_path_modification",
-                        "method": f"sys.path.{node.func.attr}",
-                        "lineno": getattr(node, "lineno", 0),
-                    })
+        # 检测 sys.path.append/insert/extend(...) 及 from-sys-import-path 后的 path.append(...)
+        if isinstance(node.func, ast.Attribute) and node.func.attr in {"append", "insert", "extend"}:
+            receiver = node.func.value
+            if isinstance(receiver, ast.Attribute) and receiver.attr == "path":
+                if isinstance(receiver.value, ast.Name) and receiver.value.id in self.sys_module_names:
+                    self._record_sys_path_modification(f"{receiver.value.id}.path.{node.func.attr}", node)
+            elif isinstance(receiver, ast.Name) and receiver.id in self.path_binding_names:
+                self._record_sys_path_modification(f"path.{node.func.attr}", node)
+        self.generic_visit(node)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        # 检测 sys.path += [...] / path += [...]
+        if isinstance(node.op, ast.Add):
+            target = node.target
+            if isinstance(target, ast.Attribute) and target.attr == "path":
+                if isinstance(target.value, ast.Name) and target.value.id in self.sys_module_names:
+                    self._record_sys_path_modification(f"{target.value.id}.path.modify", node)
+            elif isinstance(target, ast.Name) and target.id in self.path_binding_names:
+                self._record_sys_path_modification("path.modify", node)
+        self.generic_visit(node)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        # 检测 sys.path = [...] / path = [...] 直接重绑定
+        for target in node.targets:
+            if isinstance(target, ast.Attribute) and target.attr == "path":
+                if isinstance(target.value, ast.Name) and target.value.id in self.sys_module_names:
+                    self._record_sys_path_modification(f"{target.value.id}.path.assign", node)
+            elif isinstance(target, ast.Name) and target.id in self.path_binding_names:
+                self._record_sys_path_modification("path.assign", node)
         self.generic_visit(node)
 
 
@@ -595,12 +634,27 @@ def _check_code_piece_self_containment(
                 "lineno": 0,
                 "statement": match.group(0).strip(),
             })
-        for match in re.finditer(r"(?m)^\s*sys\.path\.(?:append|insert)\s*\(", code_content):
+        for match in re.finditer(r"(?m)^\s*sys\.path\.(?:append|insert|extend)\s*\(", code_content):
             visitor.sys_path_modifications.append({
                 "type": "regex_fallback_sys_path",
                 "method": "sys.path.modify",
                 "lineno": 0,
             })
+        # 兜底覆盖变体：sys.path +=/= 直接赋值、from sys import path 及其后续 path.* 调用
+        _fallback_sys_path_re = re.compile(
+            r"(?m)^\s*(?:"
+            r"sys\.path\s*(?:\+=|=(?!=))"
+            r"|path\.(?:append|insert|extend)\s*\("
+            r")"
+        )
+        _from_sys_import_path_re = re.compile(r"(?m)^\s*from\s+sys\s+import\s+[^#\n]*\bpath\b")
+        for _pattern in (_fallback_sys_path_re, _from_sys_import_path_re):
+            for match in _pattern.finditer(code_content):
+                visitor.sys_path_modifications.append({
+                    "type": "regex_fallback_sys_path",
+                    "method": "sys.path.modify",
+                    "lineno": code_content.count("\n", 0, match.start()) + 1,
+                })
 
     for item in visitor.private_imports:
         issues.append({

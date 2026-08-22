@@ -450,7 +450,12 @@ def _check_source_metrics_equivalence(
                 long_matched = True
 
             if long_matched:
-                raw_val = row.get("数值") or row.get("value") or row.get("actual")
+                raw_val = None
+                for _val_key in ("数值", "value", "actual"):
+                    _candidate = row.get(_val_key)
+                    if _candidate is not None:
+                        raw_val = _candidate
+                        break
                 if raw_val is not None and not isinstance(raw_val, bool):
                     try:
                         parsed = float(raw_val)
@@ -492,7 +497,14 @@ def refresh_frozen_results_hashes(
     """扫描任务目录下已存在的数据源文件，在保证数值严格等价的前提下同步刷新 frozen_results.json 中的 SHA-256 哈希。
 
     若检测到关键指标缺失、多重冲突、数据源文件缺失、路径越界或实质性数值变化，一律 fail-closed，拒绝改写文件。
+    遍历全部冻结文件（frozen_results.json / result_freeze.json / reports/frozen_numbers.json）并聚合结果；
+    各文件的写回决策相互独立：仅当该文件自身无冲突且存在等价刷新时才落盘。
     """
+    processed_paths: list[str] = []
+    written_paths: list[str] = []
+    aggregated_updated: list[dict[str, Any]] = []
+    aggregated_conflicts: list[dict[str, Any]] = []
+
     for relative_path in FREEZE_FILENAMES:
         path = os.path.join(work_dir, relative_path)
         if not os.path.isfile(path):
@@ -510,6 +522,7 @@ def refresh_frozen_results_hashes(
         if not isinstance(sources, list):
             continue
 
+        processed_paths.append(relative_path)
         updated_count = 0
         updated_sources = []
         conflicts = []
@@ -584,24 +597,24 @@ def refresh_frozen_results_hashes(
             try:
                 with open(path, "w", encoding="utf-8") as handle:
                     json.dump(document, handle, ensure_ascii=False, indent=2)
+                written_paths.append(relative_path)
+                aggregated_updated.extend(updated_sources)
             except OSError:
-                return {
-                    "active": True,
-                    "updated": False,
-                    "updated_count": 0,
-                    "error": f"写入 {relative_path} 失败",
-                    "conflicts": conflicts,
-                    "has_conflicts": True,
-                }
+                aggregated_conflicts.append({
+                    "path": relative_path,
+                    "reason": f"写入 {relative_path} 失败",
+                })
 
-        return {
-            "active": True,
-            "updated": updated_count > 0 and not conflicts,
-            "updated_count": updated_count if not conflicts else 0,
-            "path": relative_path,
-            "updated_sources": updated_sources if not conflicts else [],
-            "conflicts": conflicts,
-            "has_conflicts": len(conflicts) > 0,
-        }
+        aggregated_conflicts.extend(conflicts)
 
-    return {"active": False, "updated": False, "updated_count": 0, "conflicts": [], "has_conflicts": False}
+    return {
+        "active": bool(processed_paths),
+        "updated": bool(written_paths),
+        "updated_count": len(aggregated_updated),
+        "path": processed_paths[0] if processed_paths else None,
+        "paths": processed_paths,
+        "written_paths": written_paths,
+        "updated_sources": aggregated_updated,
+        "conflicts": aggregated_conflicts,
+        "has_conflicts": len(aggregated_conflicts) > 0,
+    }

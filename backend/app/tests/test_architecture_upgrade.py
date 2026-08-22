@@ -699,5 +699,184 @@ sys.path.append("D:/workspace/MathModelAgent/backend")
         self.assertTrue(any(i["type"] == "out_of_bounds_source_path" for i in res_oob["issues"]))
 
 
+class ReviewFindingsRegressionTest(unittest.TestCase):
+    """回归测试：代码审查发现的 sys.path 变体绕过与冻结哈希刷新缺陷。"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.work_dir = self.temp_dir.name
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    # ------------------ sys.path 变体检测 ------------------
+    def test_sys_path_from_import_variant_detected(self):
+        """from sys import path + path.append(...) 必须被拦截。"""
+        from app.tools.cross_modal_validator import audit_code_self_containment
+
+        code = (
+            "import numpy as np\n"
+            "from sys import path\n"
+            "path.append('/opt/secret_lib')\n"
+            "df = np.array([1])\n"
+        )
+        res = audit_code_self_containment(code_sources=[{"name": "solver.py", "code": code}])
+        self.assertFalse(res["passed"])
+        self.assertEqual(res["status"], "FAIL")
+        self.assertTrue(any(i["type"] == "sys_path_modification" for i in res["issues"]))
+
+    def test_sys_path_alias_and_augassign_variants_detected(self):
+        """import sys as s + s.path += [...] 与 sys.path = [...] 直接赋值必须被拦截。"""
+        from app.tools.cross_modal_validator import audit_code_self_containment
+
+        alias_code = (
+            "import sys as s\n"
+            "s.path += ['/opt/secret_lib']\n"
+        )
+        res_alias = audit_code_self_containment(
+            code_sources=[{"name": "solver_a.py", "code": alias_code}]
+        )
+        self.assertFalse(res_alias["passed"])
+        self.assertTrue(any(i["type"] == "sys_path_modification" for i in res_alias["issues"]))
+
+        assign_code = (
+            "import sys\n"
+            "sys.path = ['/opt/secret_lib'] + sys.path\n"
+        )
+        res_assign = audit_code_self_containment(
+            code_sources=[{"name": "solver_b.py", "code": assign_code}]
+        )
+        self.assertFalse(res_assign["passed"])
+        self.assertTrue(any(i["type"] == "sys_path_modification" for i in res_assign["issues"]))
+
+    def test_unrelated_path_variable_not_flagged(self):
+        """普通同名变量 path 的赋值与字符串使用不应误报。"""
+        from app.tools.cross_modal_validator import audit_code_self_containment
+
+        clean_code = (
+            "import numpy as np\n"
+            "path = 'data/results.csv'\n"
+            "print(len(path))\n"
+        )
+        res = audit_code_self_containment(code_sources=[{"name": "solver.py", "code": clean_code}])
+        self.assertTrue(res["passed"], f"误报: {res['issues']}")
+
+    def test_regex_fallback_covers_augassign_when_syntax_broken(self):
+        """语法错误片段的正则兜底必须覆盖 sys.path += 变体。"""
+        from app.tools.cross_modal_validator import _check_code_piece_self_containment
+
+        broken_code = (
+            "import sys\n"
+            "def broken(:\n"
+            "sys.path += ['/opt/x']\n"
+        )
+        issues: list[dict] = []
+        _check_code_piece_self_containment(broken_code, "broken_solver.py", issues)
+        self.assertTrue(any(i["type"] == "sys_path_modification" for i in issues))
+
+    # ------------------ 冻结哈希刷新：零值等价与多冻结文件 ------------------
+    @staticmethod
+    def _make_freeze_doc(metric_id: str, label: str, value, source_rel: str, sha256: str):
+        return {
+            "schema": "mathmodel.result-freeze",
+            "version": 1,
+            "metrics": [
+                {
+                    "id": metric_id,
+                    "label": label,
+                    "value": value,
+                    "unit": "个",
+                    "explanation": "测试指标",
+                    "source_path": source_rel,
+                }
+            ],
+            "sources": [{"relative_path": source_rel, "sha256": sha256}],
+        }
+
+    def test_refresh_equivalence_accepts_legitimate_zero_value(self):
+        """长表数值列恰为合法 0 时不得因 or 链 falsy 误判为指标缺失。"""
+        import hashlib
+
+        from app.tools.result_integrity import refresh_frozen_results_hashes, validate_result_freeze
+
+        csv_path = os.path.join(self.work_dir, "ques1_results.csv")
+        with open(csv_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("id,label,value\nx_val,X指标,0\n")
+        with open(csv_path, "rb") as f:
+            initial_hash = hashlib.sha256(f.read()).hexdigest()
+
+        doc = self._make_freeze_doc("x_val", "X指标", 0, "ques1_results.csv", initial_hash)
+        with open(os.path.join(self.work_dir, "frozen_results.json"), "w", encoding="utf-8") as f:
+            json.dump(doc, f, indent=2)
+
+        self.assertTrue(validate_result_freeze(self.work_dir)["passed"])
+
+        # 等价重排（数值仍为 0）后刷新必须放行
+        with open(csv_path, "w", encoding="utf-8", newline="\r\n") as f:
+            f.write("id,label,value\r\nx_val,X指标,0.000\r\n")
+
+        res = refresh_frozen_results_hashes(self.work_dir, verify_equivalence=True)
+        self.assertFalse(res["has_conflicts"], f"零值不应触发冲突: {res['conflicts']}")
+        self.assertTrue(res["updated"])
+        self.assertTrue(validate_result_freeze(self.work_dir)["passed"])
+
+    def test_refresh_covers_all_freeze_files_and_isolates_conflicts(self):
+        """多冻结文件必须全部刷新；单文件冲突不阻断其他文件的独立写回。"""
+        import hashlib
+
+        from app.tools.result_integrity import refresh_frozen_results_hashes, validate_result_freeze
+
+        csv_a = os.path.join(self.work_dir, "ques1_results.csv")
+        with open(csv_a, "w", encoding="utf-8", newline="\n") as f:
+            f.write("metric,value\na_val,10\n")
+        reports_dir = os.path.join(self.work_dir, "reports")
+        os.makedirs(reports_dir, exist_ok=True)
+        csv_b = os.path.join(reports_dir, "ques2_numbers.csv")
+        with open(csv_b, "w", encoding="utf-8", newline="\n") as f:
+            f.write("metric,value\nb_val,20\n")
+
+        with open(csv_a, "rb") as f:
+            hash_a = hashlib.sha256(f.read()).hexdigest()
+        with open(csv_b, "rb") as f:
+            hash_b = hashlib.sha256(f.read()).hexdigest()
+
+        doc_main = self._make_freeze_doc("a_val", "A指标", 10, "ques1_results.csv", hash_a)
+        with open(os.path.join(self.work_dir, "frozen_results.json"), "w", encoding="utf-8") as f:
+            json.dump(doc_main, f, indent=2)
+
+        doc_reports = self._make_freeze_doc("b_val", "B指标", 20, "reports/ques2_numbers.csv", hash_b)
+        frozen_numbers_path = os.path.join(reports_dir, "frozen_numbers.json")
+        with open(frozen_numbers_path, "w", encoding="utf-8") as f:
+            json.dump(doc_reports, f, indent=2)
+
+        # 场景 A: 两个数据源均等价变化 -> 两个冻结文件都必须被刷新
+        with open(csv_a, "w", encoding="utf-8", newline="\r\n") as f:
+            f.write("metric,value\r\na_val, 10.000\r\n")
+        with open(csv_b, "w", encoding="utf-8", newline="\r\n") as f:
+            f.write("metric,value\r\nb_val, 20.000\r\n")
+
+        res_all = refresh_frozen_results_hashes(self.work_dir, verify_equivalence=True)
+        self.assertFalse(res_all["has_conflicts"])
+        self.assertEqual(sorted(res_all["written_paths"]), ["frozen_results.json", "reports/frozen_numbers.json"])
+        self.assertEqual(res_all["updated_count"], 2)
+
+        # 场景 B: 主冻结文件数据源发生实质突变 -> 仅主文件冲突，报告侧仍可独立刷新
+        with open(csv_a, "w", encoding="utf-8", newline="\n") as f:
+            f.write("metric,value\na_val,99\n")
+        with open(csv_b, "w", encoding="utf-8", newline="\n") as f:
+            f.write("metric,value\nb_val,20\n")
+
+        res_mixed = refresh_frozen_results_hashes(self.work_dir, verify_equivalence=True)
+        self.assertTrue(res_mixed["has_conflicts"])
+        self.assertEqual(len(res_mixed["conflicts"]), 1)
+        self.assertIn("已变更为 99.0", res_mixed["conflicts"][0]["reason"])
+        # 报告侧冻结文件等价且已成功写回
+        self.assertIn("reports/frozen_numbers.json", res_mixed["written_paths"])
+
+        # 主冻结文件哈希未被偷换，validate 保持拦截
+        val = validate_result_freeze(self.work_dir)
+        self.assertFalse(val["passed"])
+
+
 if __name__ == "__main__":
     unittest.main()

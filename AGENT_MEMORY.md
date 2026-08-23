@@ -1413,3 +1413,10 @@ uv run python scripts/smoke_pdf_export.py
   4. 产物完整：res.md/res.json/res.docx/res.pdf/latex_project/main.tex/candidate_manifest.json/support_materials.zip/checkpoint.json/variable_snapshot.pkl 全部齐备；`/tasks` 状态 `completed`。
   5. 独立数学核验（scipy linprog）：原最优解 x_A=40, x_B=20, Z=2200；机器+10h 后 x_A=46.67, x_B=16.67, Z=2366.67, ΔZ=+166.67，与论文一致。
   6. 哈希链复核：manifest artifact_set_id=`b3707643...bde4871` 与 final_acceptance 一致；frozen_results.json/res.docx/res.json/res.md/res.pdf 的 SHA-256 全部 OK；submission_file=res.pdf SHA-256=`9670d3ae7b9f5426c5c74961014fb45335b2469474b37e4c9a0a6e63995db878` 与实际一致。
+
+- [2026-08-23] **P1 Writer 引用管道加固**（分支 `feat/writer-citation-pipeline`，commit `f1062cf`）：
+  1. 根因更正：此前 P3 失败并非"文献源未配置"——日志证实 `search_papers` 成功调用 ≥8 次且多次返回真实结果（`OPENALEX_EMAIL` 已配置）。真正根因是 Writer 多轮工具后未产出正文，触发"禁用工具收尾"回退，该回退 prompt 未锚定已检索文献，模型在无工具轮编造了 `[1][2]` 占位引用。
+  2. 修复：WriterAgent 维护 `_retrieved_papers`（run 开头重置，真工具/伪工具路径均累积）；禁用工具收尾时将已检索论文格式化为编号文献池（含标题/作者/年份/venue/DOI 或 URL）注入收尾 prompt，并施加"如需引用必须且只能引用列表内文献，严禁编造编号"硬约束。
+  3. Preflight Hard Stop 门禁零弱化：假引用剥离 + reference_format FAIL 阻断导出的 Fail-Closed 行为保持不变，仅修上游输入。
+  4. 新增 3 项回归测试：正例（文献池注入+硬约束文本断言）、负例（检索失败时无空池段落）、跨 run 重置防污染。全量 830 tests OK（skipped=2 环境跳过），Ruff clean。
+  5. 已检查说明文件同步需求：本轮不改变启动方式、导出行为、模板资源或人工复核口径，STARTUP.md/PDF模板导出说明/模板替换指南/最终复核清单无需更新。

@@ -15,6 +15,7 @@ from app.core.functions import writer_tools, writer_tools_anthropic
 from app.core.llm.llm import LLM
 from app.core.llm.types import StandardResponse, ToolCall
 from app.core.prompts import get_writer_prompt
+from app.core.prompts.authoritative_textbooks import get_textbook_citation_pool_prompt
 from app.schemas.A2A import WriterResponse
 from app.schemas.enums import CompTemplate, FormatOutPut
 from app.schemas.response import SystemMessage, WriterMessage
@@ -663,6 +664,12 @@ class WriterAgent(Agent):
                     "\n\n本轮已检索到以下真实文献，如需引用必须且只能引用这些文献，"
                     "并在文末以规范格式完整列出条目；严禁编造未在列表中的文献编号或使用空头占位符。\n"
                     + citation_pool
+                )
+            else:
+                fallback_user_msg += (
+                    "\n\n本轮未检索到特定前沿论文。若本节使用了基础运筹学、优化理论或数理统计方法且确需引用文献，"
+                    "请使用以下经典权威教材进行规范引用，并在文末以规范格式完整列出条目；严禁编造未在列表中的文献编号或使用空头占位符：\n"
+                    + get_textbook_citation_pool_prompt(max_items=4)
                 )
             await self.append_chat_history({"role": "user", "content": fallback_user_msg})
             final_response = await self._chat(

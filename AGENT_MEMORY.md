@@ -1420,3 +1420,13 @@ uv run python scripts/smoke_pdf_export.py
   3. Preflight Hard Stop 门禁零弱化：假引用剥离 + reference_format FAIL 阻断导出的 Fail-Closed 行为保持不变，仅修上游输入。
   4. 新增 3 项回归测试：正例（文献池注入+硬约束文本断言）、负例（检索失败时无空池段落）、跨 run 重置防污染。全量 830 tests OK（skipped=2 环境跳过），Ruff clean。
   5. 已检查说明文件同步需求：本轮不改变启动方式、导出行为、模板资源或人工复核口径，STARTUP.md/PDF模板导出说明/模板替换指南/最终复核清单无需更新。
+
+- [2026-08-23] **P2 经典权威教材候选池与文献引用增强**（分支 `feat/authoritative-textbook-pool`）：
+  1. 背景与目标：解决无外网学术源或检索无前沿论文时，模型缺乏权威基准文献引用的痛点，建立标准公认的经典教材候选池作为保底建议。
+  2. 实现：
+     - 新建 `app/core/prompts/authoritative_textbooks.py`：结构化收录 6 本数模权威经典教材（姜启源《数学模型》、司守奎《数学建模算法与应用》、清华《运筹学》、Vanderbei《Linear Programming》、Boyd《Convex Optimization》、李航《统计学习方法》），严格遵循 GB/T 7714-2015 格式；
+     - 注入 `app/core/prompts/writer.py`：系统提示词引用协议中提供教材候选池（Suggestion Only，模型根据方法需要自主引用，严禁无脑塞入正文）；
+     - 注入 `app/core/agents/writer_agent.py`：空检索池收尾时注入教材候选池作为托底建议，杜绝模型幻觉编造假编号；
+     - 对齐 `app/tools/paper_postprocessor.py`：后处理器 `_DEFAULT_STANDARD_REFERENCES` 统一引用自教材池，确保口径单源维护。
+  3. 验证：新增 `test_authoritative_textbooks.py` 专项单测（元数据完整性、Prompt 生成、Preflight 兼容、后处理器对齐、空池收尾注入等 5 项测试全绿）；Writer 工具链（67 tests）全绿；全量后端单测 **835 tests 全部通过**（skipped=2 环境跳过）；Ruff 代码风格检查 100% 通过（All checks passed）。
+  4. 说明文件同步：已检查说明文件同步需求，本轮未改变用户启动命令、导出流程或人工复核口径，其他说明文件无需更新。

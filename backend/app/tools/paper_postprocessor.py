@@ -32,6 +32,9 @@ from app.tools.cross_modal_validator import (
     audit_cross_modal,
     validate_code_text_parity,
 )
+from app.core.prompts.authoritative_textbooks import (
+    STANDARD_DEFAULT_TEXTBOOK_CITATIONS,
+)
 from app.schemas.problem_contract import (
     affirmatively_binds_source,
     build_problem_contract,
@@ -494,11 +497,7 @@ def remove_empty_reference_section(markdown: str) -> tuple[str, bool]:
     return result.rstrip() + "\n", True
 
 
-_DEFAULT_STANDARD_REFERENCES = [
-    "姜启源, 谢金星, 叶俊. 数学模型[M]. 第5版. 北京: 高等教育出版社, 2018.",
-    "运筹学教材编写组. 运筹学[M]. 第4版. 北京: 清华大学出版社, 2012.",
-    "司守奎, 孙兆亮. 数学建模算法与应用[M]. 第2版. 北京: 国防工业出版社, 2015.",
-]
+_DEFAULT_STANDARD_REFERENCES = list(STANDARD_DEFAULT_TEXTBOOK_CITATIONS)
 
 
 def normalize_chinese_references(markdown: str) -> str:

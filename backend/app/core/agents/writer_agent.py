@@ -562,6 +562,8 @@ class WriterAgent(Agent):
         self.is_first_run = True
         self.system_prompt = get_writer_prompt(format_output)
         self.available_images: list[str] = []
+        # 本轮 run() 中通过 search_papers 成功检索到的真实论文，用于收尾锚定。
+        self._retrieved_papers: list[dict] = []
 
     async def run(  # type: ignore[reportIncompatibleMethodOverride]
         self,
@@ -571,6 +573,7 @@ class WriterAgent(Agent):
     ) -> WriterResponse:
         """执行写作任务并返回论文内容。"""
         self.chat_history = []
+        self._retrieved_papers = []
         if available_images is not None:
             self.available_images = available_images
 
@@ -610,7 +613,7 @@ class WriterAgent(Agent):
                 await self._append_assistant_tool_calls_msg(response)
                 for tool_call in response.tool_calls:
                     if tool_call.name == "search_papers":
-                        tool_result = await self._execute_search_papers(tool_call)
+                        tool_result, _papers = await self._execute_search_papers(tool_call)
                         tool_msg: dict = {
                             "role": "tool",
                             "tool_call_id": tool_call.id,
@@ -632,12 +635,36 @@ class WriterAgent(Agent):
 
         if had_tool_calls and (content_response is None or not response_content.strip()):
             logger.warning("写作手多轮工具后未产出正文，禁用工具收尾")
-            await self.append_chat_history(
-                {
-                    "role": "user",
-                    "content": "请基于以上信息直接输出本节完整论文正文，禁止调用任何工具。",
-                }
+            fallback_user_msg = (
+                "请基于以上信息直接输出本节完整论文正文，禁止调用任何工具。"
             )
+            if self._retrieved_papers:
+                pool_lines = []
+                for _idx, _p in enumerate(self._retrieved_papers, start=1):
+                    _authors = ", ".join(
+                        a.get("name", "") for a in (_p.get("authors") or [])[:3] if a.get("name")
+                    )
+                    _parts = [str(_p.get("title") or "").strip()]
+                    if _authors:
+                        _parts.append(_authors)
+                    if _p.get("publication_year"):
+                        _parts.append(str(_p["publication_year"]))
+                    if _p.get("venue"):
+                        _parts.append(str(_p["venue"]))
+                    if _p.get("doi"):
+                        _parts.append("DOI: " + str(_p["doi"]))
+                    elif _p.get("url"):
+                        _parts.append("URL: " + str(_p["url"]))
+                    _line = ". ".join(part for part in _parts if part)
+                    if _line:
+                        pool_lines.append("[" + str(_idx) + "] " + _line)
+                citation_pool = "\n".join(pool_lines)
+                fallback_user_msg += (
+                    "\n\n本轮已检索到以下真实文献，如需引用必须且只能引用这些文献，"
+                    "并在文末以规范格式完整列出条目；严禁编造未在列表中的文献编号或使用空头占位符。\n"
+                    + citation_pool
+                )
+            await self.append_chat_history({"role": "user", "content": fallback_user_msg})
             final_response = await self._chat(
                 history=self.chat_history,
                 tools=[],
@@ -661,6 +688,7 @@ class WriterAgent(Agent):
                         source_types=pseudo_params.get("source_types"),
                         include_web=pseudo_params.get("include_web"),
                     )
+                    self._retrieved_papers.extend(papers)
                     papers_str = self.scholar.papers_to_str(papers)
                 except Exception as exc:
                     papers_str = f"文献检索失败: {type(exc).__name__}"
@@ -1071,9 +1099,10 @@ class WriterAgent(Agent):
         except Exception as exc:
             error_msg = f"搜索文献失败: {type(exc).__name__}"
             logger.error(error_msg)
-            return error_msg
+            return error_msg, []
         logger.info(f"搜索文献结果已获取: count={len(papers)}")
-        return scholar.papers_to_str(papers)
+        self._retrieved_papers.extend(papers)
+        return scholar.papers_to_str(papers), papers
 
     async def summarize(self) -> str:
         """总结对话内容，生成任务执行摘要。"""

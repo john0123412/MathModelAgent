@@ -28,12 +28,12 @@ from app.tools.semantic_layout_review import (
 )
 from app.tools.export_profiles import get_export_profile_config
 from app.tools.fact_store import FactStore
+from app.core.prompts.authoritative_textbooks import (
+    STANDARD_DEFAULT_TEXTBOOK_CITATIONS,
+)
 from app.tools.cross_modal_validator import (
     audit_cross_modal,
     validate_code_text_parity,
-)
-from app.core.prompts.authoritative_textbooks import (
-    STANDARD_DEFAULT_TEXTBOOK_CITATIONS,
 )
 from app.schemas.problem_contract import (
     affirmatively_binds_source,

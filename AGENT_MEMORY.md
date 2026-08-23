@@ -1430,3 +1430,10 @@ uv run python scripts/smoke_pdf_export.py
      - 对齐 `app/tools/paper_postprocessor.py`：后处理器 `_DEFAULT_STANDARD_REFERENCES` 统一引用自教材池，确保口径单源维护。
   3. 验证：新增 `test_authoritative_textbooks.py` 专项单测（元数据完整性、Prompt 生成、Preflight 兼容、后处理器对齐、空池收尾注入等 5 项测试全绿）；Writer 工具链（67 tests）全绿；全量后端单测 **835 tests 全部通过**（skipped=2 环境跳过）；Ruff 代码风格检查 100% 通过（All checks passed）。
   4. 说明文件同步：已检查说明文件同步需求，本轮未改变用户启动命令、导出流程或人工复核口径，其他说明文件无需更新。
+
+- [2026-08-23] **P2 教材池测试加固与代码卫生**（merge `1ff9d26`）：
+  1. 审计发现 P2 提交 `7029d10` 中的 `test_fallback_with_empty_retrieved_papers_injects_textbooks` 是伪测试：未调用 `agent.run()`，而是手动拼接与实现相同的字符串再断言，对实现代码零回归保护。
+  2. 重写为真实 `run()` 集成测试：空检索池（scholar 返回空列表）→ 工具轮耗尽 → 禁用工具收尾，断言收尾 prompt 含教材池与硬约束；新增非空池负例断言教材段被跳过。变异验证：临时删除注入代码后测试立即失败（exit 1），恢复后全绿。
+  3. 修复 `paper_postprocessor.py` import 顺序（prompts 组置于 tools 组之前），Ruff isort 卫生合规。
+  4. 全量 836 tests OK（skipped=2 环境跳过），Ruff clean。
+  5. 已检查说明文件同步需求：本轮仅测试加固与 import 排序，不改变任何运行时行为，其他说明文件无需更新。

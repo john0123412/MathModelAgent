@@ -1,10 +1,12 @@
 """权威教材候选池与文献引用增强专项单元测试。"""
 
+import json
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from app.config.setting import ApiType
 from app.core.agents.writer_agent import WriterAgent
-from app.core.llm.types import StandardResponse
+from app.core.llm.types import StandardResponse, ToolCall
 from app.core.prompts.authoritative_textbooks import (
     AUTHORITATIVE_TEXTBOOKS,
     STANDARD_DEFAULT_TEXTBOOK_CITATIONS,
@@ -60,47 +62,106 @@ class TestAuthoritativeTextbooks(unittest.TestCase):
         self.assertIn(STANDARD_DEFAULT_TEXTBOOK_CITATIONS[0], normalized)
 
 
-class TestWriterAgentTextbookFallback(unittest.IsolatedAsyncioTestCase):
-    """测试 WriterAgent 在空检索池收尾时注入教材候选池。"""
+class _EmptyPoolToolThenFinishModel:
+    """先发一次真工具调用、再在禁用工具收尾轮输出正文的模型。"""
 
-    @patch.object(WriterAgent, "_chat")
-    async def test_fallback_with_empty_retrieved_papers_injects_textbooks(self, mock_chat):
-        """断言当无检索文献且多轮工具耗尽时，收尾 Prompt 包含教材备选列表。"""
-        mock_response = AsyncMock(spec=StandardResponse)
-        mock_response.content = "## 一、问题重述\n\n基于经典运筹优化理论分析..."
-        mock_response.tool_calls = []
-        mock_chat.return_value = mock_response
+    api_type = ApiType.OPENAI_CHAT
 
-        fake_model = AsyncMock()
-        agent = WriterAgent(
-            task_id="test-task",
-            model=fake_model,
-            format_output=FormatOutPut.Markdown,
-            comp_template=CompTemplate.CHINA,
-        )
-        agent._retrieved_papers = []  # 空检索池
+    def __init__(self):
+        self.calls = 0
+        self.fallback_prompt: str | None = None
 
-        # 模拟进入无工具收尾分支逻辑
-        history: list[dict] = []
-        with patch.object(agent, "append_chat_history", new=AsyncMock(side_effect=lambda msg: history.append(msg))):
-            # 调用 run 时若触发收尾，append_chat_history 应收到含有教材池的 message
-            agent.chat_history = [{"role": "system", "content": "prompt"}]
-            # 模拟 had_tool_calls = True, content_response is None
-            from app.core.prompts.authoritative_textbooks import get_textbook_citation_pool_prompt
-
-            fallback_user_msg = "请基于以上信息直接输出本节完整论文正文，禁止调用任何工具。"
-            fallback_user_msg += (
-                "\n\n本轮未检索到特定前沿论文。若本节使用了基础运筹学、优化理论或数理统计方法且确需引用文献，"
-                "请使用以下经典权威教材进行规范引用，并在文末以规范格式完整列出条目；严禁编造未在列表中的文献编号或使用空头占位符：\n"
-                + get_textbook_citation_pool_prompt(max_items=4)
+    async def chat(self, history, **kwargs):
+        self.calls += 1
+        if kwargs.get("tools"):
+            return StandardResponse(
+                tool_calls=[
+                    ToolCall(
+                        id=f"call-{self.calls}",
+                        name="search_papers",
+                        arguments=json.dumps({"query": "linear programming"}),
+                    )
+                ]
             )
-            await agent.append_chat_history({"role": "user", "content": fallback_user_msg})
+        user_msgs = [msg["content"] for msg in history if msg.get("role") == "user"]
+        self.fallback_prompt = user_msgs[-1] if user_msgs else ""
+        return StandardResponse(content="# 一、问题重述\n\n正文。")
 
-        self.assertEqual(len(history), 1)
-        sent_content = history[0]["content"]
-        self.assertIn("本轮未检索到特定前沿论文", sent_content)
-        self.assertIn("经典权威教材候选池", sent_content)
-        self.assertIn("数学模型", sent_content)
+
+class _NoResultScholar:
+    """模拟检索服务正常返回但结果为空列表（非异常路径）。"""
+
+    async def search_papers(self, **kwargs):
+        return []
+
+    def papers_to_str(self, papers):
+        return "未检索到可用文献。"
+
+
+class TestWriterAgentTextbookFallback(unittest.IsolatedAsyncioTestCase):
+    """通过完整 run() 链路验证空检索池收尾时注入教材候选池。"""
+
+    def _make_agent(self, model, scholar):
+        return WriterAgent(
+            task_id="t1",
+            model=model,
+            comp_template=CompTemplate.CHINA,
+            format_output=FormatOutPut.Markdown,
+            scholar=scholar,
+        )
+
+    async def test_empty_pool_fallback_injects_textbooks_via_run(self):
+        """真工具轮返回空列表后进入收尾，收尾 prompt 必须包含教材池与硬约束。"""
+        model = _EmptyPoolToolThenFinishModel()
+        agent = self._make_agent(model, _NoResultScholar())
+
+        with patch(
+            "app.core.agents.writer_agent.redis_manager.publish_message",
+            new=AsyncMock(),
+        ):
+            result = await agent.run("写问题重述", sub_title="RepeatQues")
+
+        self.assertIn("# 一、问题重述", result.response_content)
+        self.assertIsNotNone(model.fallback_prompt)
+        # 教材池建议必须注入收尾 prompt
+        self.assertIn("本轮未检索到特定前沿论文", model.fallback_prompt or "")
+        self.assertIn("经典权威教材候选池", model.fallback_prompt or "")
+        self.assertIn("数学模型", model.fallback_prompt or "")
+        self.assertIn("严禁编造未在列表中的文献编号", model.fallback_prompt or "")
+
+    async def test_nonempty_pool_fallback_skips_textbook_section(self):
+        """已有真实检索结果时，收尾 prompt 使用检索池而非教材兜底段。"""
+        retrieved = [
+            {
+                "title": "Real Retrieved Paper on LP",
+                "authors": [{"name": "Alice Smith"}],
+                "publication_year": 2022,
+                "venue": "Operations Research",
+                "doi": "10.1287/example",
+                "url": "",
+            }
+        ]
+
+        class OneResultScholar:
+            async def search_papers(self, **kwargs):
+                return retrieved
+
+            def papers_to_str(self, papers):
+                return "检索到 1 篇候选文献。"
+
+        model = _EmptyPoolToolThenFinishModel()
+        agent = self._make_agent(model, OneResultScholar())
+
+        with patch(
+            "app.core.agents.writer_agent.redis_manager.publish_message",
+            new=AsyncMock(),
+        ):
+            await agent.run("写问题重述", sub_title="RepeatQues")
+
+        fp = model.fallback_prompt or ""
+        self.assertNotIn("本轮未检索到特定前沿论文", fp)
+        self.assertIn("本轮已检索到以下真实文献", fp)
+        self.assertIn("Real Retrieved Paper on LP", fp)
 
 
 if __name__ == "__main__":

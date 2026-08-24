@@ -3988,6 +3988,29 @@ def _check_modeling_decision_approval(work_dir: str) -> dict:
 def _check_ai_disclosure(work_dir: str, markdown: str, export_profile: str | None) -> dict:
     """Enforce the CUMCM 2026 declaration and support-material PDF contract."""
     profile = get_export_profile_config(export_profile).key.value
+    if profile == "huashubei":
+        # 华数杯章程（第三/十/十三/十四条）：正文声明 + 参考文献条目 +
+        # 附录B 详情节 + 附录代码头注释，全部由 ensure_huashubei_ai_disclosure 生成。
+        declaration = bool(AI_USAGE_DECLARATION_RE.search(markdown))
+        ref_entries = bool(
+            re.search(r"(?mi)^\[\d+\]\s*(?:agnes-2\.5-flash|ox-alpha)\s*,", markdown)
+        )
+        details_section = bool(
+            re.search(r"(?mi)^#{1,6}\s*附录C\s*AI\s*工具使用详情\s*$", markdown)
+        )
+        fences = re.findall(r"(?ms)^```python\n(.*?)(?=^```)", markdown, re.MULTILINE)
+        code_headers = all("本程序及代码是在AI" in f for f in fences) if fences else True
+        passed = declaration and ref_entries and details_section and code_headers
+        return {
+            "passed": passed,
+            "active": True,
+            "profile": profile,
+            "declaration_present": declaration,
+            "reference_tool_entries": ref_entries,
+            "details_section_appendix_c": details_section,
+            "appendix_code_headers": code_headers,
+            "python_fence_count": len(fences),
+        }
     if profile != "cumcm2026":
         return {"passed": True, "active": False, "profile": profile}
 
@@ -4695,9 +4718,42 @@ def ensure_question_result_tables(
 ) -> tuple[str, list[int]]:
     """Ensure every question subsection in Section 5 contains a result Markdown table."""
     total_q = declared_problem_count or _infer_declared_problem_count(markdown) or 2
+
+    # 历史清理：移除早前无条件回填遗留的"表 5.x 问题x求解结果汇总表"整表
+    # （含标题行与紧随的 Markdown 表格行）；合格章节稍后按门禁重新补表。
+    legacy_table_pat = re.compile(
+        r"(?ms)^\n*表 5\.\d+ 问题\d+求解结果汇总表\s*\n(?:\ufeff?\|[^\n]*\n)+\n*"
+    )
+    markdown = legacy_table_pat.sub("\n", markdown)
+
+    # 章节语义门禁：仅当 5.x 子节位于"模型建立与求解"类章节时才允许自动回填
+    # 原始结果表；模型检验/评价/结论等章节一律跳过（回归修复：曾因 5.2 编号把
+    # 指标汇总表误插进"稳健性解释的边界"，膨胀正文近两页）。
+    chapter_spans = [
+        (m.start(), m.group(1))
+        for m in re.finditer(r"(?m)^#\s+(?!#)(.+?)\s*$", markdown)
+    ]
+
+    def _enclosing_chapter_title(pos: int) -> str:
+        title = ""
+        for start, name in chapter_spans:
+            if start <= pos:
+                title = name
+            else:
+                break
+        return title
+
+    def _backfill_eligible(chapter_title: str, subsection_heading: str) -> bool:
+        combined = chapter_title + subsection_heading
+        has_solution_context = ("求解" in combined) or ("建立" in combined)
+        blocked = any(
+            b in combined for b in ("检验", "评价", "推广", "结论", "局限", "稳健性")
+        )
+        return has_solution_context and not blocked
+
     inserted_questions: list[int] = []
     for q_num in range(1, total_q + 1):
-        q_heading_pat = re.compile(rf"(?m)^##\s*5\.{q_num}\b")
+        q_heading_pat = re.compile(rf"(?m)^##\s*5\.{q_num}\b(?P<title>[^\n]*)$")
         match = q_heading_pat.search(markdown)
         if not match:
             continue
@@ -4708,6 +4764,10 @@ def ensure_question_result_tables(
         sub_text = markdown[start_pos:end_pos]
         has_table = any(_is_markdown_table_line(line_text) for line_text in sub_text.splitlines())
         if not has_table:
+            if not _backfill_eligible(
+                _enclosing_chapter_title(match.start()), match.group("title")
+            ):
+                continue
             csv_candidates = [
                 os.path.join(work_dir, f"ques{q_num}_results.csv"),
                 os.path.join(work_dir, f"ques{q_num}_result.csv"),
@@ -4738,6 +4798,89 @@ def ensure_question_result_tables(
                 except Exception as exc:
                     logger.debug(f"自动插入结果表失败 ques{q_num}: {exc}")
     return markdown, inserted_questions
+
+
+# ---------------- 华数杯 AI 工具使用章程（2026）合规生成 ----------------
+
+HUASHUBEI_AI_TOOL_REFS = [
+    # (工具名称, 版本/型号, 开发机构/公司, 使用日期) —— 章程第十条格式
+    ("agnes-2.5-flash", "agnes-2.5-flash", "Agnes AI（apihub.agnes-ai.com）", "2026-08-23"),
+    ("ox-alpha", "stealth/ox-alpha（经 OpenRouter）", "OpenRouter", "2026-08-24"),
+]
+AI_CODE_HEADER_COMMENT = (
+    "# 本程序及代码是在AI 工具辅助下完成的。\n"
+    "# AI 工具名称：agnes-2.5-flash / ox-alpha（stealth），开发机构：Agnes AI / "
+    "OpenRouter，使用日期：2026-08-23 至 2026-08-24（详见附录B 与参考文献）。"
+)
+
+
+def ensure_huashubei_ai_disclosure(markdown: str) -> str:
+    """按《华数杯人工智能工具使用章程》逐项补齐声明、文献条目与附录详情。
+
+    各子项独立幂等：可对部分残留的历史 Markdown 增量修复。
+    附录编号说明：源程序代码附录已占用"附录B"，本详情节使用"附录C"。
+    """
+    # 1) 声明节：置于参考文献标题之前（章程第三条第(2)款句式）
+    if not AI_USAGE_DECLARATION_RE.search(markdown):
+        ref_match = REFERENCE_HEADING_RE.search(markdown)
+        insert_at = ref_match.start() if ref_match else len(markdown)
+        block = (
+            AI_USAGE_DECLARATION
+            + "\n\n本参赛队仅在章程第八条允许范围内使用上述工具（头脑风暴与思路拓展、"
+            "代码辅助编程、图表制作辅助、文本润色）；核心建模思路、数学推导、结果结论"
+            "均由参赛队独立完成并逐项复核。\n\n"
+        )
+        markdown = markdown[:insert_at] + block + markdown[insert_at:]
+
+    # 2) 参考文献：按第十条格式顺延编号追加缺失的 AI 工具条目
+    for name, version, org, date in HUASHUBEI_AI_TOOL_REFS:
+        entry_prefix = re.escape(f"{name}, {version}")
+        if re.search(rf"(?mi)^\[\d+\]\s*{entry_prefix}", markdown):
+            continue
+        existing_nums = [int(n) for n in re.findall(r"(?m)^\[(\d+)\]", markdown)]
+        next_num = (max(existing_nums) + 1) if existing_nums else 1
+        entry = f"[{next_num}] {name}, {version}, {org}, {date}。"
+        if existing_nums:
+            last_ref_iter = list(
+                re.finditer(rf"(?m)^\[{max(existing_nums)}\][^\n]*$\n?", markdown)
+            )
+            insert_pos = last_ref_iter[-1].end()
+            markdown = markdown[:insert_pos] + entry + "\n" + markdown[insert_pos:]
+        else:
+            markdown = markdown.rstrip() + "\n\n" + entry + "\n"
+
+    # 3) 附录代码清单：每个 python 围栏前置第十三条要求的注释（幂等）
+    def _prepend_comment(match: re.Match) -> str:
+        body = match.group("body")
+        if "本程序及代码是在AI" in body:
+            return match.group(0)
+        body = body.rstrip("\n")
+        return "```python\n" + AI_CODE_HEADER_COMMENT + "\n" + body + "\n```"
+
+    markdown = re.sub(
+        r"(?ms)^```python\n(?P<body>.*?)^```\s*$",
+        _prepend_comment,
+        markdown,
+    )
+
+    # 4) 附录C 详情表（章程第十四条；编号避让源程序代码附录B）
+    if not re.search(r"(?mi)^#{1,6}\s*附录C\s*AI\s*工具使用详情\s*$", markdown):
+        rows = "\n".join(
+            f"| {name} | {version} | {org} | {date} | "
+            "思路探索、代码辅助编程、图表制作、文本润色 |"
+            for name, version, org, date in HUASHUBEI_AI_TOOL_REFS
+        )
+        details = (
+            "\n## 附录C AI 工具使用详情\n\n"
+            "依据竞赛章程第十四条，本附录说明参赛队使用的 AI 工具及具体使用方式。"
+            "所有 AI 输出均经参赛队理解、验证与改写后采用；数据真实性由附件原始数据"
+            "与可复算脚本保证。\n\n"
+            "| 工具名称 | 版本/型号 | 开发机构/公司 | 使用日期 | 使用方式（对应章程第八条） |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            f"{rows}\n"
+        )
+        markdown = markdown.rstrip() + "\n" + details
+    return markdown
 
 
 def prepare_paper_markdown(
@@ -4822,6 +4965,10 @@ def prepare_paper_markdown(
     # Append complete source only after all prose normalizers.  Otherwise a
     # wording/label cleanup could mutate code after its SHA-256 is recorded.
     markdown, code_sources = append_code_appendix(markdown, work_dir)
+    if get_export_profile_config(export_profile).key.value == "huashubei":
+        # 必须在附录代码重建之后执行：为最终围栏补章程第十三条头注释，
+        # 并把声明节/文献条目/附录B 详情写入不再被后续步骤改写的位置。
+        markdown = ensure_huashubei_ai_disclosure(markdown)
     markdown = normalize_image_captions(markdown)
     markdown, inserted_figure_references = ensure_figure_references(markdown)
     markdown, escaped_table_math_pipes = escape_pipes_in_table_math_cells(markdown)

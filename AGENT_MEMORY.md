@@ -1568,3 +1568,10 @@ uv run python scripts/smoke_pdf_export.py
   2. 回归测试 `test_code_text_parity_detects_helper_wrapped_writers`（正例跨模块 helper 映射 7→0 missing、负例仅定义不调用不误映射）。test_architecture_upgrade 28 tests OK、test_submission_audit+test_export_cli 44 tests OK、Ruff 全绿。
   3. 版式三项（[H] 随文 / widowpenalty 孤行治理 / Gin 高度 60% 上限）全部落地生效。踩坑记录：Gin width 键用 `\maxwidth` 会因 header-includes 注入点早于其定义而编译失败（Undefined \Gin@），必须改 `\linewidth`；apply_redactions 对 show_pdf_page 的 XObject 无效，裁附录必须用 clip。已同步《PDF模板导出说明》。
   4. 最终产物：res.pdf **144 页**（sha 95762b0a...）全门禁 PASS+TECHNICAL_PASS；submission_body.pdf **22 页**（DOI 尾行 clip 裁切，文献收尾完整零附录残留，sha 9cd6b487...）；manifest 哈希一致。评审要求的两处版式问题实测关闭：原 p6 大留白清零（全文档无下半页空白页）、p9/10 文字孤行消失（现 p9 页首 ∑ 为多行约束方程正常续页）。冻结算法链未动。
+
+- [2026-08-24] **P4 终版封版（评审三处阻断全部关闭：5.2 回填回归 / p6 留白 / AI 声明，143+20 页双版本交付）**：
+  1. **5.2 回填回归修复**：`ensure_question_result_tables` 增加章节语义门禁（解析顶级章节标题，仅"求解/建立"且不含"检验/评价/推广/结论/局限/稳健性"的 5.x 子节允许回填），并新增历史遗留表确定性清理（正则匹配"表 5.x 问题x求解结果汇总表"+紧随表格行整块移除，兼容 BOM 与空行）。回归测试：检验子节不回填 + 求解章节正例仍回填。
+  2. **p6 留白修复**：图高上限 0.60→**0.42\textheight**。实测 res.pdf 143 页中 p6 双图同页、内容填充 95%，全文档无下半页空白页；正文区零文字孤行。
+  3. **华数杯 AI 合规生成落地**：新增 `ensure_huashubei_ai_disclosure`（第三条声明节置于参考文献前 + 第十条文献条目顺延 [N] agnes-2.5-flash/ox-alpha + 第十三条全部 python 附录围栏前置声明注释 + 第十四条附录C 详情表），逐项幂等可增量修复；`_check_ai_disclosure` 对 huashubei 强制四要素校验。踩坑：钩子必须在 `append_code_appendix` 之后调用（否则被重建冲掉）；源程序代码已占用附录B，详情节使用附录C；围栏替换需整体消费闭合行避免 `````` 粘连。
+  4. **最终产物**：res.pdf **143 页**（sha 97604d76...）；submission_body.pdf **20 页**（附录起始页切分：refs@p20、appendix@p21，末页含完整文献）；manifest 哈希一致；preflight/pdf_visual/submission_audit 全 PASS + final_acceptance TECHNICAL_PASS（16:5x 时间戳同批）。冻结数值与算法链未动。
+  5. 测试：test_architecture_upgrade 32 tests OK（新增回填门禁正/负例、AI 声明生成幂等、增量修复共 4 例）、test_submission_audit+export_cli 44 OK、Ruff 全绿。

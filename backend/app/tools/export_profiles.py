@@ -199,12 +199,13 @@ HUASHUBEI_PROFILE = ExportProfileConfig(
             "header-includes=\\widowpenalty=10000 \\clubpenalty=10000 "
             "\\displaywidowpenalty=10000"
         ),
-        # 图片高度上限：过高图形在 [H] 下会留下大段页尾空白（评审反馈 p6），
-        # 统一限高 60% 文本区并保持纵横比；\linewidth 无需模板前置定义，宽图
+        # 图片高度上限：过高图形在 [H] 下会留下大段页尾空白（评审反馈 p6：
+        # 图1+一句引文后整段留白，图2 被整体推到下一页）。统一限高 42% 文本区，
+        # 使相邻两图与衔接文字可同页共存；\linewidth 无需模板前置定义，宽图
         # 同时收敛到行宽，杜绝溢出。
         (
             "header-includes=\\setkeys{Gin}{width=\\linewidth,"
-            "height=0.60\\textheight,keepaspectratio}"
+            "height=0.42\\textheight,keepaspectratio}"
         ),
     ],
     pdf_extra_args=[],

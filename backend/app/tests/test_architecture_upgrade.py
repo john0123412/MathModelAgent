@@ -159,6 +159,96 @@ write_csv(frontier, "ques2_pareto_frontier.csv")
         res_neg = validate_code_text_parity(markdown_text, [helper_module], self.work_dir)
         self.assertFalse(res_neg["passed"])
 
+    def test_result_table_backfill_skips_model_check_sections(self):
+        """回归：5.2 模型检验子节（无表）不得被自动回填原始指标表。"""
+        from app.tools.paper_postprocessor import ensure_question_result_tables
+
+        markdown = (
+            "# 四、模型建立与求解\n"
+            "## 4.1 问题二求解\n\n"
+            "| 指标 | 数值 |\n| --- | --- |\n| pareto_points_count | 7.0 |\n\n"
+            "# 五、模型检验\n"
+            "## 5.1 独立复算摘要\n\n"
+            "复算结论见上表。\n\n"
+            "## 5.2 稳健性解释的边界\n\n"
+            "本节仅说明敏感性设计的适用范围，不含数据表。\n"
+        )
+        csv_path = os.path.join(self.work_dir, "ques2_results.csv")
+        with open(csv_path, "w", encoding="utf-8") as handle:
+            handle.write("metric,value\nsolver_status,1.0\n")
+
+        result_md, inserted = ensure_question_result_tables(
+            markdown, self.work_dir, declared_problem_count=2
+        )
+
+        self.assertEqual(inserted, [])
+        self.assertNotIn("问题2求解结果汇总表", result_md)
+        self.assertIn("稳健性解释的边界", result_md)
+
+    def test_result_table_backfill_still_works_for_solution_sections(self):
+        """正例控制：求解类章节缺表时仍应自动补表。"""
+        from app.tools.paper_postprocessor import ensure_question_result_tables
+
+        markdown = (
+            "# 五、模型建立与求解\n"
+            "## 5.1 问题一求解\n\n"
+            "本题建立线性规划模型并求解，结果如下所示。\n"
+        )
+        csv_path = os.path.join(self.work_dir, "ques1_results.csv")
+        with open(csv_path, "w", encoding="utf-8") as handle:
+            handle.write("metric,value\nobjective,2200\n")
+
+        result_md, inserted = ensure_question_result_tables(
+            markdown, self.work_dir, declared_problem_count=1
+        )
+
+        self.assertEqual(inserted, [1])
+        self.assertIn("问题1求解结果汇总表", result_md)
+        self.assertIn("objective", result_md)
+
+    def test_huashubei_ai_disclosure_generation_is_idempotent_and_complete(self):
+        """华数杯章程合规：声明/文献条目/附录B/代码头注释一次性生成且幂等。"""
+        from app.tools.paper_postprocessor import ensure_huashubei_ai_disclosure
+
+        markdown = (
+            "# 七、结论\n\n本文完成四问求解。\n\n"
+            "# 参考文献\n\n"
+            "[1] Friedman J H. Greedy function approximation[J]. 2001.\n"
+            "[2] Huangfu Q, Hall J A J. Parallelizing the dual revised simplex"
+            " method[J]. 2018.\n\n"
+            "```python\nimport pandas as pd\nprint('solver')\n```\n"
+        )
+
+        once = ensure_huashubei_ai_disclosure(markdown)
+        self.assertIn("AI工具使用声明", once)
+        decl_pos = once.find("AI工具使用声明")
+        ref_pos = once.find("参考文献")
+        self.assertLess(decl_pos, ref_pos)
+        # 文献编号顺延：已有 [1][2]，AI 工具条目应为 [3][4]（章程第十条格式）
+        self.assertIn("[3] agnes-2.5-flash", once)
+        self.assertIn("[4] ox-alpha", once)
+        self.assertIn("附录C AI 工具使用详情", once)
+        self.assertIn("本程序及代码是在AI 工具辅助下完成的", once)
+        self.assertNotIn("``````", once)
+
+        twice = ensure_huashubei_ai_disclosure(once)
+        self.assertEqual(twice, once)
+
+    def test_huashubei_ai_disclosure_heals_partial_markdown(self):
+        """增量修复：对仅有声明/文献残留的 md 也能补齐附录C 与代码头注释。"""
+        from app.tools.paper_postprocessor import ensure_huashubei_ai_disclosure
+
+        partial = (
+            "# 参考文献\n\n"
+            "[1] Friedman J H. Greedy function approximation[J]. 2001.\n\n"
+            "```python\nimport pandas as pd\n```\n"
+        )
+        healed = ensure_huashubei_ai_disclosure(partial)
+        self.assertIn("AI工具使用声明", healed)
+        self.assertIn("[2] agnes-2.5-flash", healed)
+        self.assertIn("附录C AI 工具使用详情", healed)
+        self.assertEqual(healed.count("本程序及代码是在AI"), 1)
+
     def test_audit_cross_modal_writes_report(self):
         report = audit_cross_modal(self.work_dir, markdown_text="正文测试", code_sources=[])
         report_path = os.path.join(self.work_dir, "cross_modal_audit.json")

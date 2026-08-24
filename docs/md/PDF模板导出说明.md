@@ -117,12 +117,21 @@ PDF 只允许字体、字号、行距、`geometry`、A4 和最小内容边距；
 1. `\usepackage{float}\floatplacement{figure}{H}`——插图随文定位（不浮动），防止浮动图
    漂移到下一页顶端插断句子；
 2. `\widowpenalty=\clubpenalty=\displaywidowpenalty=10000`——孤行寡行治理；
-3. `\setkeys{Gin}{width=\linewidth,height=0.60\textheight,keepaspectratio}`——图高不超过
-   60% 文本区（避免 `[H]` 下大图留下整段页尾空白）。注意 width 键必须用 `\linewidth`
+3. `\setkeys{Gin}{width=\linewidth,height=0.42\textheight,keepaspectratio}`——图高不超过
+   42% 文本区（避免 `[H]` 下大图留下整段页尾空白；实测相邻两图与衔接文字可同页共存）。
+   注意 width 键必须用 `\linewidth`
    而非 pandoc 默认模板的 `\maxwidth`：本管线 header-includes 注入点早于 `\maxwidth`
    定义，曾导致 `Undefined control sequence \Gin@` 编译失败。副作用：图幅大于当前页剩余
    空间时会产生少量页尾留白，属预期行为；如需恢复浮动定位，删除上述 `header-includes`
    条目即可。
+
+`huashubei` profile 同时启用华数杯章程合规生成（`ensure_huashubei_ai_disclosure`，
+2026-08-24）：按第三条在参考文献前插入"AI 工具使用声明"、按第十条顺延编号追加 AI 工具
+文献条目、按第十三条为全部 python 附录围栏前置声明注释、按第十四条追加"附录C AI 工具
+使用详情"表；预检 `ai_disclosure` 项对 huashubei 强制校验上述四要素。
+`ensure_question_result_tables` 同步加入章节语义门禁：仅"模型建立与求解"类章节允许自动
+回填结果表，模型检验/评价等章节（如"5.2 稳健性解释的边界"）一律跳过，并清理历史误插的
+"表 5.x 问题x求解结果汇总表"。
 
 标准化依据：官方 2026 论文格式规范页面
 `https://www.mcm.edu.cn/html_cn/node/4cd596519c9eb9fbd866398f6df0caa3.html`

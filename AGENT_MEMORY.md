@@ -1581,3 +1581,10 @@ uv run python scripts/smoke_pdf_export.py
   2. 处置（不虚构未核实条款号）：新增 paper_postprocessor._heal_huashubei_disclosure_numbering() 幂等修复——三处统一为中性表述（"仅在章程允许范围内"/"依据竞赛章程关于人工智能工具使用的规定"/"使用方式"），并修复历史文本；_table_caption_title 新增 AI 工具表识别，表题统一为"表8 AI 工具使用情况汇总"。队伍若后续从官方包核实真实条款号，在该函数恢复编号即可全链路一致。
   3. 验证与重交付：178 tests OK（architecture_upgrade+paper_postprocessor+submission_audit+export_cli），Ruff 全绿；单次 task-refresh 后 preflight/pdf_visual/submission_audit 全 PASS + TECHNICAL_PASS；PyMuPDF 复核 res.pdf 143 页全文"第八条/第十四条/表8 结果汇总"均 0 命中，新表题✅，声明@p19、附录C@p142、文献[9][10]完整收于p20，p6 双图 fill 95.5% 保持。submission_body.pdf 从新版受控重切为 20 页（零附录残留，末页[10]收尾）；manifest 未登记该文件不受影响。
   4. 状态边界：本轮 commit 后不 push 不 tag；剩余仅人工提交合规终检（上传命名/匿名/诚信/AI声明/平台主文件与支撑材料选择），通过后再 push+tag，且此后不再改动模型、数值、图表或正文算法内容。
+
+- [2026-08-24] **P4 外部评审 polish 轮（三处安全修复落地，冻结链零改动，143/20 页重交付）**：
+  1. 外部评审给出 86-88/100 估计并列 5 项改进点；按风险分级处置——仅修"排版/文字层"，不动模型、数值、冻结脚本。
+  2. 已修：① res.md:130 公式 qquad 缺反斜杠致 LaTeX 字面泄漏（p8），补为 \qquad，PDF 全文 0 命中；② 图14 最右点 "ε=1.00" 标签被图框裁切——新增任务目录 internal/replot_fig14_label.py 从冻结 ques4_pareto_frontier.csv 复刻原样式重绘（rcParams/dpi/颜色逐参数一致），仅最右点标签改右对齐内置；PNG 不在任何哈希链中，冻结脚本与 executed_code_sources 零改动；③ 4.4.1 补三组情景水平设计依据（α±20% 对称扰动、β=0.8 与 Q2 最差新能源包络口径统一、ρ 紧/松取 [E_min,E_cost] 两端代表），纯文字无数值变化。
+  3. 未采纳（如实登记）：Q2 多目标方法加固（真 epsilon 三维扫描/NSGA-II）与 Q1 预测模型升级——均需重新求解+全链路重冻结，破坏当前 TECHNICAL_PASS 冻结态；论文已诚实声明方法边界，属可选深化而非错误。
+  4. 验证：单次 task-refresh 后 preflight/pdf_visual/submission_audit 全 PASS + TECHNICAL_PASS；res.pdf 仍 143 页，refs[10]@p20、附录A@p21 边界未移；submission_body.pdf 重切 20 页（qquad=0、零附录、[10] 收尾）。
+  5. Git 备注：本轮改动全部位于 gitignored 任务目录，仓库树仅补记本条；基础设施修复 ed69e56（docker pnpm pin）与 dcb63dd（前端契约测试容器守卫）已于本轮先行提交并推送 origin/main。

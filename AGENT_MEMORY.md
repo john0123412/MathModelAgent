@@ -1588,3 +1588,9 @@ uv run python scripts/smoke_pdf_export.py
   3. 未采纳（如实登记）：Q2 多目标方法加固（真 epsilon 三维扫描/NSGA-II）与 Q1 预测模型升级——均需重新求解+全链路重冻结，破坏当前 TECHNICAL_PASS 冻结态；论文已诚实声明方法边界，属可选深化而非错误。
   4. 验证：单次 task-refresh 后 preflight/pdf_visual/submission_audit 全 PASS + TECHNICAL_PASS；res.pdf 仍 143 页，refs[10]@p20、附录A@p21 边界未移；submission_body.pdf 重切 20 页（qquad=0、零附录、[10] 收尾）。
   5. Git 备注：本轮改动全部位于 gitignored 任务目录，仓库树仅补记本条；基础设施修复 ed69e56（docker pnpm pin）与 dcb63dd（前端契约测试容器守卫）已于本轮先行提交并推送 origin/main。
+
+- [2026-08-24] **改进方案执行第 1 批：工程清障（新分支 enhance/improvement-plan-execution，commit 95431cd）**：
+  1. 前置核验：任务描述所称"backend 大 diff CRLF 噪音 + test_pre_release_hardening 约 7 行真实改动"已随华数杯收尾批次入库；主工作区与本 worktree 在 b51910d 处均干净且与 origin/main 同步，1a 无处置对象。
+  2. 新增根 `.gitattributes`：`* text=auto eol=lf` + `*.bat/*.ps1 eol=crlf` + 常见二进制标 binary（png/jpg/jpeg/gif/ico/pdf/xls(x)/doc(x)/icns/pak/exe/dll/node/ttf/otf/woff*/zip）。`git add --renormalize .` 实际仅归一 11 个文件：9 个 frontend/src/components/ui/dialog/*.vue（mixed→LF，shadcn 组件仅行尾归一无语义变化）、五一杯C题附件2 CSV 与一篇 docs md（CRLF→LF）。`git diff --cached --ignore-cr-at-eol --stat` 验证除新增 .gitattributes 外零内容变化；bat/ps1 索引本存 LF，`eol=crlf` 仅影响检出。
+  3. 磁盘清理：删除主仓库根目录残留 `nul` 文件与 skills/ 下 2 个 `__pycache__` 目录（worktree 树无任何残留）；两者均为未追踪垃圾文件，无 commit 对象。根 .gitignore 第 31/49 行已含全局 `__pycache__/` 与 `nul` 规则（此前收尾批次加入），经 `git check-ignore -v` 验证覆盖 skills 子目录，1c 的".gitignore 补条目"已是完成态，无需修改。
+  4. 意义：行尾规范化后，后续 cherry-pick 上游 #72/#102/#79 不再被 EOL 冲突淹没。已检查说明文件同步需求：不改变启动方式、导出行为、模板资源或人工复核口径，STARTUP.md 及各 docs/md 说明无需更新。

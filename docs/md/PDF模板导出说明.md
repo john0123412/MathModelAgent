@@ -113,6 +113,17 @@ PDF 只允许字体、字号、行距、`geometry`、A4 和最小内容边距；
 自定义版式写成高教社杯 CUMCM 官方规则。正式提交前必须人工打开赛事最新官方包和提交系统，
 逐项核对页边距、字体、匿名要求、文件命名和大小限制。
 
+`huashubei` profile 自 2026-08-24 起在 `pdf_variables` 中注入三项版式治理（外部评审反馈）：
+1. `\usepackage{float}\floatplacement{figure}{H}`——插图随文定位（不浮动），防止浮动图
+   漂移到下一页顶端插断句子；
+2. `\widowpenalty=\clubpenalty=\displaywidowpenalty=10000`——孤行寡行治理；
+3. `\setkeys{Gin}{width=\linewidth,height=0.60\textheight,keepaspectratio}`——图高不超过
+   60% 文本区（避免 `[H]` 下大图留下整段页尾空白）。注意 width 键必须用 `\linewidth`
+   而非 pandoc 默认模板的 `\maxwidth`：本管线 header-includes 注入点早于 `\maxwidth`
+   定义，曾导致 `Undefined control sequence \Gin@` 编译失败。副作用：图幅大于当前页剩余
+   空间时会产生少量页尾留白，属预期行为；如需恢复浮动定位，删除上述 `header-includes`
+   条目即可。
+
 标准化依据：官方 2026 论文格式规范页面
 `https://www.mcm.edu.cn/html_cn/node/4cd596519c9eb9fbd866398f6df0caa3.html`
 要求电子版论文为单独 PDF/Word 文件（建议 PDF、≤20MB），第一页为摘要页，

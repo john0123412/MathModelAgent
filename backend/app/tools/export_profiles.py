@@ -192,6 +192,20 @@ HUASHUBEI_PROFILE = ExportProfileConfig(
         HUASHUBEI_GEOMETRY,
         "fontsize=12pt",
         "linestretch=1.6",
+        # 图形随文定位：禁止浮动体漂移到下一页顶端插断句子（评审反馈的版式问题）。
+        "header-includes=\\usepackage{float}\\floatplacement{figure}{H}",
+        # 孤行/寡行治理：避免整句仅一两字被拆到下一页页首（评审反馈 p9→p10）。
+        (
+            "header-includes=\\widowpenalty=10000 \\clubpenalty=10000 "
+            "\\displaywidowpenalty=10000"
+        ),
+        # 图片高度上限：过高图形在 [H] 下会留下大段页尾空白（评审反馈 p6），
+        # 统一限高 60% 文本区并保持纵横比；\linewidth 无需模板前置定义，宽图
+        # 同时收敛到行宽，杜绝溢出。
+        (
+            "header-includes=\\setkeys{Gin}{width=\\linewidth,"
+            "height=0.60\\textheight,keepaspectratio}"
+        ),
     ],
     pdf_extra_args=[],
     latex_template_key="zh/huashubei-latex",

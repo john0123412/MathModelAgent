@@ -1557,3 +1557,14 @@ uv run python scripts/smoke_pdf_export.py
   2. 修复：同步修正 `modeler_plan.json` 与 `modeler_plan.md` 的 ques2 `method`/`expected_artifacts`/`diagnostic_requirements`/`visualization` 为局部搜索膝点表述；计划级新增多目标声明一致性门禁 `problem_contract.py:1188`（#7）拦截ε-constraint与局部搜索混用及膝点缺失。
   3. 验证：`execution_validation` 12项ques2检查全PASS，`paper_preflight` PASS，`final_acceptance` TECHNICAL_PASS（隔离重跑后刷新，`validate_execution_artifacts` PASS）；代表方案P2（成本1,910,712,643.67 CNY/碳排2,088,505.11 tCO2/时延22.73586 ms，knee_distance 0.366897）可由frontier复算。
   4. 下一步：该任务恢复可提交状态；B阶段完成，待业务空档执行A（固化 `pre-release-hardening` 为唯一合并源）与C（Docker重建+工厂A/B轻量题端到端验收）。
+
+- [2026-08-24] **P4 抛光轮遇并发竞态暂停（parity 新检查产出 CONDITIONAL，等待 Codex 门禁代码收敛后单次重跑）**：
+  1. 版式三项修复（[H] 随文重加 + widowpenalty 孤行治理 + Gin 高度上限 60% 文本区）已写入 HUASHUBEI_PROFILE 并通过 Ruff；发现此前 [H] 编辑曾被并发会话覆盖丢失，本次已合并叠加。
+  2. 刷新预检降为 CONDITIONAL_PASS：`code_text_parity` WARN（output_calls_count=0、7 个关键结果 CSV 无生成调用映射）。定位：该检查为并行会话 14:45:44 刚保存的 `cross_modal_validator.validate_code_text_parity` 新逻辑（扫描全部任务级 .py 的 AST 输出调用），疑似未适配现有求解脚本的写盘风格或处于半成品态。
+  3. 磁盘交付集仍自洽可用：res.pdf=14:12（142页含两处断句修复）、submission_body.pdf=14:16（21页零附录残留）、manifest=14:13 哈希一致、final_acceptance=TECHNICAL_PASS。唯一不一致项是 preflight_report.json 被 14:46 重跑覆盖为 CONDITIONAL 快照——待收敛后单次 task-refresh 即可恢复全绿链并同步重切正文版。
+
+- [2026-08-24] **P4 终版闭环（接替 Codex：parity 门禁辅助函数感知修复 + 三项版式落地 + 144/22 页双版本交付）**：
+  1. `code_text_parity` CONDITIONAL 根因与修复：求解脚本统一经 `write_csv(frame, name)` 辅助函数写盘（定义于 q34_solver.py，内部 to_csv 用计算出的 Path），AST 访问器只认直连 `.to_csv/open(w)` 导致 output_calls_count=0。修复 `cross_modal_validator.py`：CodeOutputAstVisitor 增加 SINK_METHODS 常量、`collect_writer_helpers()` 跨模块收集"体内含真实写盘调用"的函数名，`visit_Call` 新增 helper 分支（扫描全部参数取数据后缀字面量），`validate_code_text_parity` 改两阶段解析；`extract_code_generated_files` 兼容可选 writer_helpers 参数。
+  2. 回归测试 `test_code_text_parity_detects_helper_wrapped_writers`（正例跨模块 helper 映射 7→0 missing、负例仅定义不调用不误映射）。test_architecture_upgrade 28 tests OK、test_submission_audit+test_export_cli 44 tests OK、Ruff 全绿。
+  3. 版式三项（[H] 随文 / widowpenalty 孤行治理 / Gin 高度 60% 上限）全部落地生效。踩坑记录：Gin width 键用 `\maxwidth` 会因 header-includes 注入点早于其定义而编译失败（Undefined \Gin@），必须改 `\linewidth`；apply_redactions 对 show_pdf_page 的 XObject 无效，裁附录必须用 clip。已同步《PDF模板导出说明》。
+  4. 最终产物：res.pdf **144 页**（sha 95762b0a...）全门禁 PASS+TECHNICAL_PASS；submission_body.pdf **22 页**（DOI 尾行 clip 裁切，文献收尾完整零附录残留，sha 9cd6b487...）；manifest 哈希一致。评审要求的两处版式问题实测关闭：原 p6 大留白清零（全文档无下半页空白页）、p9/10 文字孤行消失（现 p9 页首 ∑ 为多行约束方程正常续页）。冻结算法链未动。

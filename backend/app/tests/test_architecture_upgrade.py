@@ -127,6 +127,38 @@ df2.to_csv("ques3_results.csv")
         self.assertFalse(res_fail["passed"])
         self.assertIn("ques4_global_frontier_certificate.csv", res_fail["missing_critical_generators"])
 
+    def test_code_text_parity_detects_helper_wrapped_writers(self):
+        """写入辅助函数（体内含真实 to_csv）跨模块调用也应被识别为输出来源。"""
+        markdown_text = """
+# 五、模型求解与分析
+所有结果已记录在 `ques3_results.csv` 与 `ques2_pareto_frontier.csv` 中。
+"""
+        helper_module = """
+import pandas as pd
+
+def write_csv(frame, name):
+    path = OUT_DIR / name
+    frame.to_csv(path, index=False, encoding="utf-8-sig")
+    return path
+"""
+        caller_module = """
+from q34_solver import write_csv
+
+write_csv(results_frame, "ques3_results.csv")
+write_csv(frontier, "ques2_pareto_frontier.csv")
+"""
+        res = validate_code_text_parity(
+            markdown_text, [helper_module, caller_module], self.work_dir
+        )
+        self.assertTrue(res["passed"])
+        self.assertEqual(res["status"], "PASS")
+        self.assertEqual(res["missing_critical_generators"], [])
+        self.assertGreaterEqual(res["output_calls_count"], 2)
+
+        # 负例：helper 名未被调用时不得凭空映射
+        res_neg = validate_code_text_parity(markdown_text, [helper_module], self.work_dir)
+        self.assertFalse(res_neg["passed"])
+
     def test_audit_cross_modal_writes_report(self):
         report = audit_cross_modal(self.work_dir, markdown_text="正文测试", code_sources=[])
         report_path = os.path.join(self.work_dir, "cross_modal_audit.json")

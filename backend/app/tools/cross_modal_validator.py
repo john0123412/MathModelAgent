@@ -64,11 +64,81 @@ DOMAIN_ONLY_HINTS = [
 
 
 class CodeOutputAstVisitor(ast.NodeVisitor):
-    """AST 访问器：提取代码中所有写文件的调用及文件名。"""
+    """AST 访问器：提取代码中所有写文件的调用及文件名。
 
-    def __init__(self) -> None:
+    除直连 ``df.to_csv(...)`` / ``open(..., 'w')`` 等写盘调用外，还支持
+    **写入辅助函数感知**：当某自定义函数体内包含真实写盘调用时（如
+    ``def write_csv(frame, name): frame.to_csv(path...)``），其它模块以
+    ``write_csv(df, "x.csv")`` 形式调用该辅助函数同样会被登记为输出。
+    """
+
+    # 直接写盘方法名（用于识别辅助函数体内的真实 sink）
+    SINK_METHODS = {
+        "to_csv",
+        "to_excel",
+        "to_parquet",
+        "to_pickle",
+        "to_json",
+        "savetxt",
+        "save",
+        "dump",
+    }
+    DATA_SUFFIXES = (".csv", ".xlsx", ".xls", ".json", ".parquet", ".pkl", ".txt")
+
+    def __init__(self, writer_helpers: set[str] | None = None) -> None:
         self.output_files: set[str] = set()
         self.output_calls: list[dict[str, Any]] = []
+        self.writer_helpers = set(writer_helpers or set())
+
+    @staticmethod
+    def collect_writer_helpers(tree: ast.AST) -> set[str]:
+        """收集模块内“体内含真实写盘调用”的函数名（供跨模块辅助感知）。"""
+        helpers: set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Call) and sub is not node:
+                    fn = sub.func
+                    name = getattr(fn, "attr", None) or (
+                        getattr(fn, "id", None) if isinstance(fn, ast.Name) else None
+                    )
+                    if name in CodeOutputAstVisitor.SINK_METHODS:
+                        helpers.add(node.name)
+                        break
+                    if isinstance(fn, ast.Name) and any(
+                        m in fn.id for m in ("write_", "save_", "_dump")
+                    ):
+                        helpers.add(node.name)
+                        break
+        return helpers
+
+    def _record_data_suffix_arg(self, method: str, node: ast.Call) -> bool:
+        """在调用的全部位置/关键字参数中寻找首个数据文件名字面量并登记。"""
+        candidates: list[ast.AST] = list(node.args) + [kw.value for kw in node.keywords]
+        for arg in candidates:
+            s = self._extract_first_str_value(arg)
+            if s and "." in s and s.lower().endswith(self.DATA_SUFFIXES):
+                base = os.path.basename(s)
+                self.output_files.add(base)
+                self.output_calls.append(
+                    {"method": method, "filename": base, "lineno": getattr(node, "lineno", 0)}
+                )
+                return True
+        return False
+
+    def _extract_first_str_value(self, arg: ast.AST) -> str | None:
+        """递归提取参数表达式中的首个字符串常量（兼容 Path/'/'.join 包装）。"""
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            return arg.value
+        if isinstance(arg, ast.BinOp) and isinstance(arg.op, ast.Div):
+            return self._extract_first_str_value(arg.right)
+        if isinstance(arg, ast.Call):
+            for sub in reversed(arg.args):
+                s = self._extract_first_str_value(sub)
+                if s and "." in s:
+                    return s
+        return None
 
     def visit_Call(self, node: ast.Call) -> None:
         # 1. 识别 df.to_csv('filename.csv') 或 df.to_excel('filename.xlsx')
@@ -133,6 +203,14 @@ class CodeOutputAstVisitor(ast.NodeVisitor):
                             "lineno": getattr(node, "lineno", 0),
                         }
                     )
+
+        # 4. 写入辅助函数感知：write_csv(df, 'x.csv') / save_result(path='x.csv')
+        elif self.writer_helpers:
+            fname = getattr(node.func, "attr", None) or (
+                getattr(node.func, "id", None) if isinstance(node.func, ast.Name) else None
+            )
+            if fname in self.writer_helpers:
+                self._record_data_suffix_arg(f"helper:{fname}", node)
 
         self.generic_visit(node)
 
@@ -248,9 +326,11 @@ class CodeImportDependencyVisitor(ast.NodeVisitor):
 
 
 
-def extract_code_generated_files(code_content: str) -> tuple[set[str], list[dict[str, Any]]]:
+def extract_code_generated_files(
+    code_content: str, writer_helpers: set[str] | None = None
+) -> tuple[set[str], list[dict[str, Any]]]:
     """通过 AST 解析代码中生成的文件名集合。"""
-    visitor = CodeOutputAstVisitor()
+    visitor = CodeOutputAstVisitor(writer_helpers=writer_helpers)
     try:
         tree = ast.parse(code_content)
         visitor.visit(tree)
@@ -377,10 +457,25 @@ def validate_code_text_parity(
     generated_files: set[str] = set()
     all_output_calls: list[dict[str, Any]] = []
 
-    for code in code_pieces:
+    # 两阶段：先跨全部代码片段收集"写入辅助函数"名（如 q34_solver.write_csv），
+    # 再以全局 helper 集合解析每个片段，使 import 自其它附录模块的辅助写盘函数
+    # （体内含真实 to_csv/open 写盘调用）也能被识别为输出源。
+    parsed_trees: dict[int, ast.AST] = {}
+    writer_helpers: set[str] = set()
+    for idx, code in enumerate(code_pieces):
         if not code.strip():
             continue
-        files, calls = extract_code_generated_files(code)
+        try:
+            tree = ast.parse(code)
+            parsed_trees[idx] = tree
+            writer_helpers |= CodeOutputAstVisitor.collect_writer_helpers(tree)
+        except SyntaxError:
+            continue
+
+    for idx, code in enumerate(code_pieces):
+        if not code.strip():
+            continue
+        files, calls = extract_code_generated_files(code, writer_helpers=writer_helpers)
         generated_files.update(files)
         all_output_calls.extend(calls)
 

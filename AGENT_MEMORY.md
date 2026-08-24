@@ -1600,3 +1600,10 @@ uv run python scripts/smoke_pdf_export.py
   2. `5writing/SKILL.md` 步骤 5 从口号改为强制工作流："每条 bib 条目必须由 verify/bib 从真实 DOI 生成"；失败降级=换检索词重查而非放弃核验；`_references/math_modeling_norms.md` 写作与验收两节同步加条目；`6verity/SKILL.md` Step 6 增加真实性抽查（≤5 条 verify --doi）+ 硬错误标准新增"编造引用且无人工来源记录"。
   3. 验证（backend venv python 实测）：离线单测 13 tests OK + Ruff clean；真实 DOI 10.1287/opre.1030.0065 verify/bib exit 0 且元数据正确；编造 DOI 10.9999/fabricated.doi.2026.fake verify/bib 均 exit 1 并提示可能是编造的；2023 国赛A题（板凳龙）冒烟 search→verify→bib 端到端闭环通过。
   4. 已检查说明文件同步需求：skills 层改动不涉及后端启动/导出链路，STARTUP.md 及导出文档无需更新。
+
+- [2026-08-25] **改进方案执行第 3 批：drawio 与绘图模板补齐（commit e8a6770 + 本条 commit，分支 enhance/improvement-plan-execution）**：
+  1. 3b figure-templates 12→29：从官方版平移 18 个模板脚本（SHAP 决策热图、PDP 交互、ES-SDG Sankey、土地利用、喀斯特/ESV/生物多样性图集、昼夜 LST 等），官方 render_template.py/SKILL.md/references 为本地严格超集直接采纳；重叠 11 个脚本与本地字节级一致，无定制丢失。资产决策：scripts/data 1.6MB（geojson 边界+DEM npz）入库，cartopy 离线数据 9.3MB 不入库（render_template 已加 is_dir 守卫降级警告），预览 PNG 按既有约定入库（assets/previews 增至 32MB）。数据源路径适配：prepare_template_assets 从 assets/data 改读 scripts/data（单一来源，脚本独立运行同路径）。
+  2. 验证：16 个新模板 backend venv 直接运行全部出图（54 个 png/pdf/svg/tiff 产物）；sr-weather 双脚本因 cartopy 未安装按预期 ModuleNotFoundError 干净失败（标注可选依赖 scipy+cartopy+shapely）；ruff clean。
+  3. 3a paper-diagram→4drawio：5 个模板生成器 + check_layout.py 中文宽度版式门禁 + export/preview 工具 + tabler 图标库 + 11 篇 references 全量平移（纯标准库）；4drawio SKILL.md 保留本流水线工作流骨架，Step 3 接入模板优先路径、Step 5 强制 check_layout --strict 门禁；6verity Step 3 加"非数据图版式门禁（FAIL 0/WARN 0 才过）"+硬错误标准。验收：5 个模板 example.json 生成后 strict 门禁全部 FAIL 0/WARN 0。
+  4. 平移代码 lint 收敛：stageflow_3col prev 初始化改写（行为等价）、E741/E702/F541 机械修复，8 脚本 ruff 全绿。
+  5. 已检查说明文件同步需求：skills 层改动不涉后端启动/导出链路，无需更新 STARTUP.md 及导出文档。

@@ -1613,3 +1613,9 @@ uv run python scripts/smoke_pdf_export.py
   2. 新增 skills/metaheuristic-optimization：MEALPY 路由 + "先核对版本匹配的官方文档再写代码"，环境核对节绑定仓库固定虚拟环境规则（backend\.venv / docker uv run），求解脚本落位遵守 work_dir 防污染铁律。
   3. 两技能均带 .disabled-by-default 标记（外部副作用默认关停）；frontmatter 按仓库格式补 allowed-tools；未平移 agents/openai.yaml（桌面版专属格式）。
   4. 验证：test_record_source 3 tests OK（登记含 SHA-256、重登记幂等、项目外文件拒绝）；ruff clean。已检查说明文件同步需求：skills 层改动不涉后端链路，无需更新其他文档。
+
+- [2026-08-25] **改进方案执行第 5 批：上游关键 fix cherry-pick（唯一代码落点 commit 51b7c5b）**：
+  1. #72 reasoning_content 透传（0e86335）：对本地分支为**零增量空操作**——本地 hardening 已含全部内容（openai_chat provider 透传+finish_reason、基类 assistant 消息 reasoning 字段），冲突三处全取本地；modeler 修复轮不回放残缺 CoT 的本地语义保留。
+  2. #102 绘图字体修复+日志刷爆（11f3862）：蒸馏为一个实质变更——本地解释器 _pre_execute_code 解析 stdout 中文字体标记并经 redis 推送 SystemMessage 给前端（与本地 savefig 样式钩子融合）；matplotlib_setup.py 本地版是上游严格超集（addfont 异常保护、跨平台 kernel 路径）故保留本地；协调器重试环/coder 预设/useStickyScroll 双方功能等价取本地；workflow.py 自动并入"LLM 配置缺失快速失败"预检。
+  3. #79 任务停止（9633ee1）：**零增量空操作**——本地已实现完整取消链路且更稳（router reservation/claim 模式、workflow check_cancel、agent 可中断 _chat 带 finally 清理、前端停止按钮）；上游异常吞成字符串返回的写法被拒绝，保留本地 raise 语义；剔除其附带的 .trae/documents 计划文档（仓库策略忽略 .trae）。
+  4. 验收：backend 全量 `unittest discover app/tests` Ran 879 tests OK (skipped=2)；ruff check app 全绿。DeepSeek thinking 实测未做：本机无该 provider 配置且生产任务运行中不宜改配置；透传逻辑由既有单测覆盖。已检查说明文件同步需求：无需更新。

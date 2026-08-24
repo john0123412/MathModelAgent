@@ -1607,3 +1607,9 @@ uv run python scripts/smoke_pdf_export.py
   3. 3a paper-diagram→4drawio：5 个模板生成器 + check_layout.py 中文宽度版式门禁 + export/preview 工具 + tabler 图标库 + 11 篇 references 全量平移（纯标准库）；4drawio SKILL.md 保留本流水线工作流骨架，Step 3 接入模板优先路径、Step 5 强制 check_layout --strict 门禁；6verity Step 3 加"非数据图版式门禁（FAIL 0/WARN 0 才过）"+硬错误标准。验收：5 个模板 example.json 生成后 strict 门禁全部 FAIL 0/WARN 0。
   4. 平移代码 lint 收敛：stageflow_3col prev 初始化改写（行为等价）、E741/E702/F541 机械修复，8 脚本 ruff 全绿。
   5. 已检查说明文件同步需求：skills 层改动不涉后端启动/导出链路，无需更新 STARTUP.md 及导出文档。
+
+- [2026-08-25] **改进方案执行第 4 批：data-search 与 metaheuristic 平移适配（分支 enhance/improvement-plan-execution）**：
+  1. 新增 skills/data-search：查找→核验→登记三段式；record_source.py 维护 data/sources.json SHA-256 台账（原子写、幂等更新、项目边界校验）；官方 browser_* MCP 依赖改写为四级降级路径（WebFetch 直取 → API 元数据 → Tavily（SEARCH_ENABLED+TAVILY_API_KEY）→ 用户手动下载接管）；新增"来源台账与结果冻结衔接"节，sources.json 对接 3a-result-freeze --source 证据链；references/source-routing.md 原样平移。
+  2. 新增 skills/metaheuristic-optimization：MEALPY 路由 + "先核对版本匹配的官方文档再写代码"，环境核对节绑定仓库固定虚拟环境规则（backend\.venv / docker uv run），求解脚本落位遵守 work_dir 防污染铁律。
+  3. 两技能均带 .disabled-by-default 标记（外部副作用默认关停）；frontmatter 按仓库格式补 allowed-tools；未平移 agents/openai.yaml（桌面版专属格式）。
+  4. 验证：test_record_source 3 tests OK（登记含 SHA-256、重登记幂等、项目外文件拒绝）；ruff clean。已检查说明文件同步需求：skills 层改动不涉后端链路，无需更新其他文档。

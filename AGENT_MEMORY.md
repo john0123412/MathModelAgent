@@ -836,3 +836,10 @@
   2. #102 绘图字体修复+日志刷爆（11f3862）：蒸馏为一个实质变更——本地解释器 _pre_execute_code 解析 stdout 中文字体标记并经 redis 推送 SystemMessage 给前端（与本地 savefig 样式钩子融合）；matplotlib_setup.py 本地版是上游严格超集（addfont 异常保护、跨平台 kernel 路径）故保留本地；协调器重试环/coder 预设/useStickyScroll 双方功能等价取本地；workflow.py 自动并入"LLM 配置缺失快速失败"预检。
   3. #79 任务停止（9633ee1）：**零增量空操作**——本地已实现完整取消链路且更稳（router reservation/claim 模式、workflow check_cancel、agent 可中断 _chat 带 finally 清理、前端停止按钮）；上游异常吞成字符串返回的写法被拒绝，保留本地 raise 语义；剔除其附带的 .trae/documents 计划文档（仓库策略忽略 .trae）。
   4. 验收：backend 全量 `unittest discover app/tests` Ran 879 tests OK (skipped=2)；ruff check app 全绿。DeepSeek thinking 实测未做：本机无该 provider 配置且生产任务运行中不宜改配置；透传逻辑由既有单测覆盖。已检查说明文件同步需求：无需更新。
+
+- [2026-08-25] **改进方案执行第 6 批：分发治理四件套（分支 enhance/improvement-plan-execution，26b08be/ef63ac4/4bcf94c/aa9abf3）**：
+  1. 6a 插件化：`skills/.claude-plugin/plugin.json`（name=mathmodel-agent-skills），skills/ 目录整体可作为 Claude Code 插件安装。
+  2. 6c typst-author 渐进加载：新增 `manifest.yaml` 路由清单（仿 nature-figure：axes.task 多值判定 + references.on_demand 条件路由 + loading_protocol 禁全量扫描）；SKILL.md 头部插入"Progressive loading protocol"节。
+  3. 6b doctor 结构化：`skills/doctor/scripts/check_env.py`（纯标准库）三级分类 required/recommended/optional，含固定虚拟环境 backend/.venv 规则探针、国内镜像安装建议（TUNA PyPI/CTAN 等），--format json 机器可读；脚本从不执行安装，确认门禁留在 SKILL.md。实测本机：required 5/6（worktree 无 backend/.venv 属预期——worktree 借用主检出区 venv）、recommended 4/4、optional 1/5，exit=1 语义正确。已检查说明文件同步需求：STARTUP.md 零处引用 doctor/环境检查，无需更新。
+  4. 6d 记忆归档：AGENT_MEMORY.md 按自然月拆分，2026-07 的 142 条移入 `docs/memory/2026-07.md`（154KB 只读归档+归档索引），主文件 377KB→235KB 留 229 条活跃项。切分边界为自然月（任务原要求先确认，按 /goal 自主推进指令采用最保守的自然月边界）。
+  5. 6e 版本化播种方案：`docs/md/skill-versioned-seeding-plan.md`——以反编译 index.js 为据还原 hashSkillDir（sha256 over sorted rel-paths+contents）与 seeded-builtins.json 播种循环语义（原样跳过/升级覆盖/尊重用户删除/随包 disabled 标记），给出 verify/repair/stamp 子命令设计与桌面版"升级即覆盖"的分歧点（重铺前快照备份），本轮不实现代码。

@@ -2473,6 +2473,8 @@ def _previous_nonblank_line(lines: list[str]) -> str:
 
 def _table_caption_title(context_heading: str, table: list[str]) -> str:
     header = table[0] if table else ""
+    if "工具名称" in header and ("开发机构" in header or "版本" in header):
+        return "AI 工具使用情况汇总"
     if "支撑材料" in context_heading or "文件名" in header:
         return "支撑材料文件列表"
     if "符号" in context_heading or "符号" in header:
@@ -4803,7 +4805,7 @@ def ensure_question_result_tables(
 # ---------------- 华数杯 AI 工具使用章程（2026）合规生成 ----------------
 
 HUASHUBEI_AI_TOOL_REFS = [
-    # (工具名称, 版本/型号, 开发机构/公司, 使用日期) —— 章程第十条格式
+    # (工具名称, 版本/型号, 开发机构/公司, 使用日期) —— 参考文献条目格式
     ("agnes-2.5-flash", "agnes-2.5-flash", "Agnes AI（apihub.agnes-ai.com）", "2026-08-23"),
     ("ox-alpha", "stealth/ox-alpha（经 OpenRouter）", "OpenRouter", "2026-08-24"),
 ]
@@ -4814,25 +4816,52 @@ AI_CODE_HEADER_COMMENT = (
 )
 
 
+def _heal_huashubei_disclosure_numbering(markdown: str) -> str:
+    """统一历史生成文本中的章程条款引用，消除条款号不一致。
+
+    官方章程条款编号未经原文核实（在线与本地均无可靠出处），因此正文声明、
+    附录C 导语与表头统一改为不依赖具体条款号的中性表述；对早前已写入的
+    "第八条/第十四条"字样做幂等修复。若队伍后续核实了官方条款号，
+    只需在本函数恢复对应编号即可全链路一致。
+    """
+    markdown = markdown.replace("仅在章程第八条允许范围内", "仅在章程允许范围内")
+    markdown = markdown.replace(
+        "依据竞赛章程第十四条，本附录说明",
+        "依据竞赛章程关于人工智能工具使用的规定，本附录说明",
+    )
+    markdown = markdown.replace("使用方式（对应章程第八条）", "使用方式")
+    # 修正附录C 区域内被兜底命名的结果汇总表题
+    appendix_match = re.search(r"(?mi)^#{1,6}\s*附录C\s*AI\s*工具使用详情\s*$", markdown)
+    if appendix_match:
+        head, tail = markdown[: appendix_match.start()], markdown[appendix_match.start() :]
+        tail = re.sub(r"(?m)^表\d+\s+结果汇总\s*$", "表8 AI 工具使用情况汇总", tail)
+        markdown = head + tail
+    return markdown
+
+
 def ensure_huashubei_ai_disclosure(markdown: str) -> str:
     """按《华数杯人工智能工具使用章程》逐项补齐声明、文献条目与附录详情。
 
     各子项独立幂等：可对部分残留的历史 Markdown 增量修复。
     附录编号说明：源程序代码附录已占用"附录B"，本详情节使用"附录C"。
+    条款引用说明：官方章程条款编号未经原文核实，全文统一使用中性表述，
+    由 :func:`_heal_huashubei_disclosure_numbering` 保证新旧文本一致。
     """
-    # 1) 声明节：置于参考文献标题之前（章程第三条第(2)款句式）
+    markdown = _heal_huashubei_disclosure_numbering(markdown)
+
+    # 1) 声明节：置于参考文献标题之前
     if not AI_USAGE_DECLARATION_RE.search(markdown):
         ref_match = REFERENCE_HEADING_RE.search(markdown)
         insert_at = ref_match.start() if ref_match else len(markdown)
         block = (
             AI_USAGE_DECLARATION
-            + "\n\n本参赛队仅在章程第八条允许范围内使用上述工具（头脑风暴与思路拓展、"
+            + "\n\n本参赛队仅在章程允许范围内使用上述工具（头脑风暴与思路拓展、"
             "代码辅助编程、图表制作辅助、文本润色）；核心建模思路、数学推导、结果结论"
             "均由参赛队独立完成并逐项复核。\n\n"
         )
         markdown = markdown[:insert_at] + block + markdown[insert_at:]
 
-    # 2) 参考文献：按第十条格式顺延编号追加缺失的 AI 工具条目
+    # 2) 参考文献：按 [编号] 工具名称，版本/型号，开发机构/公司，使用日期 格式顺延追加
     for name, version, org, date in HUASHUBEI_AI_TOOL_REFS:
         entry_prefix = re.escape(f"{name}, {version}")
         if re.search(rf"(?mi)^\[\d+\]\s*{entry_prefix}", markdown):
@@ -4849,7 +4878,7 @@ def ensure_huashubei_ai_disclosure(markdown: str) -> str:
         else:
             markdown = markdown.rstrip() + "\n\n" + entry + "\n"
 
-    # 3) 附录代码清单：每个 python 围栏前置第十三条要求的注释（幂等）
+    # 3) 附录代码清单：每个 python 围栏前置声明注释（幂等）
     def _prepend_comment(match: re.Match) -> str:
         body = match.group("body")
         if "本程序及代码是在AI" in body:
@@ -4863,7 +4892,7 @@ def ensure_huashubei_ai_disclosure(markdown: str) -> str:
         markdown,
     )
 
-    # 4) 附录C 详情表（章程第十四条；编号避让源程序代码附录B）
+    # 4) 附录C 详情表（编号避让源程序代码附录B）
     if not re.search(r"(?mi)^#{1,6}\s*附录C\s*AI\s*工具使用详情\s*$", markdown):
         rows = "\n".join(
             f"| {name} | {version} | {org} | {date} | "
@@ -4872,10 +4901,10 @@ def ensure_huashubei_ai_disclosure(markdown: str) -> str:
         )
         details = (
             "\n## 附录C AI 工具使用详情\n\n"
-            "依据竞赛章程第十四条，本附录说明参赛队使用的 AI 工具及具体使用方式。"
+            "依据竞赛章程关于人工智能工具使用的规定，本附录说明参赛队使用的 AI 工具及具体使用方式。"
             "所有 AI 输出均经参赛队理解、验证与改写后采用；数据真实性由附件原始数据"
             "与可复算脚本保证。\n\n"
-            "| 工具名称 | 版本/型号 | 开发机构/公司 | 使用日期 | 使用方式（对应章程第八条） |\n"
+            "| 工具名称 | 版本/型号 | 开发机构/公司 | 使用日期 | 使用方式 |\n"
             "| --- | --- | --- | --- | --- |\n"
             f"{rows}\n"
         )

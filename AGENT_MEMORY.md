@@ -1575,3 +1575,9 @@ uv run python scripts/smoke_pdf_export.py
   3. **华数杯 AI 合规生成落地**：新增 `ensure_huashubei_ai_disclosure`（第三条声明节置于参考文献前 + 第十条文献条目顺延 [N] agnes-2.5-flash/ox-alpha + 第十三条全部 python 附录围栏前置声明注释 + 第十四条附录C 详情表），逐项幂等可增量修复；`_check_ai_disclosure` 对 huashubei 强制四要素校验。踩坑：钩子必须在 `append_code_appendix` 之后调用（否则被重建冲掉）；源程序代码已占用附录B，详情节使用附录C；围栏替换需整体消费闭合行避免 `````` 粘连。
   4. **最终产物**：res.pdf **143 页**（sha 97604d76...）；submission_body.pdf **20 页**（附录起始页切分：refs@p20、appendix@p21，末页含完整文献）；manifest 哈希一致；preflight/pdf_visual/submission_audit 全 PASS + final_acceptance TECHNICAL_PASS（16:5x 时间戳同批）。冻结数值与算法链未动。
   5. 测试：test_architecture_upgrade 32 tests OK（新增回填门禁正/负例、AI 声明生成幂等、增量修复共 4 例）、test_submission_audit+export_cli 44 OK、Ruff 全绿。
+
+- [2026-08-24] **P4 合规文字终修（条款号中性化统一 + 表8标题更正，143/20 页重交付）**：
+  1. 问题：人工终检发现正文声明引"章程第八条"、附录C导语引"第十四条"、表头又写"对应章程第八条"，条款号内部不一致；附录C表题被兜底命名为"表8 结果汇总"。两轮在线检索（含 mcm.edu.cn、研赛、统计建模规定）均未获得华数杯官方章程条款编号原文，仓库内亦无章程文本。
+  2. 处置（不虚构未核实条款号）：新增 paper_postprocessor._heal_huashubei_disclosure_numbering() 幂等修复——三处统一为中性表述（"仅在章程允许范围内"/"依据竞赛章程关于人工智能工具使用的规定"/"使用方式"），并修复历史文本；_table_caption_title 新增 AI 工具表识别，表题统一为"表8 AI 工具使用情况汇总"。队伍若后续从官方包核实真实条款号，在该函数恢复编号即可全链路一致。
+  3. 验证与重交付：178 tests OK（architecture_upgrade+paper_postprocessor+submission_audit+export_cli），Ruff 全绿；单次 task-refresh 后 preflight/pdf_visual/submission_audit 全 PASS + TECHNICAL_PASS；PyMuPDF 复核 res.pdf 143 页全文"第八条/第十四条/表8 结果汇总"均 0 命中，新表题✅，声明@p19、附录C@p142、文献[9][10]完整收于p20，p6 双图 fill 95.5% 保持。submission_body.pdf 从新版受控重切为 20 页（零附录残留，末页[10]收尾）；manifest 未登记该文件不受影响。
+  4. 状态边界：本轮 commit 后不 push 不 tag；剩余仅人工提交合规终检（上传命名/匿名/诚信/AI声明/平台主文件与支撑材料选择），通过后再 push+tag，且此后不再改动模型、数值、图表或正文算法内容。

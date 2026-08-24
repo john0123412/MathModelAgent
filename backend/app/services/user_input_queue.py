@@ -19,6 +19,9 @@ MAX_QUEUE_SIZE = 20
 
 GuidanceTarget = Literal["coordinator", "modeler", "coder", "writer", "all"]
 _KNOWN_TARGETS: set[str] = {"coordinator", "modeler", "coder", "writer", "all"}
+_WORKFLOW_TARGETS: frozenset[str] = frozenset(
+    {"coordinator", "modeler", "coder", "writer"}
+)
 
 
 class QueuedGuidance(TypedDict):
@@ -26,6 +29,9 @@ class QueuedGuidance(TypedDict):
 
     content: str
     target: GuidanceTarget
+    # Broadcast records keep one bounded queue item and mutate this set as
+    # roles consume it.  Targeted records use an empty set.
+    remaining_targets: set[str]
 
 
 _queues: dict[str, asyncio.Queue[QueuedGuidance]] = {}
@@ -59,7 +65,16 @@ def push(task_id: str, content: str, target: GuidanceTarget = "all") -> bool:
         return False
     content = normalize_content(content)
     try:
-        get_queue(task_id).put_nowait({"content": content, "target": target})
+        remaining_targets = (
+            set(_WORKFLOW_TARGETS) if target == "all" else set()
+        )
+        get_queue(task_id).put_nowait(
+            {
+                "content": content,
+                "target": target,
+                "remaining_targets": remaining_targets,
+            }
+        )
     except asyncio.QueueFull:
         return False
     return True
@@ -79,10 +94,10 @@ def pop_all(task_id: str) -> list[str]:
 def pop_for(task_id: str, target: GuidanceTarget) -> list[str]:
     """Return only guidance for ``target`` while preserving other roles' advice.
 
-    A broadcast entry is copied to each role logically: it stays in the queue
-    until every normal workflow role has consumed it. This avoids the previous
-    race in which the coordinator could accidentally consume advice intended
-    for the Coder.
+    A broadcast entry remains a single queue item carrying the roles that have
+    not consumed it yet.  This avoids turning one broadcast into three retained
+    entries when the first role reads it, which previously made a near-full
+    queue overflow and silently dropped messages for later roles.
     """
     queue = _queues.get(task_id)
     if not queue:
@@ -96,11 +111,13 @@ def pop_for(task_id: str, target: GuidanceTarget) -> list[str]:
         if item_target == target:
             matched.append(item["content"])
         elif item_target == "all":
-            matched.append(item["content"])
-            # Keep a separate remaining-recipient entry rather than letting
-            # whichever role runs first consume a broadcast instruction.
-            for other_target in _KNOWN_TARGETS - {"all", target}:
-                retained.append({"content": item["content"], "target": other_target})
+            remaining = set(item.get("remaining_targets", _WORKFLOW_TARGETS))
+            if target in remaining:
+                matched.append(item["content"])
+                remaining.remove(target)
+            if remaining:
+                item["remaining_targets"] = remaining
+                retained.append(item)
         else:
             retained.append(item)
 

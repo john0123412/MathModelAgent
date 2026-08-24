@@ -7,8 +7,14 @@ from app.schemas.enums import CompTemplate, ExportProfile, FormatOutPut
 from app.utils.log_util import logger
 from app.services.redis_manager import redis_manager
 from app.services import user_input_queue
+from app.services import task_status as task_status_service
 from app.services.task_recovery import load_task_request_snapshot
-from app.services.task_status import read_task_status, write_task_status
+from app.services.task_status import (
+    read_task_status,
+    write_task_status,
+    write_task_status_to_dir,
+)
+from app.services.token_usage import USAGE_REPORT_FILENAME
 from app.schemas.request import DEFAULT_MODELING_EXPORT_PROFILE, Problem
 from app.schemas.A2A import ModelerToCoder
 from app.schemas.response import SystemMessage
@@ -38,7 +44,7 @@ from typing import Any, Dict, Literal, Tuple
 from fastapi import HTTPException
 from icecream import ic  # type: ignore[import-unresolved]
 from app.schemas.request import ExampleRequest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.config.setting import settings, ApiType
 from app.core.llm.providers.openai_chat import OpenAIChatProvider
 from app.core.llm.providers.openai_responses import OpenAIResponsesProvider
@@ -55,14 +61,234 @@ UPLOAD_CHUNK_SIZE_BYTES = 1024 * 1024
 # WHY 该表是进程内状态；当前 Docker/uvicorn 以单 worker 运行。
 # 若改成多 worker，cancel / approve / resume 可能路由到不持有任务的进程而失效，
 # 需要先把活动任务注册与取消信号迁移到 Redis 或其他跨进程协调机制。
-_active_tasks: Dict[str, Tuple[asyncio.Task, asyncio.Event]] = {}
+_active_tasks: Dict[str, Tuple[asyncio.Task | None, asyncio.Event]] = {}
 _task_locks: Dict[str, asyncio.Lock] = {}
+
+# Runtime API configuration updates are serialized so concurrent requests can
+# never leave an endpoint and its key from different requests interleaved.
+_api_config_lock = asyncio.Lock()
+
+_AGENT_CONFIG_BLOCKS: Tuple[Tuple[str, str], ...] = (
+    ("coordinator", "COORDINATOR"),
+    ("modeler", "MODELER"),
+    ("coder", "CODER"),
+    ("writer", "WRITER"),
+)
 
 
 def _get_task_lock(task_id: str) -> asyncio.Lock:
     if task_id not in _task_locks:
         _task_locks[task_id] = asyncio.Lock()
     return _task_locks[task_id]
+
+
+_NON_DISPATCHABLE_STATES = frozenset(
+    {"running", "resuming", "revising", "finalizing"}
+)
+
+
+def _reserve_active_task(task_id: str) -> asyncio.Event | None:
+    """Atomically reserve a task ID before scheduling a background runner.
+
+    The event is also the reservation token.  Cleanup always compares it by
+    identity, so a stale runner or a failed prelude can never remove a newer
+    reservation for the same task.
+    """
+    if task_id in _active_tasks:
+        return None
+    cancel_event = asyncio.Event()
+    _active_tasks[task_id] = (None, cancel_event)
+    return cancel_event
+
+
+def _claim_active_task(task_id: str, cancel_event: asyncio.Event) -> None:
+    """Bind a scheduled runner (or direct runner call) to its token."""
+    current_task = asyncio.current_task()
+    entry = _active_tasks.get(task_id)
+    if entry is None:
+        raise RuntimeError("任务活动占位令牌已失效")
+    if entry[1] is not cancel_event:
+        raise RuntimeError("任务活动占位令牌已失效")
+    _active_tasks[task_id] = (current_task, cancel_event)
+
+
+def _bind_workflow_task(
+    task_id: str,
+    cancel_event: asyncio.Event,
+    workflow_task: asyncio.Task,
+) -> None:
+    """Replace the runner placeholder with the cancellable workflow task."""
+    entry = _active_tasks.get(task_id)
+    if entry is None or entry[1] is not cancel_event:
+        raise RuntimeError("任务活动占位令牌已失效")
+    _active_tasks[task_id] = (workflow_task, cancel_event)
+
+
+def _release_active_task(task_id: str, cancel_event: asyncio.Event) -> None:
+    """Release only the reservation owned by ``cancel_event``."""
+    entry = _active_tasks.get(task_id)
+    if entry is not None and entry[1] is cancel_event:
+        _active_tasks.pop(task_id, None)
+
+
+def _schedule_reserved_runner(
+    task_id: str,
+    cancel_event: asyncio.Event,
+    runner,
+    *args,
+    **kwargs,
+) -> asyncio.Task:
+    """Create and register a runner before returning the HTTP response.
+
+    FastAPI ``BackgroundTasks`` are executed only after response delivery.  A
+    disconnected client can therefore leave the placeholder in ``_active_tasks``
+    forever.  The reservation is already held when this helper runs, so direct
+    task creation makes cancellation and duplicate-dispatch checks independent
+    of response delivery.  The runner still owns the same token and releases it
+    in its ``finally`` block.
+    """
+    coroutine = runner(*args, cancel_event=cancel_event, **kwargs)
+    try:
+        task = asyncio.create_task(coroutine)
+    except BaseException:
+        coroutine.close()
+        raise
+    try:
+        _bind_workflow_task(task_id, cancel_event, task)
+    except BaseException:
+        task.cancel()
+        raise
+    return task
+
+
+def _snapshot_files(paths: tuple[str, ...]) -> dict[str, bytes | None]:
+    """Capture small durable control files before a dispatch transaction."""
+    snapshot: dict[str, bytes | None] = {}
+    for path in paths:
+        try:
+            with open(path, "rb") as handle:
+                snapshot[path] = handle.read()
+        except FileNotFoundError:
+            snapshot[path] = None
+    return snapshot
+
+
+def _restore_files(snapshot: dict[str, bytes | None]) -> None:
+    """Restore a dispatch transaction's control files atomically."""
+    for path, content in snapshot.items():
+        if content is None:
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+            continue
+        tmp_path = path + ".rollback.tmp"
+        with open(tmp_path, "wb") as handle:
+            handle.write(content)
+        os.replace(tmp_path, path)
+
+
+async def _rollback_dispatch(
+    scheduled_task: asyncio.Task | None,
+    state_snapshot: dict[str, bytes | None] | None,
+) -> None:
+    """Best-effort rollback that never hides the dispatching exception.
+
+    A runner can be created before a later queue/audit operation fails.  It
+    must be cancelled and fully drained *before* restoring the control files,
+    otherwise its ``finally``/status writes can race the rollback.  Cleanup is
+    deliberately defensive: callers own the original exception and release
+    the reservation in their own ``finally`` block.
+    """
+    if scheduled_task is not None:
+        try:
+            scheduled_task.cancel()
+            try:
+                await scheduled_task
+            except asyncio.CancelledError:
+                pass
+        except BaseException as exc:
+            logger.warning(
+                "调度任务回滚收束失败，继续释放占位: error_type={}",
+                type(exc).__name__,
+            )
+    if state_snapshot is not None:
+        try:
+            _restore_files(state_snapshot)
+        except BaseException as exc:
+            logger.warning(
+                "调度文件回滚失败，继续释放占位: error_type={}",
+                type(exc).__name__,
+            )
+
+
+_PRESERVE_STATUS_ON_CANCELLATION = frozenset(
+    {
+        "completed",
+        "failed",
+        "cancelled",
+        "waiting_review",
+        "waiting_quality_review",
+        "interrupted",
+    }
+)
+
+
+def _write_cancelled_status_if_active(task_id: str, message: str) -> None:
+    """Persist cancellation without downgrading an already durable outcome."""
+    try:
+        current = read_task_status(get_work_dir(task_id))
+    except Exception:
+        current = None
+    if (
+        isinstance(current, dict)
+        and current.get("status") in _PRESERVE_STATUS_ON_CANCELLATION
+    ):
+        return
+    write_task_status(task_id, "cancelled", message)
+
+
+def _write_task_status_checked(
+    work_dir: str, task_id: str, status: str, message: str
+) -> None:
+    """Write a status and verify it landed in the intended task directory.
+
+    ``write_task_status`` intentionally logs-and-continues for unrelated
+    callers.  Dispatch transitions are different: silently writing elsewhere
+    would leave a reservation released but a durable state that cannot be
+    retried.  Keep the existing call (and its test seam), then fall back to the
+    explicit directory writer when that seam or a stale work-dir lookup did not
+    persist the requested state.
+    """
+    write_task_status(task_id, status, message)
+    persisted = task_status_service.read_task_status(work_dir)
+    if not isinstance(persisted, dict) or persisted.get("status") != status:
+        write_task_status_to_dir(work_dir, task_id, status, message)
+        persisted = task_status_service.read_task_status(work_dir)
+    if not isinstance(persisted, dict) or persisted.get("status") != status:
+        raise RuntimeError(f"任务状态未能持久化: {task_id} -> {status}")
+
+
+async def _safe_publish_message(task_id: str, message: SystemMessage) -> None:
+    """Publish a notification without masking durable terminal-state writes."""
+    try:
+        await redis_manager.publish_message(task_id, message)
+    except Exception as exc:
+        logger.warning(
+            "任务通知发送失败，继续持久化终态: task_id={}, error_type={}",
+            task_id,
+            type(exc).__name__,
+        )
+
+
+def _check_dispatch_guard(work_dir: str, task_id: str) -> str | None:
+    """Return a conflict reason when a task is already being dispatched."""
+    if task_id in _active_tasks:
+        return "任务仍在运行中"
+    prior_state = (read_task_status(work_dir) or {}).get("status")
+    if prior_state in _NON_DISPATCHABLE_STATES:
+        return f"任务处于 {prior_state} 状态，不可重复调度"
+    return None
 
 
 
@@ -112,18 +338,18 @@ async def _apply_final_acceptance_status(task_id: str, report: dict) -> bool:
     """
     if report.get("technical_status") != "TECHNICAL_PASS":
         message = "最终技术验收未通过，请查看 final_acceptance_report.json"
-        await redis_manager.publish_message(
+        write_task_status(task_id, "failed", message)
+        await _safe_publish_message(
             task_id,
             SystemMessage(content=message, type="error"),
         )
-        write_task_status(task_id, "failed", message)
         return False
 
-    await redis_manager.publish_message(
+    write_task_status(task_id, "completed", "任务处理完成")
+    await _safe_publish_message(
         task_id,
         SystemMessage(content="任务处理完成", type="success"),
     )
-    write_task_status(task_id, "completed", "任务处理完成")
     return True
 
 
@@ -149,11 +375,41 @@ class ValidateApiKeyResponse(BaseModel):
     message: str
 
 
+class ProviderConfig(BaseModel):
+    """One optional runtime provider configuration block.
+
+    The API keeps the frontend's camelCase wire format while validating the
+    provider type and context-window bounds before any settings are touched.
+    Empty strings are accepted for backwards-compatible forms and mean
+    "preserve the current value" at save time.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    api_key: str | None = Field(default=None, alias="apiKey")
+    base_url: str | None = Field(default=None, alias="baseUrl")
+    model_id: str | None = Field(default=None, alias="modelId")
+    api_type: ApiType | None = Field(default=None, alias="apiType")
+    context_window: int | None = Field(
+        default=None,
+        alias="contextWindow",
+        ge=1,
+        le=1_000_000,
+    )
+
+    @field_validator("api_type", "context_window", mode="before")
+    @classmethod
+    def _empty_form_value_is_unset(cls, value):
+        return None if value == "" else value
+
+
 class SaveApiConfigRequest(BaseModel):
-    coordinator: dict
-    modeler: dict
-    coder: dict
-    writer: dict
+    model_config = ConfigDict(extra="forbid")
+
+    coordinator: ProviderConfig = Field(default_factory=ProviderConfig)
+    modeler: ProviderConfig = Field(default_factory=ProviderConfig)
+    coder: ProviderConfig = Field(default_factory=ProviderConfig)
+    writer: ProviderConfig = Field(default_factory=ProviderConfig)
     openalex_email: str
 
 
@@ -277,7 +533,7 @@ def _normalize_base_url_for_comparison(base_url: object) -> str:
 
 
 def _require_api_key_for_new_base_url(
-    block: dict, current_base_url: str | None
+    block: ProviderConfig, current_base_url: str | None
 ) -> None:
     """更换 LLM 端点时强制同请求携带 API Key，否则整个请求 422。
 
@@ -295,16 +551,34 @@ def _require_api_key_for_new_base_url(
     """
     if not block:
         return
-    new_base_url = _normalize_base_url_for_comparison(block.get("baseUrl"))
+    new_base_url = _normalize_base_url_for_comparison(block.base_url)
     if not new_base_url:
         return
     if new_base_url == _normalize_base_url_for_comparison(current_base_url):
         return
-    if not block.get("apiKey"):
+    if not block.api_key:
         raise HTTPException(
             status_code=422,
             detail="更换 Base URL 必须同时提供该端点的 API Key，防止现有密钥被发往新端点",
         )
+
+
+def _plan_agent_config_update(
+    block: ProviderConfig, prefix: str
+) -> Dict[str, Any]:
+    """Validate one provider block into a settings update without side effects."""
+    planned: Dict[str, Any] = {}
+    if block.api_key:
+        planned[f"{prefix}_API_KEY"] = block.api_key
+    if block.model_id:
+        planned[f"{prefix}_MODEL"] = block.model_id
+    if block.base_url:
+        planned[f"{prefix}_BASE_URL"] = _validated_llm_base_url(block.base_url)
+    if block.api_type is not None:
+        planned[f"{prefix}_API_TYPE"] = block.api_type
+    if block.context_window is not None:
+        planned[f"{prefix}_CONTEXT_WINDOW"] = block.context_window
+    return planned
 
 
 @router.post("/save-api-config", response_model=SaveApiConfigResponse)
@@ -312,68 +586,47 @@ async def save_api_config(request: SaveApiConfigRequest):
     """
     保存验证成功的 API 配置到当前进程 settings，不写入 .env.dev。
     """
-    # 换端点必须同请求携带该端点的 API Key；先校验全部四个块再落任何字段，
-    # 保证请求原子性（部分合法块不会先生效）。
-    _require_api_key_for_new_base_url(
-        request.coordinator, settings.COORDINATOR_BASE_URL
-    )
-    _require_api_key_for_new_base_url(request.modeler, settings.MODELER_BASE_URL)
-    _require_api_key_for_new_base_url(request.coder, settings.CODER_BASE_URL)
-    _require_api_key_for_new_base_url(request.writer, settings.WRITER_BASE_URL)
+    async with _api_config_lock:
+        # Validate endpoint/key pairing while holding the same lock used for
+        # the eventual update.  This prevents a concurrent save from changing
+        # the comparison baseline between validation and application.
+        _require_api_key_for_new_base_url(
+            request.coordinator, settings.COORDINATOR_BASE_URL
+        )
+        _require_api_key_for_new_base_url(request.modeler, settings.MODELER_BASE_URL)
+        _require_api_key_for_new_base_url(request.coder, settings.CODER_BASE_URL)
+        _require_api_key_for_new_base_url(request.writer, settings.WRITER_BASE_URL)
 
-    try:
-        # 更新各个模块的设置：仅当字段非空时才覆盖，空字段保留 .env.dev 中
-        # 已加载的默认配置，避免前端未填写时把可用的 key 覆盖成空字符串
-        if request.coordinator:
-            if api_key := request.coordinator.get("apiKey"):
-                settings.COORDINATOR_API_KEY = api_key
-            if model_id := request.coordinator.get("modelId"):
-                settings.COORDINATOR_MODEL = model_id
-            if base_url := request.coordinator.get("baseUrl"):
-                settings.COORDINATOR_BASE_URL = _validated_llm_base_url(base_url)
-            if api_type := request.coordinator.get("apiType"):
-                settings.COORDINATOR_API_TYPE = api_type
-            if cw := request.coordinator.get("contextWindow"):
-                settings.COORDINATOR_CONTEXT_WINDOW = int(cw)
+        # Phase 1: calculate all settings values without mutating global state.
+        planned: Dict[str, Any] = {}
+        try:
+            for field_name, prefix in _AGENT_CONFIG_BLOCKS:
+                planned.update(
+                    _plan_agent_config_update(getattr(request, field_name), prefix)
+                )
+            if request.openalex_email:
+                planned["OPENALEX_EMAIL"] = request.openalex_email
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="LLM Base URL 配置不合法") from exc
+        except Exception:
+            logger.exception("保存配置失败")
+            raise HTTPException(status_code=500, detail="保存配置失败")
 
-        if request.modeler:
-            if api_key := request.modeler.get("apiKey"):
-                settings.MODELER_API_KEY = api_key
-            if model_id := request.modeler.get("modelId"):
-                settings.MODELER_MODEL = model_id
-            if base_url := request.modeler.get("baseUrl"):
-                settings.MODELER_BASE_URL = _validated_llm_base_url(base_url)
-            if api_type := request.modeler.get("apiType"):
-                settings.MODELER_API_TYPE = api_type
-            if cw := request.modeler.get("contextWindow"):
-                settings.MODELER_CONTEXT_WINDOW = int(cw)
-
-        if request.coder:
-            if api_key := request.coder.get("apiKey"):
-                settings.CODER_API_KEY = api_key
-            if model_id := request.coder.get("modelId"):
-                settings.CODER_MODEL = model_id
-            if base_url := request.coder.get("baseUrl"):
-                settings.CODER_BASE_URL = _validated_llm_base_url(base_url)
-            if api_type := request.coder.get("apiType"):
-                settings.CODER_API_TYPE = api_type
-            if cw := request.coder.get("contextWindow"):
-                settings.CODER_CONTEXT_WINDOW = int(cw)
-
-        if request.writer:
-            if api_key := request.writer.get("apiKey"):
-                settings.WRITER_API_KEY = api_key
-            if model_id := request.writer.get("modelId"):
-                settings.WRITER_MODEL = model_id
-            if base_url := request.writer.get("baseUrl"):
-                settings.WRITER_BASE_URL = _validated_llm_base_url(base_url)
-            if api_type := request.writer.get("apiType"):
-                settings.WRITER_API_TYPE = api_type
-            if cw := request.writer.get("contextWindow"):
-                settings.WRITER_CONTEXT_WINDOW = int(cw)
-
-        if request.openalex_email:
-            settings.OPENALEX_EMAIL = request.openalex_email
+        # Phase 2: apply as one transaction with best-effort rollback if a
+        # settings assignment fails midway.
+        applied: list[Tuple[str, Any]] = []
+        try:
+            for attr, value in planned.items():
+                applied.append((attr, getattr(settings, attr)))
+                setattr(settings, attr, value)
+        except Exception:
+            for attr, previous in reversed(applied):
+                try:
+                    setattr(settings, attr, previous)
+                except Exception:
+                    logger.exception("配置回滚失败: {}", attr)
+            logger.exception("保存配置失败")
+            raise HTTPException(status_code=500, detail="保存配置失败")
 
         return {
             "success": True,
@@ -381,11 +634,6 @@ async def save_api_config(request: SaveApiConfigRequest):
             "scope": "runtime",
             "persisted": False,
         }
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail="LLM Base URL 配置不合法") from exc
-    except Exception:
-        logger.exception("保存配置失败")
-        raise HTTPException(status_code=500, detail="保存配置失败")
 
 
 @router.post("/validate-api-key", response_model=ValidateApiKeyResponse)
@@ -516,18 +764,26 @@ async def exampleModeling(
             })
     _write_input_manifest(work_dir, task_id, example_records)
     # 存储任务ID
-    await redis_manager.set(f"task_id:{task_id}", task_id)
+    reserved_cancel_event = _reserve_active_task(task_id)
+    if reserved_cancel_event is None:
+        raise HTTPException(status_code=409, detail="任务仍在运行中")
+    try:
+        await redis_manager.set(f"task_id:{task_id}", task_id)
 
-    logger.info(f"Adding background task for task_id: {task_id}")
-    # 将任务添加到后台执行
-    background_tasks.add_task(
-        run_modeling_task_async,
-        task_id,
-        ques_all,
-        CompTemplate.CHINA,
-        FormatOutPut.Markdown,
-        DEFAULT_MODELING_EXPORT_PROFILE,
-    )
+        logger.info(f"Scheduling runner for task_id: {task_id}")
+        _schedule_reserved_runner(
+            task_id,
+            reserved_cancel_event,
+            run_modeling_task_async,
+            task_id,
+            ques_all,
+            CompTemplate.CHINA,
+            FormatOutPut.Markdown,
+            DEFAULT_MODELING_EXPORT_PROFILE,
+        )
+    except BaseException:
+        _release_active_task(task_id, reserved_cancel_event)
+        raise
     return {"task_id": task_id, "status": "processing"}
 
 
@@ -598,36 +854,49 @@ async def modeling(
         logger.exception("保存上传文件失败")
         raise HTTPException(status_code=400, detail="保存上传文件失败")
 
-    # 存储任务ID
-    await redis_manager.set(f"task_id:{task_id}", task_id)
+    # Reserve before the first scheduling-side effect.  If Redis, audit,
+    # publish, or direct runner setup fails, the exact token is released.
+    reserved_cancel_event = _reserve_active_task(task_id)
+    if reserved_cancel_event is None:
+        raise HTTPException(status_code=409, detail="任务仍在运行中")
+    try:
+        # 存储任务ID
+        await redis_manager.set(f"task_id:{task_id}", task_id)
 
-    # Optional preloaded guidance removes the race between task creation and
-    # the first Modeler call. It follows the same untrusted/advisory path as
-    # runtime guidance and therefore cannot override workflow safeguards.
-    if guidance_content.strip():
-        normalized_guidance = user_input_queue.normalize_content(guidance_content.strip())
-        if not user_input_queue.push(task_id, normalized_guidance, guidance_target):
-            raise HTTPException(status_code=429, detail="预注入引导队列已满或目标无效")
-        _append_guidance_audit(
-            work_dir,
-            task_id=task_id,
-            target=guidance_target,
-            purpose=guidance_purpose,
-            source="operator",
-            content=normalized_guidance,
+        # Optional preloaded guidance removes the race between task creation
+        # and the first Modeler call.
+        if guidance_content.strip():
+            normalized_guidance = user_input_queue.normalize_content(
+                guidance_content.strip()
+            )
+            if not user_input_queue.push(
+                task_id, normalized_guidance, guidance_target
+            ):
+                raise HTTPException(status_code=429, detail="预注入引导队列已满或目标无效")
+            _append_guidance_audit(
+                work_dir,
+                task_id=task_id,
+                target=guidance_target,
+                purpose=guidance_purpose,
+                source="operator",
+                content=normalized_guidance,
+            )
+
+        logger.info(f"Scheduling runner for task_id: {task_id}")
+        _schedule_reserved_runner(
+            task_id,
+            reserved_cancel_event,
+            run_modeling_task_async,
+            task_id,
+            ques_all,
+            comp_template,
+            format_output,
+            export_profile,
+            require_model_review=require_model_review,
         )
-
-    logger.info(f"Adding background task for task_id: {task_id}")
-    # 将任务添加到后台执行
-    background_tasks.add_task(
-        run_modeling_task_async,
-        task_id,
-        ques_all,
-        comp_template,
-        format_output,
-        export_profile,
-        require_model_review=require_model_review,
-    )
+    except BaseException:
+        _release_active_task(task_id, reserved_cancel_event)
+        raise
     return {"task_id": task_id, "status": "processing"}
 
 
@@ -639,6 +908,7 @@ async def run_modeling_task_async(
     export_profile: ExportProfile = DEFAULT_MODELING_EXPORT_PROFILE,
     recovery_context: str = "",
     require_model_review: bool = False,
+    cancel_event: asyncio.Event | None = None,
 ):
     """异步执行建模任务。
 
@@ -648,50 +918,52 @@ async def run_modeling_task_async(
         comp_template: 竞赛模板类型。
         format_output: 输出格式。
     """
-    logger.info(f"run modeling task for task_id: {task_id}")
-    write_task_status(task_id, "running", "任务开始处理")
-
-    problem = Problem(
-        task_id=task_id,
-        ques_all=ques_all,
-        comp_template=comp_template,
-        format_output=format_output,
-        export_profile=export_profile,
-        require_model_review=require_model_review,
-    )
-
-    # 创建取消信号
-    cancel_event = asyncio.Event()
-
-    # 发送任务开始状态
-    await redis_manager.publish_message(
-        task_id,
-        SystemMessage(content="任务开始处理"),
-    )
-
-    # 给一个短暂的延迟，确保 WebSocket 有机会连接
-    await asyncio.sleep(1)
-
-    # 创建工作流并传入取消事件
-    workflow = MathModelWorkFlow()
-    workflow.cancel_event = cancel_event
-
-    # 创建任务并注册到全局表
-    task = asyncio.create_task(
-        workflow.execute(problem, recovery_context=recovery_context)
-    )
-    _active_tasks[task_id] = (task, cancel_event)
+    if cancel_event is None:
+        cancel_event = _reserve_active_task(task_id)
+        if cancel_event is None:
+            raise RuntimeError("任务已在运行中")
 
     workflow_completed = False
+    task: asyncio.Task | None = None
     try:
+        # Claim the placeholder before any publish/sleep/workflow prelude.  If
+        # one of those steps fails, the finally block still owns the same token.
+        _claim_active_task(task_id, cancel_event)
+        logger.info(f"run modeling task for task_id: {task_id}")
+        write_task_status(task_id, "running", "任务开始处理")
+
+        problem = Problem(
+            task_id=task_id,
+            ques_all=ques_all,
+            comp_template=comp_template,
+            format_output=format_output,
+            export_profile=export_profile,
+            require_model_review=require_model_review,
+        )
+
+        await redis_manager.publish_message(
+            task_id,
+            SystemMessage(content="任务开始处理"),
+        )
+
+        # 给一个短暂的延迟，确保 WebSocket 有机会连接
+        await asyncio.sleep(1)
+
+        workflow = MathModelWorkFlow()
+        workflow.cancel_event = cancel_event
+        task = asyncio.create_task(
+            workflow.execute(problem, recovery_context=recovery_context)
+        )
+        _bind_workflow_task(task_id, cancel_event, task)
+
         # 设置超时时间（5 小时）
         workflow_result = await asyncio.wait_for(task, timeout=3600 * 5)
         if workflow_result == "waiting_review":
-            await redis_manager.publish_message(
+            write_task_status(task_id, "waiting_review", "任务等待人工确认建模方案")
+            await _safe_publish_message(
                 task_id,
                 SystemMessage(content="任务等待人工确认建模方案", type="warning"),
             )
-            write_task_status(task_id, "waiting_review", "任务等待人工确认建模方案")
             return
         if workflow_result == "waiting_quality_review":
             write_task_status(
@@ -703,7 +975,7 @@ async def run_modeling_task_async(
 
         workflow_completed = True
         write_task_status(task_id, "finalizing", "工作流完成，正在生成并验收最终产物")
-        await redis_manager.publish_message(
+        await _safe_publish_message(
             task_id,
             SystemMessage(content="工作流完成，正在生成并验收最终产物"),
         )
@@ -712,21 +984,21 @@ async def run_modeling_task_async(
             return
     except asyncio.CancelledError:
         logger.info(f"任务 {task_id} 被取消")
-        await redis_manager.publish_message(
+        _write_cancelled_status_if_active(task_id, "任务已停止")
+        await _safe_publish_message(
             task_id,
             SystemMessage(content="任务已停止", type="warning"),
         )
-        write_task_status(task_id, "cancelled", "任务已停止")
     except Exception as e:
         phase = "最终产物收尾失败" if workflow_completed else "任务执行失败"
         logger.error(f"任务 {task_id} {phase}: {type(e).__name__}")
-        await redis_manager.publish_message(
+        write_task_status(task_id, "failed", f"{phase}: {e}")
+        await _safe_publish_message(
             task_id,
             SystemMessage(content=f"{phase}: {str(e)}", type="error"),
         )
-        write_task_status(task_id, "failed", f"{phase}: {e}")
     finally:
-        _active_tasks.pop(task_id, None)
+        _release_active_task(task_id, cancel_event)
         user_input_queue.clear(task_id)
 
 
@@ -1065,8 +1337,9 @@ async def approve_modeling(
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="任务不存在")
 
-    if safe_task_id in _active_tasks:
-        raise HTTPException(status_code=409, detail="任务仍在运行中")
+    guard_reason = _check_dispatch_guard(work_dir, safe_task_id)
+    if guard_reason is not None:
+        raise HTTPException(status_code=409, detail=guard_reason)
 
     checkpoint = CheckpointManager(work_dir).load()
     if checkpoint is None:
@@ -1081,17 +1354,48 @@ async def approve_modeling(
             detail="当前建模方案已变化，请重新生成并复核：" + "；".join(binding_issues),
         )
 
-    _mark_modeling_decision_approved(
-        work_dir,
-        "" if request is None else request.comment,
-    )
-    write_task_status(safe_task_id, "resuming", "建模方案已确认，任务续传中")
-    await redis_manager.set(f"task_id:{safe_task_id}", safe_task_id)
-    await redis_manager.publish_message(
-        safe_task_id,
-        SystemMessage(content="建模方案已确认，继续代码求解与论文写作"),
-    )
-    background_tasks.add_task(run_resume_task_async, safe_task_id)
+    reserved_cancel_event = _reserve_active_task(safe_task_id)
+    if reserved_cancel_event is None:
+        raise HTTPException(status_code=409, detail="任务仍在运行中")
+    state_snapshot: dict[str, bytes | None] | None = None
+    scheduled_task: asyncio.Task | None = None
+    try:
+        state_snapshot = _snapshot_files(
+            (
+                os.path.join(work_dir, "modeling_decision.json"),
+                os.path.join(work_dir, "task_status.json"),
+            )
+        )
+        # Redis/publish are prelude operations.  Do them before changing the
+        # decision or durable status so a broker outage leaves waiting_review
+        # retryable through the same approval endpoint.
+        await redis_manager.set(f"task_id:{safe_task_id}", safe_task_id)
+        await redis_manager.publish_message(
+            safe_task_id,
+            SystemMessage(content="建模方案已确认，继续代码求解与论文写作"),
+        )
+        _mark_modeling_decision_approved(
+            work_dir,
+            "" if request is None else request.comment,
+        )
+        _write_task_status_checked(
+            work_dir,
+            safe_task_id,
+            "resuming",
+            "建模方案已确认，任务续传中",
+        )
+        scheduled_task = _schedule_reserved_runner(
+            safe_task_id,
+            reserved_cancel_event,
+            run_resume_task_async,
+            safe_task_id,
+        )
+    except BaseException:
+        try:
+            await _rollback_dispatch(scheduled_task, state_snapshot)
+        finally:
+            _release_active_task(safe_task_id, reserved_cancel_event)
+        raise
     return ResumeTaskResponse(task_id=safe_task_id, status="resuming")
 
 
@@ -1110,8 +1414,9 @@ async def revise_modeling(
         work_dir = get_work_dir(safe_task_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if safe_task_id in _active_tasks:
-        raise HTTPException(status_code=409, detail="任务仍在运行中")
+    guard_reason = _check_dispatch_guard(work_dir, safe_task_id)
+    if guard_reason is not None:
+        raise HTTPException(status_code=409, detail=guard_reason)
     prior_state = (read_task_status(work_dir) or {}).get("status")
     if prior_state != "waiting_review":
         raise HTTPException(status_code=409, detail="仅 waiting_review 状态可退回建模方案")
@@ -1120,29 +1425,68 @@ async def revise_modeling(
     checkpoint = checkpoint_manager.load()
     if checkpoint is None:
         raise HTTPException(status_code=404, detail="未找到可修订的检查点")
-    try:
-        checkpoint_manager.record_modeling_revision_request()
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
     normalized_comment = user_input_queue.normalize_content(comment)
-    if not user_input_queue.push(safe_task_id, normalized_comment, "modeler"):
-        raise HTTPException(status_code=429, detail="建模修订引导队列已满")
-    _append_guidance_audit(
-        work_dir,
-        task_id=safe_task_id,
-        target="modeler",
-        purpose="modeling",
-        source="codex",
-        content=normalized_comment,
-    )
-    _mark_modeling_decision_revision_requested(work_dir, normalized_comment)
-    write_task_status(safe_task_id, "revising", "建模方案已退回，正在按审查意见修订")
-    await redis_manager.publish_message(
-        safe_task_id,
-        SystemMessage(content="建模方案已退回，正在按审查意见修订", type="warning"),
-    )
-    background_tasks.add_task(run_revise_modeling_async, safe_task_id, normalized_comment)
+    reserved_cancel_event = _reserve_active_task(safe_task_id)
+    if reserved_cancel_event is None:
+        raise HTTPException(status_code=409, detail="任务仍在运行中")
+    state_snapshot: dict[str, bytes | None] | None = None
+    scheduled_task: asyncio.Task | None = None
+    try:
+        state_snapshot = _snapshot_files(
+            (
+                os.path.join(work_dir, "checkpoint.json"),
+                os.path.join(work_dir, "modeling_decision.json"),
+                os.path.join(work_dir, "task_status.json"),
+                os.path.join(work_dir, "internal_guidance_audit.jsonl"),
+            )
+        )
+        # The notification is the only external prelude.  Do it before
+        # consuming the one-shot revision budget; a broker outage therefore
+        # leaves the checkpoint/decision in waiting_review for a retry.
+        await redis_manager.publish_message(
+            safe_task_id,
+            SystemMessage(content="建模方案已退回，正在按审查意见修订", type="warning"),
+        )
+
+        try:
+            checkpoint_manager.record_modeling_revision_request()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        _append_guidance_audit(
+            work_dir,
+            task_id=safe_task_id,
+            target="modeler",
+            purpose="modeling",
+            source="codex",
+            content=normalized_comment,
+        )
+        _mark_modeling_decision_revision_requested(work_dir, normalized_comment)
+        _write_task_status_checked(
+            work_dir,
+            safe_task_id,
+            "revising",
+            "建模方案已退回，正在按审查意见修订",
+        )
+        scheduled_task = _schedule_reserved_runner(
+            safe_task_id,
+            reserved_cancel_event,
+            run_revise_modeling_async,
+            safe_task_id,
+            normalized_comment,
+        )
+        # Queue the advisory only after all durable mutations and runner
+        # registration succeeded.  The runner cannot start until this handler
+        # yields, so it still sees the guidance while a failed queue operation
+        # can cancel the just-created task and roll back the transaction.
+        if not user_input_queue.push(safe_task_id, normalized_comment, "modeler"):
+            raise HTTPException(status_code=429, detail="建模修订引导队列已满")
+    except BaseException:
+        try:
+            await _rollback_dispatch(scheduled_task, state_snapshot)
+        finally:
+            _release_active_task(safe_task_id, reserved_cancel_event)
+        raise
     return ResumeTaskResponse(task_id=safe_task_id, status="revising")
 
 
@@ -1159,6 +1503,7 @@ _PRISTINE_FRAMEWORK_MANAGEMENT_FILES: frozenset[str] = frozenset({
     "internal_guidance_audit.jsonl",
     "guidance.json",
     "questions.txt",
+    USAGE_REPORT_FILENAME,
 })
 
 
@@ -1434,8 +1779,9 @@ async def review_execution_quality(
         work_dir = get_work_dir(safe_task_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="任务不存在") from None
-    if safe_task_id in _active_tasks:
-        raise HTTPException(status_code=409, detail="任务仍在运行中")
+    guard_reason = _check_dispatch_guard(work_dir, safe_task_id)
+    if guard_reason is not None:
+        raise HTTPException(status_code=409, detail=guard_reason)
     prior_state = (read_task_status(work_dir) or {}).get("status")
     if prior_state != "waiting_quality_review":
         raise HTTPException(status_code=409, detail="任务不在执行质量复核状态")
@@ -1448,11 +1794,9 @@ async def review_execution_quality(
     if not comment:
         raise HTTPException(status_code=422, detail="复核理由或返修意见不能为空")
 
+    requested: list[str] = []
+    guidance = ""
     if request.action == "approve":
-        try:
-            manager.approve_quality_review(request.review_id.strip(), comment)
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
         status_message = "执行结果质量复核已放行，继续论文写作"
     else:
         allowed_subtasks = {
@@ -1463,34 +1807,70 @@ async def review_execution_quality(
         requested = sorted(set(request.failed_subtasks))
         if not requested or any(key not in allowed_subtasks for key in requested):
             raise HTTPException(status_code=422, detail="返修子题必须来自当前任务正式问题")
-        try:
-            manager.request_quality_repair(
-                request.review_id.strip(), requested, comment
-            )
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
         guidance = (
             "【执行质量复核定向返修】只重新求解以下子题："
             + "、".join(requested)
             + "。必须实际执行、覆盖对应结果文件并重新记录证据。\n审查意见："
             + comment
         )
-        _append_guidance_audit(
-            work_dir,
-            task_id=safe_task_id,
-            target="coder",
-            purpose="execution",
-            source="codex",
-            content=guidance,
-        )
         status_message = "执行质量复核已退回指定子题，开始定向返修"
 
-    write_task_status(safe_task_id, "resuming", status_message)
-    await redis_manager.set(f"task_id:{safe_task_id}", safe_task_id)
-    await redis_manager.publish_message(
-        safe_task_id, SystemMessage(content=status_message, type="warning")
-    )
-    background_tasks.add_task(run_resume_task_async, safe_task_id, comment)
+    reserved_cancel_event = _reserve_active_task(safe_task_id)
+    if reserved_cancel_event is None:
+        raise HTTPException(status_code=409, detail="任务仍在运行中")
+    state_snapshot: dict[str, bytes | None] | None = None
+    scheduled_task: asyncio.Task | None = None
+    try:
+        state_snapshot = _snapshot_files(
+            (
+                os.path.join(work_dir, "checkpoint.json"),
+                os.path.join(work_dir, "task_status.json"),
+                os.path.join(work_dir, "internal_guidance_audit.jsonl"),
+            )
+        )
+        # Do not consume the quality-review approval/repair budget until the
+        # external broker prelude succeeds.  This keeps a failed dispatch in
+        # waiting_quality_review and allows the exact review entry to retry.
+        await redis_manager.set(f"task_id:{safe_task_id}", safe_task_id)
+        await redis_manager.publish_message(
+            safe_task_id, SystemMessage(content=status_message, type="warning")
+        )
+        try:
+            if request.action == "approve":
+                manager.approve_quality_review(request.review_id.strip(), comment)
+            else:
+                manager.request_quality_repair(
+                    request.review_id.strip(), requested, comment
+                )
+                _append_guidance_audit(
+                    work_dir,
+                    task_id=safe_task_id,
+                    target="coder",
+                    purpose="execution",
+                    source="codex",
+                    content=guidance,
+                )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        _write_task_status_checked(
+            work_dir,
+            safe_task_id,
+            "resuming",
+            status_message,
+        )
+        scheduled_task = _schedule_reserved_runner(
+            safe_task_id,
+            reserved_cancel_event,
+            run_resume_task_async,
+            safe_task_id,
+            comment,
+        )
+    except BaseException:
+        try:
+            await _rollback_dispatch(scheduled_task, state_snapshot)
+        finally:
+            _release_active_task(safe_task_id, reserved_cancel_event)
+        raise
     return ResumeTaskResponse(task_id=safe_task_id, status="resuming")
 
 
@@ -1507,8 +1887,9 @@ async def resume_task(
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="任务不存在")
 
-    if safe_task_id in _active_tasks:
-        raise HTTPException(status_code=409, detail="任务仍在运行中")
+    guard_reason = _check_dispatch_guard(work_dir, safe_task_id)
+    if guard_reason is not None:
+        raise HTTPException(status_code=409, detail=guard_reason)
 
     prior_status = read_task_status(work_dir)
     prior_state = (prior_status or {}).get("status")
@@ -1535,6 +1916,7 @@ async def resume_task(
     if prior_state == "waiting_quality_review":
         raise HTTPException(status_code=409, detail="任务等待执行质量复核，请使用 execution-review")
 
+    manual_recovery_requested = False
     if (
         checkpoint is not None
         and not export_only_paper_repair
@@ -1548,13 +1930,7 @@ async def resume_task(
                     "或确认低开销算法，再在请求体中声明 recovery_mode。"
                 ),
             )
-        try:
-            checkpoint_manager.authorize_manual_execution_recovery(
-                request.recovery_mode, request.note
-            )
-            checkpoint = checkpoint_manager.load()
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        manual_recovery_requested = True
 
     recovery_context = _build_recovery_context(prior_status, checkpoint, request)
     snapshot = None if checkpoint is not None else load_task_request_snapshot(work_dir)
@@ -1566,96 +1942,166 @@ async def resume_task(
     if snapshot is not None and snapshot["task_id"] != safe_task_id:
         raise HTTPException(status_code=409, detail="任务请求快照与任务 ID 不一致")
 
-    # 存储任务ID，续期供 ws 鉴权使用
-    await redis_manager.set(f"task_id:{safe_task_id}", safe_task_id)
-
-    logger.info(f"Adding resume background task for task_id: {safe_task_id}")
-    if checkpoint is not None:
-        write_task_status(safe_task_id, "resuming", "从检查点受控续传中")
-        background_tasks.add_task(run_resume_task_async, safe_task_id, recovery_context)
-    else:
-        write_task_status(safe_task_id, "resuming", "早期失败后从任务请求快照重新开始")
-        background_tasks.add_task(
-            run_modeling_task_async,
-            safe_task_id,
-            snapshot["ques_all"],
-            CompTemplate(snapshot["comp_template"]),
-            FormatOutPut(snapshot["format_output"]),
-            ExportProfile(snapshot["export_profile"]),
-            recovery_context=recovery_context,
-            require_model_review=bool(snapshot.get("require_model_review", False)),
+    reserved_cancel_event = _reserve_active_task(safe_task_id)
+    if reserved_cancel_event is None:
+        raise HTTPException(status_code=409, detail="任务仍在运行中")
+    state_snapshot: dict[str, bytes | None] | None = None
+    scheduled_task: asyncio.Task | None = None
+    try:
+        state_snapshot = _snapshot_files(
+            (
+                os.path.join(work_dir, "checkpoint.json"),
+                os.path.join(work_dir, "task_status.json"),
+            )
         )
+        # 存储任务ID，续期供 ws 鉴权使用
+        await redis_manager.set(f"task_id:{safe_task_id}", safe_task_id)
+
+        logger.info(f"Scheduling resume runner for task_id: {safe_task_id}")
+        if manual_recovery_requested:
+            try:
+                checkpoint_manager.authorize_manual_execution_recovery(
+                    request.recovery_mode, request.note
+                )
+                checkpoint = checkpoint_manager.load()
+            except RuntimeError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            recovery_context = _build_recovery_context(
+                prior_status, checkpoint, request
+            )
+        if checkpoint is not None:
+            _write_task_status_checked(
+                work_dir,
+                safe_task_id,
+                "resuming",
+                "从检查点受控续传中",
+            )
+            scheduled_task = _schedule_reserved_runner(
+                safe_task_id,
+                reserved_cancel_event,
+                run_resume_task_async,
+                safe_task_id,
+                recovery_context,
+            )
+        else:
+            _write_task_status_checked(
+                work_dir,
+                safe_task_id,
+                "resuming",
+                "早期失败后从任务请求快照重新开始",
+            )
+            scheduled_task = _schedule_reserved_runner(
+                safe_task_id,
+                reserved_cancel_event,
+                run_modeling_task_async,
+                safe_task_id,
+                snapshot["ques_all"],
+                CompTemplate(snapshot["comp_template"]),
+                FormatOutPut(snapshot["format_output"]),
+                ExportProfile(snapshot["export_profile"]),
+                recovery_context=recovery_context,
+                require_model_review=bool(snapshot.get("require_model_review", False)),
+            )
+    except BaseException:
+        try:
+            await _rollback_dispatch(scheduled_task, state_snapshot)
+        finally:
+            _release_active_task(safe_task_id, reserved_cancel_event)
+        raise
     return ResumeTaskResponse(task_id=safe_task_id, status="resuming")
 
 
-async def run_revise_modeling_async(task_id: str, review_comment: str) -> None:
+async def run_revise_modeling_async(
+    task_id: str,
+    review_comment: str,
+    cancel_event: asyncio.Event | None = None,
+) -> None:
     """Run the bounded ModelPlan revision and return to the review gate."""
-    logger.info(f"revise modeling plan for task_id: {task_id}")
-    cancel_event = asyncio.Event()
-    workflow = MathModelWorkFlow()
-    workflow.cancel_event = cancel_event
-    task = asyncio.create_task(workflow.revise_modeling(task_id, review_comment))
-    _active_tasks[task_id] = (task, cancel_event)
+    if cancel_event is None:
+        cancel_event = _reserve_active_task(task_id)
+        if cancel_event is None:
+            raise RuntimeError("任务已在运行中")
 
+    task: asyncio.Task | None = None
     try:
+        _claim_active_task(task_id, cancel_event)
+        logger.info(f"revise modeling plan for task_id: {task_id}")
+        workflow = MathModelWorkFlow()
+        workflow.cancel_event = cancel_event
+        task = asyncio.create_task(workflow.revise_modeling(task_id, review_comment))
+        _bind_workflow_task(task_id, cancel_event, task)
         result = await asyncio.wait_for(task, timeout=3600)
         if result != "waiting_review":
             raise RuntimeError(f"建模修订返回了意外状态: {result}")
         write_task_status(task_id, "waiting_review", "修订后的建模方案等待人工确认")
-        await redis_manager.publish_message(
+        await _safe_publish_message(
             task_id,
             SystemMessage(content="修订后的建模方案等待人工确认", type="warning"),
         )
     except asyncio.CancelledError:
         logger.info(f"建模方案修订 {task_id} 被取消")
-        write_task_status(task_id, "cancelled", "建模方案修订已停止")
+        _write_cancelled_status_if_active(task_id, "建模方案修订已停止")
+        await _safe_publish_message(
+            task_id,
+            SystemMessage(content="建模方案修订已停止", type="warning"),
+        )
     except Exception as exc:
         logger.error(f"建模方案修订 {task_id} 失败: {type(exc).__name__}")
-        _mark_modeling_decision_revision_failed(get_work_dir(task_id), str(exc))
-        await redis_manager.publish_message(
+        try:
+            _mark_modeling_decision_revision_failed(get_work_dir(task_id), str(exc))
+        except Exception:
+            logger.exception("建模修订失败后更新审查文件异常")
+        write_task_status(task_id, "failed", f"建模方案修订失败: {exc}")
+        await _safe_publish_message(
             task_id,
             SystemMessage(content=f"建模方案修订失败: {exc}", type="error"),
         )
-        write_task_status(task_id, "failed", f"建模方案修订失败: {exc}")
     finally:
-        _active_tasks.pop(task_id, None)
+        _release_active_task(task_id, cancel_event)
         user_input_queue.clear(task_id)
 
 
-async def run_resume_task_async(task_id: str, recovery_context: str = ""):
+async def run_resume_task_async(
+    task_id: str,
+    recovery_context: str = "",
+    cancel_event: asyncio.Event | None = None,
+):
     """异步执行任务续传。
 
     Args:
         task_id: 待续传的任务 ID。
     """
-    logger.info(f"resume modeling task for task_id: {task_id}")
-    write_task_status(task_id, "resuming", "任务续传中")
-
-    # 创建取消信号
-    cancel_event = asyncio.Event()
-
-    await redis_manager.publish_message(
-        task_id,
-        SystemMessage(content="任务续传中..."),
-    )
-
-    # 给一个短暂的延迟，确保 WebSocket 有机会连接
-    await asyncio.sleep(1)
-
-    workflow = MathModelWorkFlow()
-    workflow.cancel_event = cancel_event
-
-    task = asyncio.create_task(
-        workflow.resume(task_id, recovery_context=recovery_context)
-    )
-    _active_tasks[task_id] = (task, cancel_event)
+    if cancel_event is None:
+        cancel_event = _reserve_active_task(task_id)
+        if cancel_event is None:
+            raise RuntimeError("任务已在运行中")
 
     workflow_completed = False
+    task: asyncio.Task | None = None
     try:
+        _claim_active_task(task_id, cancel_event)
+        logger.info(f"resume modeling task for task_id: {task_id}")
+        write_task_status(task_id, "resuming", "任务续传中")
+
+        await redis_manager.publish_message(
+            task_id,
+            SystemMessage(content="任务续传中..."),
+        )
+
+        # 给一个短暂的延迟，确保 WebSocket 有机会连接
+        await asyncio.sleep(1)
+
+        workflow = MathModelWorkFlow()
+        workflow.cancel_event = cancel_event
+        task = asyncio.create_task(
+            workflow.resume(task_id, recovery_context=recovery_context)
+        )
+        _bind_workflow_task(task_id, cancel_event, task)
+
         workflow_result = await asyncio.wait_for(task, timeout=3600 * 5)
         if workflow_result == "waiting_review":
             write_task_status(task_id, "waiting_review", "任务等待人工确认建模方案")
-            await redis_manager.publish_message(
+            await _safe_publish_message(
                 task_id,
                 SystemMessage(content="任务等待人工确认建模方案", type="warning"),
             )
@@ -1675,7 +2121,7 @@ async def run_resume_task_async(task_id: str, recovery_context: str = ""):
             else DEFAULT_MODELING_EXPORT_PROFILE
         )
         write_task_status(task_id, "finalizing", "续传完成，正在生成并验收最终产物")
-        await redis_manager.publish_message(
+        await _safe_publish_message(
             task_id,
             SystemMessage(content="续传完成，正在生成并验收最终产物"),
         )
@@ -1684,19 +2130,19 @@ async def run_resume_task_async(task_id: str, recovery_context: str = ""):
             return
     except asyncio.CancelledError:
         logger.info(f"任务 {task_id} 被取消")
-        await redis_manager.publish_message(
+        _write_cancelled_status_if_active(task_id, "任务已停止")
+        await _safe_publish_message(
             task_id,
             SystemMessage(content="任务已停止", type="warning"),
         )
-        write_task_status(task_id, "cancelled", "任务已停止")
     except Exception as e:
         phase = "最终产物收尾失败" if workflow_completed else "任务续传失败"
         logger.error(f"任务 {task_id} {phase}: {type(e).__name__}")
-        await redis_manager.publish_message(
+        write_task_status(task_id, "failed", f"{phase}: {e}")
+        await _safe_publish_message(
             task_id,
             SystemMessage(content=f"{phase}: {str(e)}", type="error"),
         )
-        write_task_status(task_id, "failed", f"{phase}: {e}")
     finally:
-        _active_tasks.pop(task_id, None)
+        _release_active_task(task_id, cancel_event)
         user_input_queue.clear(task_id)

@@ -86,9 +86,12 @@ export interface TaskInfo {
 		| "completed"
 		| "pending"
 		| "running"
+		| "revising"
 		| "interrupted"
 		| "waiting_review"
+		| "waiting_quality_review"
 		| "resuming"
+		| "finalizing"
 		| "failed"
 		| "cancelled"
 		| "unknown";

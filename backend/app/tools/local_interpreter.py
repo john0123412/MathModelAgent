@@ -3,7 +3,9 @@
 from app.tools.base_interpreter import BaseCodeInterpreter
 from app.tools.matplotlib_setup import build_matplotlib_init_code
 from app.tools.notebook_serializer import NotebookSerializer
+import asyncio
 import ctypes
+from concurrent.futures import ThreadPoolExecutor
 import jupyter_client
 from app.utils.log_util import logger
 import os
@@ -110,6 +112,15 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         self._kernel_connection_file: str | None = None
         self.interrupt_signal = False
         self.execution_timeout = max(0, int(execution_timeout))
+        # The Jupyter IOPub receive loop is synchronous.  Keep one executor
+        # per interpreter so it never blocks the event loop and can be shut
+        # down together with this interpreter's kernel.
+        self._code_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix=f"mma-code-{task_id[:12]}",
+        )
+        self._executor_shutdown = False
+        self._active_executor_future: asyncio.Future | None = None
 
     def _strip_sensitive_parent_environment(self) -> None:
         """Remove credentials from the backend process before starting a local kernel.
@@ -306,6 +317,75 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         )
         self.execute_code_(init_code)
 
+    def _request_kernel_interrupt(self) -> None:
+        """Interrupt the current kernel from the event-loop side safely."""
+        self.interrupt_signal = True
+        kernel_manager = self.km
+        if kernel_manager is None:
+            return
+        try:
+            kernel_manager.interrupt_kernel()
+        except Exception as exc:
+            logger.warning(
+                "请求中断本地代码失败: error_type={}", type(exc).__name__
+            )
+
+    async def _run_code_in_executor(self, code: str) -> list[tuple[str, str]]:
+        """Run one synchronous Jupyter exchange off-loop with safe cancellation.
+
+        ``Future.cancel()`` cannot stop a Python worker thread.  On cancellation
+        or timeout we therefore interrupt the kernel first and await the worker
+        future to completion before returning, so cleanup/restart cannot race a
+        still-running IOPub read loop.
+        """
+        if self._executor_shutdown:
+            raise RuntimeError("本地代码执行线程池已关闭")
+        loop = asyncio.get_running_loop()
+        worker_future = loop.run_in_executor(
+            self._code_executor, self.execute_code_, code
+        )
+        self._active_executor_future = worker_future
+
+        async def wait_for_worker():
+            return await asyncio.shield(worker_future)
+
+        try:
+            if self.execution_timeout > 0:
+                try:
+                    return await asyncio.wait_for(
+                        wait_for_worker(), timeout=self.execution_timeout
+                    )
+                except asyncio.TimeoutError:
+                    self._request_kernel_interrupt()
+                    try:
+                        await wait_for_worker()
+                    except Exception:
+                        logger.warning("超时后等待本地执行线程结束失败")
+                    return [
+                        (
+                            "error",
+                            f"本地代码执行超过 {self.execution_timeout} 秒，已中断",
+                        )
+                    ]
+            return await wait_for_worker()
+        except asyncio.CancelledError:
+            self._request_kernel_interrupt()
+            try:
+                await wait_for_worker()
+            except Exception:
+                logger.warning("取消后等待本地执行线程结束失败")
+            raise
+        finally:
+            # ``_request_kernel_interrupt`` sets a per-execution flag so the
+            # synchronous IOPub loop can notice an interrupt delivered through
+            # its exception path.  An idle status can finish the loop without
+            # visiting that branch; clear the flag only after the worker is
+            # known to be drained, never while its thread is still active.
+            if worker_future.done():
+                self.interrupt_signal = False
+            if self._active_executor_future is worker_future:
+                self._active_executor_future = None
+
     async def execute_code(self, code: str) -> tuple[str, bool, str]:
         logger.info(f"执行代码: chars={len(code)}")
         #  添加代码到notebook
@@ -322,7 +402,7 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         )
         # 执行 Python 代码
         logger.info("开始在本地执行代码...")
-        execution = self.execute_code_(code)
+        execution = await self._run_code_in_executor(code)
         logger.info("代码执行完成，开始处理结果...")
 
         await redis_manager.publish_message(
@@ -472,7 +552,7 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
     async def replay_code(self, code: str) -> tuple[str, bool, str]:
         """重放历史代码，只恢复内核状态，不修改 notebook 或推送前端消息。"""
         logger.info(f"重放代码: chars={len(code)}")
-        execution = self.execute_code_(code)
+        execution = await self._run_code_in_executor(code)
         text_to_gpt: list[str] = []
         error_occurred = False
         error_message = ""
@@ -685,7 +765,26 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         logger.info(f"新创建的图片列表: {new_images}")
         return list(new_images)  # 最后转换为list返回
 
+    async def _shutdown_code_executor(self) -> None:
+        """Interrupt/drain active code, then close this interpreter's executor."""
+        if self._executor_shutdown:
+            return
+        active_future = self._active_executor_future
+        if active_future is not None and not active_future.done():
+            self._request_kernel_interrupt()
+            try:
+                await asyncio.shield(active_future)
+            except Exception:
+                logger.warning("清理时等待本地执行线程结束失败")
+        # The worker is drained above, so wait=True cannot block the event loop
+        # on uninterruptible model code and guarantees no cleanup race.
+        self._code_executor.shutdown(wait=True, cancel_futures=True)
+        self._executor_shutdown = True
+
     async def cleanup(self):
+        # Drain an active synchronous exchange before closing the kernel it is
+        # talking to; this ordering avoids a worker/connection cleanup race.
+        await self._shutdown_code_executor()
         # 关闭内核
         if self.kc is None or self.km is None:
             logger.warning("本地 Jupyter 内核未初始化，跳过清理")

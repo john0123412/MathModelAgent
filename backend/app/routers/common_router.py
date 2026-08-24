@@ -298,6 +298,8 @@ async def list_tasks():
                             "cancelled",
                             "running",
                             "resuming",
+                            "revising",
+                            "waiting_quality_review",
                             "waiting_review",
                             "finalizing",
                         }

@@ -1437,3 +1437,5 @@ uv run python scripts/smoke_pdf_export.py
   3. 修复 `paper_postprocessor.py` import 顺序（prompts 组置于 tools 组之前），Ruff isort 卫生合规。
   4. 全量 836 tests OK（skipped=2 环境跳过），Ruff clean。
   5. 已检查说明文件同步需求：本轮仅测试加固与 import 排序，不改变任何运行时行为，其他说明文件无需更新。
+
+- [2026-08-24] **发布前 hardening 续审修复**：调度端点将快照获取纳入 reservation 的异常边界；回滚先取消并 drain 已创建 runner，再恢复控制文件，且 restore/snapshot 异常不会遮蔽原始错误或跳过 token 释放；终态、waiting 状态先落盘再 best-effort 通知，通知仅捕获普通 `Exception`。聚焦验证：`test_pre_release_hardening` 37、`test_modeling_gate` 28、`test_security_hardening` 20、`test_task_recovery` 11，共 96 tests OK；受影响的 API/解释器兼容套件 30 tests OK；全量后端 `python -m unittest discover app/tests` 共 Ran 874 tests OK（skipped=2）；Ruff 与 `git diff --check` clean。因真实建模任务正在运行且项目规则禁止本机 Node，未运行前端本机 Node/build 或 Docker/E2E。已检查说明文件同步需求：无需更新其他文档，不改变启动、导出、模板或人工复核语义。

@@ -103,6 +103,7 @@ async function refreshTaskStatus() {
 		}
 		const task = res.data.find((t) => t.task_id === props.task_id);
 		applyTaskStatus(task);
+		taskStore.syncTaskStatus(props.task_id, task?.status ?? null);
 	} catch (error) {
 		if (!isTaskPageActive || requestId !== taskStatusRequestId) {
 			return;

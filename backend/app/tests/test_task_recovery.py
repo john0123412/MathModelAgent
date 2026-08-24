@@ -106,6 +106,17 @@ class TestManualExecutionRecovery(unittest.TestCase):
 
 
 class TestResumeRoute(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        modeling_router._active_tasks.clear()
+        self._schedule_patcher = mock.patch.object(
+            modeling_router, "_schedule_reserved_runner"
+        )
+        self.schedule_runner = self._schedule_patcher.start()
+
+    async def asyncTearDown(self):
+        self._schedule_patcher.stop()
+        modeling_router._active_tasks.clear()
+
     @staticmethod
     def _write_checkpoint(work_dir: str, workflow_state: str = "solving") -> None:
         CheckpointManager(work_dir).save(
@@ -135,8 +146,11 @@ class TestResumeRoute(unittest.IsolatedAsyncioTestCase):
                 response = await modeling_router.resume_task("task-1", background)
 
         self.assertEqual(response.status, "resuming")
-        self.assertEqual(len(background.tasks), 1)
-        self.assertIs(background.tasks[0].func, modeling_router.run_resume_task_async)
+        self.schedule_runner.assert_called_once()
+        self.assertIs(
+            self.schedule_runner.call_args.args[2],
+            modeling_router.run_resume_task_async,
+        )
 
     async def test_early_failure_restarts_from_durable_request_snapshot(self):
         snapshot = {
@@ -157,11 +171,11 @@ class TestResumeRoute(unittest.IsolatedAsyncioTestCase):
                 response = await modeling_router.resume_task("task-1", background)
 
         self.assertEqual(response.status, "resuming")
-        self.assertEqual(len(background.tasks), 1)
-        task = background.tasks[0]
-        self.assertIs(task.func, modeling_router.run_modeling_task_async)
-        self.assertEqual(task.args[0], "task-1")
-        self.assertEqual(task.args[1], snapshot["ques_all"])
+        self.schedule_runner.assert_called_once()
+        call = self.schedule_runner.call_args
+        self.assertIs(call.args[2], modeling_router.run_modeling_task_async)
+        self.assertEqual(call.args[3], "task-1")
+        self.assertEqual(call.args[4], snapshot["ques_all"])
 
     async def test_completed_task_cannot_be_resumed(self):
         with tempfile.TemporaryDirectory() as work_dir:
@@ -194,8 +208,11 @@ class TestResumeRoute(unittest.IsolatedAsyncioTestCase):
                 response = await modeling_router.resume_task("task-1", background)
 
         self.assertEqual(response.status, "resuming")
-        self.assertEqual(len(background.tasks), 1)
-        self.assertIs(background.tasks[0].func, modeling_router.run_resume_task_async)
+        self.schedule_runner.assert_called_once()
+        self.assertIs(
+            self.schedule_runner.call_args.args[2],
+            modeling_router.run_resume_task_async,
+        )
         status_mock.assert_called_once_with("task-1", "resuming", "从检查点受控续传中")
 
     async def test_completed_task_with_presentation_reflow_checkpoint_can_resume(self):
@@ -211,8 +228,11 @@ class TestResumeRoute(unittest.IsolatedAsyncioTestCase):
                 response = await modeling_router.resume_task("task-1", background)
 
         self.assertEqual(response.status, "resuming")
-        self.assertEqual(len(background.tasks), 1)
-        self.assertIs(background.tasks[0].func, modeling_router.run_resume_task_async)
+        self.schedule_runner.assert_called_once()
+        self.assertIs(
+            self.schedule_runner.call_args.args[2],
+            modeling_router.run_resume_task_async,
+        )
         status_mock.assert_called_once_with("task-1", "resuming", "从检查点受控续传中")
 
     async def test_remodelled_resume_waiting_review_does_not_finalize(self):

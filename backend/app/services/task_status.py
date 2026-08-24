@@ -13,6 +13,7 @@ TaskStatus = Literal[
     "running",
     "waiting_review",
     "waiting_quality_review",
+    "revising",
     "resuming",
     "finalizing",
     "interrupted",
@@ -22,7 +23,7 @@ TaskStatus = Literal[
 ]
 
 STATUS_FILENAME = "task_status.json"
-STALE_ACTIVE_STATUSES = {"running", "resuming", "finalizing"}
+STALE_ACTIVE_STATUSES = {"running", "resuming", "revising", "finalizing"}
 
 
 def _write_task_status_to_dir(

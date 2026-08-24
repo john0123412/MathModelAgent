@@ -1,5 +1,9 @@
-import { getTaskMessages } from "@/apis/commonApi";
-import { cancelTask as cancelTaskAPI } from "@/apis/commonApi";
+import {
+	getTaskMessages,
+	listTasks,
+	cancelTask as cancelTaskAPI,
+	type TaskInfo,
+} from "@/apis/commonApi";
 import { AgentType } from "@/utils/enum";
 import { getSafeErrorMessage } from "@/utils/safeError";
 import type {
@@ -45,6 +49,16 @@ export const useTaskStore = defineStore("task", () => {
 
 	/** 任务是否正在运行 */
 	const isRunning = ref(false);
+
+	/** Monotonic guard for status requests crossing task switches. */
+	let statusRequestGeneration = 0;
+	const ACTIVE_BACKEND_STATUSES: ReadonlySet<TaskInfo["status"]> = new Set([
+		"pending",
+		"running",
+		"revising",
+		"resuming",
+		"finalizing",
+	]);
 
 	// ---- Helpers ----
 
@@ -144,6 +158,33 @@ export const useTaskStore = defineStore("task", () => {
 
 	// ---- Actions ----
 
+	/** Apply a backend-persisted status only if it still belongs to this task. */
+	function syncTaskStatus(taskId: string, status: TaskInfo["status"] | null) {
+		if (currentTaskId.value !== taskId) {
+			return;
+		}
+		isRunning.value = status !== null && ACTIVE_BACKEND_STATUSES.has(status);
+	}
+
+	/** Fetch the authoritative status for one task. */
+	async function refreshTaskStatus(taskId: string): Promise<TaskInfo["status"] | null> {
+		const generation = ++statusRequestGeneration;
+		try {
+			const response = await listTasks();
+			const task = (response.data ?? []).find((item) => item.task_id === taskId);
+			const status = task?.status ?? null;
+			if (generation === statusRequestGeneration) {
+				syncTaskStatus(taskId, status);
+			}
+			return status;
+		} catch (error) {
+			if (generation === statusRequestGeneration) {
+				console.error("获取任务持久化状态失败:", getSafeErrorMessage(error));
+			}
+			return null;
+		}
+	}
+
 	/** 连接 WebSocket 接收实时消息 */
 	function connectWebSocket(taskId: string) {
 		if (ws) {
@@ -152,7 +193,9 @@ export const useTaskStore = defineStore("task", () => {
 		}
 		setCurrentTask(taskId);
 		ensureTaskBucket(taskId);
-		isRunning.value = true;
+		// A WebSocket connection is transport state, not workflow state.  Wait
+		// for the persisted backend status instead of guessing from transport.
+		void refreshTaskStatus(taskId);
 
 		const baseUrl = import.meta.env.VITE_WS_URL;
 		const wsUrl = `${baseUrl}/task/${taskId}`;
@@ -165,17 +208,6 @@ export const useTaskStore = defineStore("task", () => {
 					return;
 				}
 				appendMessage(taskId, data);
-				// 检测任务完成/停止/失败消息
-				if (data.msg_type === "system") {
-					const msgType = Reflect.get(data, "type");
-					if (
-						msgType === "success" ||
-						msgType === "warning" ||
-						msgType === "error"
-					) {
-						isRunning.value = false;
-					}
-				}
 			},
 			(status) => {
 				wsStatus.value = status;
@@ -199,6 +231,7 @@ export const useTaskStore = defineStore("task", () => {
 
 	/** 关闭 WebSocket 连接 */
 	function closeWebSocket() {
+		statusRequestGeneration += 1;
 		ws?.close();
 		ws = null;
 	}
@@ -207,9 +240,9 @@ export const useTaskStore = defineStore("task", () => {
 	async function stopTask(taskId: string) {
 		try {
 			const res = await cancelTaskAPI(taskId);
-			if (res.data.success) {
-				isRunning.value = false;
-			}
+			// The cancel endpoint acknowledges a signal, not a persisted terminal
+			// state.  Refresh the backend status and let it remain authoritative.
+			if (res.data.success) void refreshTaskStatus(taskId);
 			return res.data;
 		} catch (error) {
 			console.error("取消任务失败:", getSafeErrorMessage(error));
@@ -361,6 +394,8 @@ export const useTaskStore = defineStore("task", () => {
 		loadTaskMessages,
 		connectWebSocket,
 		closeWebSocket,
+		refreshTaskStatus,
+		syncTaskStatus,
 		stopTask,
 		downloadMessages,
 		addUserMessage,

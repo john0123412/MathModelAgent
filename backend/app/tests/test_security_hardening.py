@@ -399,6 +399,17 @@ class TestUserInputInjectionFraming(unittest.IsolatedAsyncioTestCase):
 class TestGuidanceApi(unittest.IsolatedAsyncioTestCase):
     """Codex/operator guidance must be role-addressed and auditable."""
 
+    async def asyncSetUp(self):
+        modeling_router._active_tasks.clear()
+        self._schedule_patcher = mock.patch.object(
+            modeling_router, "_schedule_reserved_runner"
+        )
+        self.schedule_runner = self._schedule_patcher.start()
+
+    async def asyncTearDown(self):
+        self._schedule_patcher.stop()
+        modeling_router._active_tasks.clear()
+
     async def test_guidance_endpoint_queues_targeted_note_and_audits_metadata(self):
         task_id = "guidance-api-task"
         user_input_queue.clear(task_id)
@@ -467,7 +478,10 @@ class TestGuidanceApi(unittest.IsolatedAsyncioTestCase):
                 )
 
             self.assertEqual(response["task_id"], task_id)
-            self.assertTrue(background_tasks.tasks[0].kwargs["require_model_review"])
+            self.schedule_runner.assert_called_once()
+            self.assertTrue(
+                self.schedule_runner.call_args.kwargs["require_model_review"]
+            )
             self.assertEqual(
                 user_input_queue.pop_for(task_id, "modeler"),
                 ["先列出全部硬约束及量纲检查。"],

@@ -30,6 +30,7 @@ from app.schemas.enums import CompTemplate, ExportProfile, FormatOutPut
 from app.schemas.request import Problem
 from app.schemas.problem_contract import ProblemContract
 from app.core.llm.types import StandardResponse, Usage
+from app.routers import modeling_router
 
 
 class _InvalidModelerLLM:
@@ -417,6 +418,46 @@ class TestCodexTakeover(unittest.IsolatedAsyncioTestCase):
             with open(os.path.join(work_dir, "modeling_decision.json"), encoding="utf-8") as handle:
                 self.assertEqual(json.load(handle)["status"], "waiting_review")
 
+    async def test_framework_token_usage_file_does_not_block_takeover(self):
+        """框架自身写入的 token_usage.json 不得阻断干净 Modeler 失败任务的接管。"""
+        with tempfile.TemporaryDirectory() as work_dir:
+            self._save_checkpoint(work_dir)
+            (Path(work_dir) / "token_usage.json").write_text(
+                json.dumps({"total_tokens": 123, "entries": []}),
+                encoding="utf-8",
+            )
+            with (
+                patch("app.routers.modeling_router.get_work_dir", return_value=work_dir),
+                patch(
+                    "app.routers.modeling_router.read_task_status",
+                    return_value={"status": "failed"},
+                ),
+                patch("app.core.workflow.get_work_dir", return_value=work_dir),
+                patch("app.routers.modeling_router.write_task_status") as write_status,
+                patch("app.routers.modeling_router.redis_manager.set", new=AsyncMock()),
+                patch(
+                    "app.routers.modeling_router.redis_manager.publish_message",
+                    new=AsyncMock(),
+                ),
+            ):
+                result = await submit_codex_modeling(
+                    "unit-task",
+                    CodexModelingRequest(
+                        modeler_response=ModelerToCoder(model_plan=_valid_codex_plan())
+                    ),
+                )
+
+            self.assertEqual(result.status, "waiting_review")
+            write_status.assert_called_once_with(
+                "unit-task", "waiting_review", "Codex 建模方案已写入，等待人工确认"
+            )
+            saved = CheckpointManager(work_dir).load()
+            self.assertTrue(saved.modeler_response)
+            with open(
+                os.path.join(work_dir, "modeling_decision.json"), encoding="utf-8"
+            ) as handle:
+                self.assertEqual(json.load(handle)["status"], "waiting_review")
+
     async def test_non_failed_status_is_rejected(self):
         with tempfile.TemporaryDirectory() as work_dir:
             self._save_checkpoint(work_dir)
@@ -555,6 +596,17 @@ class TestCodexTakeover(unittest.IsolatedAsyncioTestCase):
 
 
 class TestHumanModelingGateResume(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        modeling_router._active_tasks.clear()
+        self._schedule_patcher = patch.object(
+            modeling_router, "_schedule_reserved_runner"
+        )
+        self.schedule_runner = self._schedule_patcher.start()
+
+    async def asyncTearDown(self):
+        self._schedule_patcher.stop()
+        modeling_router._active_tasks.clear()
+
     async def test_remodeled_resume_reenters_review_before_building_agents(self):
         with tempfile.TemporaryDirectory() as work_dir:
             manager = CheckpointManager(work_dir)

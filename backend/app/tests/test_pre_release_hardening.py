@@ -1059,6 +1059,13 @@ class TestFrontendRuntimeStatusContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         repo_root = Path(__file__).resolve().parents[3]
+        # 后端容器仅 bind-mount app/ 源码，无 frontend/ 目录；此时跳过
+        # 跨栈契约断言，由宿主机侧全量回归覆盖（见 docker-compose 卷定义）。
+        if not (repo_root / "frontend/src").is_dir():
+            raise unittest.SkipTest(
+                "frontend source tree not mounted (backend-only container); "
+                "contract covered by host-side full regression"
+            )
         cls.common_api = (repo_root / "frontend/src/apis/commonApi.ts").read_text(
             encoding="utf-8"
         )

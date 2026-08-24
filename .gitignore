@@ -47,3 +47,7 @@ tmp_*.py
 scratch/
 tmp/
 nul
+
+# figure-templates 本地运行缓存与产物（预览已沉淀到 assets/previews）
+skills/mathmodel-figure-templates/scripts/.mplconfig/
+skills/mathmodel-figure-templates/scripts/outputs/

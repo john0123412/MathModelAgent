@@ -1594,3 +1594,9 @@ uv run python scripts/smoke_pdf_export.py
   2. 新增根 `.gitattributes`：`* text=auto eol=lf` + `*.bat/*.ps1 eol=crlf` + 常见二进制标 binary（png/jpg/jpeg/gif/ico/pdf/xls(x)/doc(x)/icns/pak/exe/dll/node/ttf/otf/woff*/zip）。`git add --renormalize .` 实际仅归一 11 个文件：9 个 frontend/src/components/ui/dialog/*.vue（mixed→LF，shadcn 组件仅行尾归一无语义变化）、五一杯C题附件2 CSV 与一篇 docs md（CRLF→LF）。`git diff --cached --ignore-cr-at-eol --stat` 验证除新增 .gitattributes 外零内容变化；bat/ps1 索引本存 LF，`eol=crlf` 仅影响检出。
   3. 磁盘清理：删除主仓库根目录残留 `nul` 文件与 skills/ 下 2 个 `__pycache__` 目录（worktree 树无任何残留）；两者均为未追踪垃圾文件，无 commit 对象。根 .gitignore 第 31/49 行已含全局 `__pycache__/` 与 `nul` 规则（此前收尾批次加入），经 `git check-ignore -v` 验证覆盖 skills 子目录，1c 的".gitignore 补条目"已是完成态，无需修改。
   4. 意义：行尾规范化后，后续 cherry-pick 上游 #72/#102/#79 不再被 EOL 冲突淹没。已检查说明文件同步需求：不改变启动方式、导出行为、模板资源或人工复核口径，STARTUP.md 及各 docs/md 说明无需更新。
+
+- [2026-08-25] **改进方案执行第 2 批：文献核验工具链（commit 50aba02，分支 enhance/improvement-plan-execution）**：
+  1. 新增 `skills/5writing/scripts/paper_search.py`（参考官方桌面版 paper-search 适配）：search/verify/bib 三子命令，OpenAlex+Crossref 双源交叉验证，纯标准库免 key。相对参考实现三处适配：verify 先问 doi.org handle 注册处（DOI 存在性最终权威，覆盖 DataCite 不误判）；退出码分级 1=确认不存在疑似编造 / 2=网络不可判定；Windows 重定向 stdout 强制 UTF-8 防 cp936 编码错。MAILTO 复用 OPENALEX_EMAIL 约定。
+  2. `5writing/SKILL.md` 步骤 5 从口号改为强制工作流："每条 bib 条目必须由 verify/bib 从真实 DOI 生成"；失败降级=换检索词重查而非放弃核验；`_references/math_modeling_norms.md` 写作与验收两节同步加条目；`6verity/SKILL.md` Step 6 增加真实性抽查（≤5 条 verify --doi）+ 硬错误标准新增"编造引用且无人工来源记录"。
+  3. 验证（backend venv python 实测）：离线单测 13 tests OK + Ruff clean；真实 DOI 10.1287/opre.1030.0065 verify/bib exit 0 且元数据正确；编造 DOI 10.9999/fabricated.doi.2026.fake verify/bib 均 exit 1 并提示可能是编造的；2023 国赛A题（板凳龙）冒烟 search→verify→bib 端到端闭环通过。
+  4. 已检查说明文件同步需求：skills 层改动不涉及后端启动/导出链路，STARTUP.md 及导出文档无需更新。

@@ -1184,6 +1184,31 @@ def audit_model_plan_semantics(plan: object) -> list[str]:
                     issues.append(
                         f"{key} 存在明显不可行的严格开区间约束矛盾：{var_name} 在边界 {lower} 无可行解"
                     )
+
+        # 7. 多目标非支配候选集声明一致性：如实命名局部搜索与膝点，避免虚构全局 Pareto
+        pareto_keys = {"pareto", "knee"}
+        has_pareto_metric = any(
+            any(pk in str(_plan_field(metric, "key", "")).lower() for pk in pareto_keys)
+            for metric in metrics
+        )
+        if has_pareto_metric:
+            method_text = str(_plan_field(subtask, "method", ""))
+            method_lower = method_text.lower()
+            has_local = "局部搜索" in method_text and "非支配候选集" in method_text
+            has_knee_desc = "膝点" in method_text or "knee" in method_lower
+            has_epsilon = "epsilon" in method_lower or "ε" in method_text
+            # 同时包含两种对立范式属于语义冲突
+            if has_epsilon and has_local:
+                issues.append(
+                    f"{key} 方法同时包含ε-constraint与局部搜索，存在语义冲突，请统一为如实的'局部搜索产生的非支配候选集'表述并与代码一致"
+                )
+            # 含膝点指标却未说明选择规则
+            if any(
+                "knee" in str(_plan_field(metric, "key", "")).lower() for metric in metrics
+            ) and not has_knee_desc:
+                issues.append(
+                    f"{key} 含膝点相关指标但方法未声明'膝点'选择规则，请补充如实的多目标候选集生成与代表点选择说明"
+                )
     return issues
 
 

@@ -307,9 +307,51 @@ A_code.typ
 
 **正文写作应使用连贯的学术段落。避免在最终论文中出现工作流内部名称，如 `reports/`、`figures/` 或 `CLAUDE.md`。**
 
-### 步骤 5：参考文献
+### 步骤 5：参考文献（强制核验工作流）
 
-只使用真实存在的参考文献。文件名按引擎选择：Typst 用 `paper/references.typ`，LaTeX 用 `paper/references.tex`。
+**只使用真实存在且已核验的参考文献。** 这不是口号而是工具闭环：每条参考文献的
+作者、题名、期刊、年份、卷期页都必须来自 `scripts/paper_search.py` 的真实输出，
+禁止凭记忆手写任何字段。宁可少引，不可编造。
+
+本 skill 附带核验脚本（OpenAlex + Crossref 双引擎交叉验证，仅标准库，免 API key；
+`$SKILL_DIR` 为本 skill 所在目录）。三步工作流：
+
+1. **检索候选**（按每个模型/方法分别检索，组合方法名 + 领域名）：
+
+   ```bash
+   python "$SKILL_DIR/scripts/paper_search.py" search --query "entropy weight TOPSIS evaluation" --limit 8
+   ```
+
+   可选 `--year-from 2019 --year-to 2026` 限定年份，`--json` 输出结构化结果。
+   结果过少或不相关时，**换检索词重查**（更具体的术语、英文改写、拆分组合），
+   不要直接接受主题无关的结果，也不要因查不到而放弃后续核验。
+
+2. **逐条核验**（引用前必做）：核对作者、题名、年份、期刊：
+
+   ```bash
+   python "$SKILL_DIR/scripts/paper_search.py" verify --doi 10.1080/07408170701745378
+   ```
+
+   DOI 不存在时脚本以非零退出码结束并提示"可能是编造的"——该候选立即弃用，
+   回到第 1 步换检索词重查，而不是换一条没核验过的凑数。
+
+3. **生成条目并转写**（`--key` 指定正文引用键）：
+
+   ```bash
+   python "$SKILL_DIR/scripts/paper_search.py" bib --doi 10.1080/07408170701745378 --key ref01
+   ```
+
+   输出为权威 BibTeX 条目；将字段值逐项转写到当前模板要求的文件格式
+   （Typst 用 `paper/references.typ`，LaTeX 用 `paper/references.tex`），
+   **只改格式不改字段内容**。
+
+降级处理（任何情况下都不得跳过核验）：
+
+- 双引擎全部失败或网络不可用：如实告知用户"未能自动核验"，减少引用数量，
+  绝不用编造条目占位。
+- 无 DOI 的中文文献、教材、标准：只能在人工打开出版方页面核对后引用，字段
+  逐项来自该页面，保证 6verity 抽查时可追溯。
+- 中文主题优先用对应英文术语检索国际文献。
 
 **Typst 引擎**：
 
@@ -332,7 +374,7 @@ A_code.typ
 \end{thebibliography}
 ```
 
-正文引用用 `\cite{ref1}` 或 `\cite{ref1,ref2}`。
+正文引用用 `\cite{ref1}` 或 `\cite{ref1,ref2}`，引用键与 `bib --key` 生成时一致。
 
 ### 步骤 6：最后撰写摘要或总结
 

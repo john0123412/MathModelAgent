@@ -864,3 +864,5 @@
   2. 发现 LLM_REASONING_EFFORT 在 main 无消费点——管线（setting.py 字段/llm_factory 四角色注入/LLM 参数/openai_chat 条件透传含禁思考优先语义）同样是随 p1 脏区丢失的修复，已从 stash@{0} 精准恢复四文件并回归（test_llm_provider_timeout+architecture_upgrade 44 OK，Ruff 绿）。
   3. 探测：宿主机 venv 经应用 LLM 类端到端验证请求构造与 effort 透传正常（请求到达 OpenRouter 上游）；stealth/ox-alpha 共享池持续 429（两次有界重试均限流，按规程停止），glm-5.2:free 此前探测可用，紧急 LLM 需求可一行切回。
   4. Docker 状态：backend 容器重建/kill 连续三次在 daemon 层挂起（疑似优雅停机受 LLM_REQUEST_TIMEOUT_SECONDS=1800 影响），新 env 尚未生效；需人工重启 Docker Desktop 后 docker compose up -d backend。容器旧配置仅影响服务态，宿主机 venv 全功能可用。
+
+- [2026-08-25] **封版定稿（评审终轮两处文字修饰完成，145/22 页冻结）**：4.4.1 的"问题二 P2 代表膝点"统一为"问题二代表膝点 S1_cost_P2"；结论句重构为"并以可复算膝点规则选出代表方案 S1_cost_P2，多起点结果为其起点稳健性提供了佐证，且不虚称全局 Pareto 解"（顺带清除结论段 Markdown 粗体星号残留）。过程备注：首次刷新因评审方查看器占用 res.pdf 文件锁致 PDF 阶段中断（WinError 32），锁释放后重跑成功。终态：task-refresh 全绿 preflight/pdf_visual/submission_audit=PASS+TECHNICAL_PASS；res.pdf 145 页新文案全命中零残留，冻结膝点三数字与调度 SHA 不变；submission_body.pdf 重切 22 页（clip 止于[10]，零附录）。按评审结论正式冻结：不再改任何算法、数据、图或核心论证；剩余仅队伍人工上传项。

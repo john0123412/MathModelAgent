@@ -848,6 +848,16 @@ class MainPathPlanReviewTest(unittest.IsolatedAsyncioTestCase):
                 patch("app.core.workflow.LLMFactory") as llm_factory,
                 patch("app.core.workflow.CoordinatorAgent") as coordinator_agent,
                 patch("app.core.workflow.ModelerAgent") as modeler_agent,
+                # WHY 显式桩定四角色配置：execute() 入口的配置预检直接读取 settings，
+                # 本测试关注执行链路而非环境，避免对宿主机 .env.dev 的隐式依赖。
+                patch("app.core.workflow.settings.COORDINATOR_MODEL", "stub-model"),
+                patch("app.core.workflow.settings.COORDINATOR_API_KEY", "stub-key"),
+                patch("app.core.workflow.settings.MODELER_MODEL", "stub-model"),
+                patch("app.core.workflow.settings.MODELER_API_KEY", "stub-key"),
+                patch("app.core.workflow.settings.CODER_MODEL", "stub-model"),
+                patch("app.core.workflow.settings.CODER_API_KEY", "stub-key"),
+                patch("app.core.workflow.settings.WRITER_MODEL", "stub-model"),
+                patch("app.core.workflow.settings.WRITER_API_KEY", "stub-key"),
                 patch.object(
                     workflow, "_build_agents", AsyncMock()
                 ) as build_agents,

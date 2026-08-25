@@ -38,6 +38,10 @@ cd D:\workspace\MathModelAgent
 - Python 3.12 + uv
 - Node.js 24 LTS + pnpm（Docker 前端同样使用 Node 24 LTS）
 
+一键体检（可选）：`python skills/doctor/scripts/check_env.py` 按 required / recommended /
+optional 三级输出依赖就绪状态、版本与安装建议（含国内镜像方案），`--format json` 供脚本
+消费；该脚本只检查、从不安装，安装前仍需人工确认。
+
 > Agent 操作注意：Windows 本机前端 Node 工具链曾异常派生大量 `node.exe`，导致系统卡死。除非用户明确授权，agent 不应主动运行 `pnpm i`、`pnpm run build`、`vue-tsc`、`vite build`、`biome`、`npx biome` 或 `node_modules\.bin\*`。前端验证优先使用 Docker Compose 服务或由用户手动运行命令后回传结果。
 
 ---
@@ -69,6 +73,9 @@ docker compose config -q
 `*_BASE_URL`；只有显式 remote 模式需要 `E2B_API_KEY`。可选的 `OPENALEX_EMAIL`、
 `TAVILY_API_KEY` 等不影响基础建模链路；详见后文“常见问题”。
 
+> 配置缺失的失败时机：任一角色缺少模型 ID 或 API Key 时，后端在任务启动前即报错并
+> 一次性列出全部缺失项，不会进入 Agent 循环后才暴露；补齐 `backend/.env.dev` 后重试即可。
+
 ### 启动
 
 ```powershell
@@ -77,6 +84,10 @@ docker compose build --pull            # 首次启动、改了依赖/Dockerfile 
 docker compose up -d --wait            # 等待服务健康；正常启动时可直接执行这一行
 docker compose ps                      # 查看服务状态，应显示 healthy
 ```
+
+> 容器命名提示：容器名为 `mathmodelagent_john_{redis,backend,frontend}`（个人部署口径，
+> 定义于 `docker-compose.override.yml`）。自旧名称迁移后的首次 `docker compose up` 会重建
+> 对应容器，属预期行为；数据卷按服务定义挂载，不受容器改名影响。
 
 后端镜像通过官方 Debian HTTPS 源分批安装 CJK、Pandoc 和 TeX Live，避免 Docker Desktop
 在大包 HTTP 下载中断或一次性 apt 安装触发内存峰值；不要把这些层合回单条 apt 命令。默认镜像

@@ -858,3 +858,9 @@
   4. **P5 丢失修复再修+回归**：cross_modal code_self_containment FAIL 暴露 P5 的 internal/ 排除只存在于被 supersede 的 p1 脏区未进 main——重新在 execution_validation 冻结扫描与 paper_postprocessor._CODE_EXCLUDED_DIRS 两处排除 internal/，并在 test_execution_validation 增加 FrozenSourcesInternalExclusionTest 回归（50 tests OK）。
   5. 匿名门禁真阳性处理：结论节建议语句中"参赛队员"整词此前靠 PDF 换行侥幸通过严格匿名门禁，重排后触发；精简为"仍应按当年竞赛规则复核"（无数值改动）。
   6. 终态：task-refresh 全绿 preflight/pdf_visual/submission_audit=PASS+TECHNICAL_PASS；res.pdf 145 页（+2 页来自方法扩写），submission_body.pdf 重切 22 页（末页 clip 止于[10]文献行，零附录残留）。待办：仓库三个代码文件（execution_validation/paper_postprocessor/test）待授权 commit；Q4 ε 加密与 Q1 滚动验证两升级项按用户节奏另行决定。
+
+- [2026-08-25] **stealth/ox-alpha 标准配置切换 + reasoning_effort 管线自 p1 脏区恢复入 main**：
+  1. 用户指定四角色切换 stealth/ox-alpha（1M 上下文/128K 输出/强制思考四档取最大 high）。.env.dev 已更新：MODEL=stealth/ox-alpha×4、CONTEXT_WINDOW=1048576、MAX_TOKENS=131072、LLM_REASONING_EFFORT=high（该管线四档为 minimal/low/medium/high，high 即最大）。
+  2. 发现 LLM_REASONING_EFFORT 在 main 无消费点——管线（setting.py 字段/llm_factory 四角色注入/LLM 参数/openai_chat 条件透传含禁思考优先语义）同样是随 p1 脏区丢失的修复，已从 stash@{0} 精准恢复四文件并回归（test_llm_provider_timeout+architecture_upgrade 44 OK，Ruff 绿）。
+  3. 探测：宿主机 venv 经应用 LLM 类端到端验证请求构造与 effort 透传正常（请求到达 OpenRouter 上游）；stealth/ox-alpha 共享池持续 429（两次有界重试均限流，按规程停止），glm-5.2:free 此前探测可用，紧急 LLM 需求可一行切回。
+  4. Docker 状态：backend 容器重建/kill 连续三次在 daemon 层挂起（疑似优雅停机受 LLM_REQUEST_TIMEOUT_SECONDS=1800 影响），新 env 尚未生效；需人工重启 Docker Desktop 后 docker compose up -d backend。容器旧配置仅影响服务态，宿主机 venv 全功能可用。

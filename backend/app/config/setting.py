@@ -103,6 +103,10 @@ class Settings(BaseSettings):
     LLM_MAX_RETRIES: int = 3
     CODER_MAX_SUCCESSFUL_TOOL_CALLS_PER_SUBTASK: Optional[int] = 8
     LLM_REQUEST_TIMEOUT_SECONDS: float = 90.0
+    # reasoning_effort 透传（minimal/low/medium/high）；None=不传，走模型默认。
+    # 仅 openai-chat 形态且 thinking=True 时生效；thinking=False 的强制禁思考
+    # 调用（如 Modeler JSON 修复、Coder 首轮）优先级更高，不会携带该参数。
+    LLM_REASONING_EFFORT: Optional[str] = None
     # Operator-controlled explicit egress proxy for LLM API calls.  Unlike
     # HTTP_PROXY/HTTPS_PROXY, this does not let arbitrary process environment
     # variables alter outbound routing; the destination URL still passes the

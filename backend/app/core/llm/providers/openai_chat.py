@@ -58,6 +58,7 @@ class OpenAIChatProvider(BaseProvider):
         max_tokens: int | None = None,
         top_p: float | None = None,
         thinking: bool = True,
+        reasoning_effort: str | None = None,
         response_format: dict | None = None,
     ) -> StandardResponse:
         async with llm_http_client(settings.LLM_REQUEST_TIMEOUT_SECONDS) as http_client:
@@ -74,6 +75,10 @@ class OpenAIChatProvider(BaseProvider):
                 kwargs["max_tokens"] = max_tokens
             if top_p is not None:
                 kwargs["top_p"] = top_p
+            # 禁思考语义优先：thinking=False（如 Modeler JSON 修复、Coder 首轮）
+            # 时不透传 reasoning_effort，避免与 extra_body 的 thinking disabled 冲突。
+            if thinking and reasoning_effort:
+                kwargs["reasoning_effort"] = reasoning_effort
             if not thinking:
                 kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
             if response_format:

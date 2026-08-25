@@ -59,6 +59,7 @@ class LLM:
         base_url: str | None = None,
         task_id: str = "",
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ):
         self.api_type = api_type
         self.api_key = api_key
@@ -66,6 +67,7 @@ class LLM:
         self.base_url = base_url
         self.chat_count = 0
         self.max_tokens = max_tokens
+        self.reasoning_effort = reasoning_effort
         self.task_id = task_id
         self.provider = self._create_provider(api_type)
 
@@ -149,6 +151,8 @@ class LLM:
                     "top_p": top_p,
                     "thinking": thinking,
                 }
+                if self.reasoning_effort:
+                    provider_kwargs["reasoning_effort"] = self.reasoning_effort
                 if response_format is not None:
                     provider_kwargs["response_format"] = response_format
                 response = await asyncio.wait_for(

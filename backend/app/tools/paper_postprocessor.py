@@ -327,6 +327,7 @@ _CODE_EXCLUDED_DIRS = {
     ".git",
     ".cache",
     "scratch",
+    "internal",
 }
 _SUPPORT_EXCLUDED_DIRS = _CODE_EXCLUDED_DIRS | {
     ".agent-work",

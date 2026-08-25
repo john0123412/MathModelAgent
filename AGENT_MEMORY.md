@@ -851,3 +851,10 @@
      ② 环境耦合暴露：execute() 入口的 LLM 配置预检直接读 settings，wiring 测试隐式依赖宿主机 .env.dev → 测试内显式桩定四角色 model/key 共八项。
   3. 教训登记：跨 worktree 验收必须以"待测代码树 + 原生 venv"组合执行；unittest discover 的模块解析跟随 cwd，目录即被测对象。
   4. 已检查说明文件同步需求：无需更新（不改变启动/导出/模板/复核语义，仅容错与测试确定性加固）。
+- [2026-08-25] **P6 国一差距闭环轮：Q2 多起点非支配集升级（25 点）+ P5 丢失修复回归，145/22 页重交付**：
+  1. 动机：两份外部评审（86-88/85）一致指出最大差距为 Q2"单轨迹 7 点局部搜索"。经用户授权后走确定性求解器升级路径（非全 agent 重跑），provider 健康探测通过（z-ai/glm-5.2:free，429 间歇限流，30s 单次重试成功）。
+  2. Q2 升级：q2_energy_aware_solver.py 改为 5 异质权重起点（成本/时延/碳价/碳强度/均衡）×各 4 批时延收紧=25 候选合并池，经三目标支配检验全部非支配；前沿时延覆盖 5.05-28.12ms（原 9.61-28.12）；膝点规则选出 S1_cost_P2，**与原冻结 P2 数值完全一致**（1910712643.6704977 CNY/2088505.1103284056 tCO2/22.73586 ms，推荐调度 SHA 前缀 3b2cc5a935e8bf36 不变），新增膝点对起点不敏感的稳健性证据；膝点距离 0.366897→0.404959（25 点归一化）。沙盒先行验证（tmp/sandbox_q2_upgrade，306s）后再入正式目录（670s）。
+  3. 证据链：internal/refresh_execution_evidence_multistart.py（修正 ROOT 指向任务根）重登记四题+重冻结，execution_validation/quality=PASS；res.md 十处同步（摘要/2.2/4.2.2 六处含新表3 端点 S2_latency_P1=1,928,659,687.90/2,107,977.78/5.05342/模型检验表/结论），总迁移 21,646 次不变。
+  4. **P5 丢失修复再修+回归**：cross_modal code_self_containment FAIL 暴露 P5 的 internal/ 排除只存在于被 supersede 的 p1 脏区未进 main——重新在 execution_validation 冻结扫描与 paper_postprocessor._CODE_EXCLUDED_DIRS 两处排除 internal/，并在 test_execution_validation 增加 FrozenSourcesInternalExclusionTest 回归（50 tests OK）。
+  5. 匿名门禁真阳性处理：结论节建议语句中"参赛队员"整词此前靠 PDF 换行侥幸通过严格匿名门禁，重排后触发；精简为"仍应按当年竞赛规则复核"（无数值改动）。
+  6. 终态：task-refresh 全绿 preflight/pdf_visual/submission_audit=PASS+TECHNICAL_PASS；res.pdf 145 页（+2 页来自方法扩写），submission_body.pdf 重切 22 页（末页 clip 止于[10]文献行，零附录残留）。待办：仓库三个代码文件（execution_validation/paper_postprocessor/test）待授权 commit；Q4 ε 加密与 Q1 滚动验证两升级项按用户节奏另行决定。

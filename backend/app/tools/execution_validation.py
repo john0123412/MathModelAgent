@@ -2509,7 +2509,7 @@ def write_frozen_results_from_execution_validation(
         executed_code_sources.append("notebook.ipynb")
         
     for root_dir, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in {"__pycache__", ".ipynb_checkpoints", "latex_project", ".git", ".cache", "scratch", ".agent-work"}]
+        dirs[:] = [d for d in dirs if d not in {"__pycache__", ".ipynb_checkpoints", "latex_project", ".git", ".cache", "scratch", ".agent-work", "internal"}]
         for filename in sorted(files):
             if filename.endswith(".py"):
                 rel_path = str((Path(root_dir) / filename).relative_to(root)).replace("\\", "/")

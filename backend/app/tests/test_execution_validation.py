@@ -1782,6 +1782,24 @@ class TestExecutionValidation(unittest.TestCase):
             self.assertTrue(recorded["ok"], recorded)
 
 
+class FrozenSourcesInternalExclusionTest(unittest.TestCase):
+    """回归：internal/ 恢复脚本不得进入冻结源码列表或论文代码附录（P5/P6）。"""
+
+    def test_frozen_results_walk_excludes_internal_dir(self):
+        import inspect
+
+        from app.tools import execution_validation, paper_postprocessor
+
+        source = inspect.getsource(
+            execution_validation.write_frozen_results_from_execution_validation
+        )
+        self.assertIn("internal", source)
+        self.assertIn(
+            "internal",
+            getattr(paper_postprocessor, "_CODE_EXCLUDED_DIRS"),
+        )
+
+
 class PressureTargetEvidenceTest(unittest.TestCase):
     """题面给出压力目标时，必须留下可复核的实际压力偏差证据。
 

@@ -19,6 +19,11 @@
 - 待用户指令的 tag 动作：`git tag -f v2026.08.24-paper-final 37391e8 && git push origin v2026.08.24-paper-final`
   （当前 tag 仍锚在措辞修正前的 48a0e69）。技术侧不再改动任何算法、数据、图或正文。
 
+## 当前隔离实验（未纳入冻结交付）
+
+- [2026-08-25] Q2 Phase A 在 `20260825-phasea-q2-v2-recovered/` 按官方 `GPU_Demand×overlap` 重建同口径基线并独立 PASS；A1a 释放 1,000 任务的联合 MILP 三锚点均 `optimal/gap=0`，两个可复核锚点把固定参考点 HV 从 0.107084 提至 0.166635 并支配旧候选，见 `phase_a1/a1a_gate_analysis.json`。
+- [2026-08-25] A1b 因两次未形成完整可恢复候选池而 STOP：多算子池、epsilon 池和确定性复跑未完成，Phase A 总门禁 FAIL，不进入 C/B、不刷新冻结链；原沙盒删除与复跑细节见 `RECOVERY.md`、`phase_a1/A1B_STOP_HANDOFF.md`。
+
 ## 仓库归属与 main 历史锚点
 
 - 本仓库为 john0123412 个人使用 fork；origin 是唯一可写远程；upstream jihe520 仅参照，

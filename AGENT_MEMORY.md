@@ -843,3 +843,11 @@
   3. 6b doctor 结构化：`skills/doctor/scripts/check_env.py`（纯标准库）三级分类 required/recommended/optional，含固定虚拟环境 backend/.venv 规则探针、国内镜像安装建议（TUNA PyPI/CTAN 等），--format json 机器可读；脚本从不执行安装，确认门禁留在 SKILL.md。实测本机：required 5/6（worktree 无 backend/.venv 属预期——worktree 借用主检出区 venv）、recommended 4/4、optional 1/5，exit=1 语义正确。已检查说明文件同步需求：STARTUP.md 零处引用 doctor/环境检查，无需更新。
   4. 6d 记忆归档：AGENT_MEMORY.md 按自然月拆分，2026-07 的 142 条移入 `docs/memory/2026-07.md`（154KB 只读归档+归档索引），主文件 377KB→235KB 留 229 条活跃项。切分边界为自然月（任务原要求先确认，按 /goal 自主推进指令采用最保守的自然月边界）。
   5. 6e 版本化播种方案：`docs/md/skill-versioned-seeding-plan.md`——以反编译 index.js 为据还原 hashSkillDir（sha256 over sorted rel-paths+contents）与 seeded-builtins.json 播种循环语义（原样跳过/升级覆盖/尊重用户删除/随包 disabled 标记），给出 verify/repair/stamp 子命令设计与桌面版"升级即覆盖"的分歧点（重铺前快照备份），本轮不实现代码。
+
+- [2026-08-25] **PR #37 合并后收尾验收与两处修复（分支 fix/post-merge-acceptance）**：
+  1. PR #37 已合并至 john fork main（merge commit 74be477）；本地主检出区因活任务持有 4 个脏文件（AGENT_MEMORY.md、execution_validation 等）未做同步，任务交付后 `git pull --ff-only` 即可无冲突对齐。
+  2. 收尾验收在正确代码树（worktree 检出 origin/main 内容）执行：全量 879 tests OK (skipped=2) + Ruff clean。此前第 5 批的"879 全绿"实际运行于主检出区旧树 b51910d（unittest 导入解析跟随 cwd），未覆盖 #102 蒸馏改动；真验收暴露两问题并当场修复：
+     ① 真回归：local_interpreter.initialize() 对 _pre_execute_code() 的二元组解包在 MagicMock 桩（迭代为空）场景抛 ValueError → 改防御性解包，仅当返回值确为 (msg, type) 时才推送前端，兼容旧签名覆盖；
+     ② 环境耦合暴露：execute() 入口的 LLM 配置预检直接读 settings，wiring 测试隐式依赖宿主机 .env.dev → 测试内显式桩定四角色 model/key 共八项。
+  3. 教训登记：跨 worktree 验收必须以"待测代码树 + 原生 venv"组合执行；unittest discover 的模块解析跟随 cwd，目录即被测对象。
+  4. 已检查说明文件同步需求：无需更新（不改变启动/导出/模板/复核语义，仅容错与测试确定性加固）。

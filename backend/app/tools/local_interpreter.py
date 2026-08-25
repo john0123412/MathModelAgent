@@ -264,12 +264,16 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         # 初始化 Jupyter 内核管理器和客户端
         logger.info("初始化本地内核")
         self._start_kernel()
-        font_msg, font_type = self._pre_execute_code()
-        if font_msg:
-            await redis_manager.publish_message(
-                self.task_id,
-                SystemMessage(content=font_msg, type=font_type),
-            )
+        pre_exec = self._pre_execute_code()
+        # WHY 防御性解包：_pre_execute_code 存在返回 None 的历史签名与测试桩
+        # （MagicMock 迭代为空），只有确实返回 (msg, type) 二元组时才推送前端。
+        if isinstance(pre_exec, tuple) and len(pre_exec) == 2:
+            font_msg, font_type = pre_exec
+            if font_msg:
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(content=font_msg, type=font_type),
+                )
 
     def _pre_execute_code(self) -> tuple[str | None, str]:
         """执行 matplotlib 初始化与论文样式注入，解析字体加载结果供前端展示。

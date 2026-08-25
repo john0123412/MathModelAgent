@@ -9,8 +9,10 @@
 
 <h5 align="center">简体中文 | <a href="README_EN.md">English</a></h5>
 
+> **📦 仓库归属**：本仓库为 [john0123412](https://github.com/john0123412/MathModelAgent) 的**个人使用 fork**，基于上游 [jihe520/MathModelAgent](https://github.com/jihe520/MathModelAgent)。下文的"桌面版下载 / Releases / DeepWiki / Example"等链接均指向上游官方资源，仅作参照；本部署的代码变更、issue 与推送只发生在本 fork，不对上游做任何写操作。
+
 <p align="center">
-    <a href="https://github.com/jihe520/MathModelAgent/releases/latest"><b>⬇️ 下载最新桌面版（推荐）</b></a>
+    <a href="https://github.com/jihe520/MathModelAgent/releases/latest"><b>⬇️ 下载最新桌面版（上游官方发布）</b></a>
 </p>
 
 ---
@@ -135,7 +137,7 @@ skills 中包含一个科研绘图模板skill,可以绘制一些炫酷的科研�
 
 安装 SKILL
 ```
-npx skills add jihe520/MathModelAgent --all
+npx skills add john0123412/MathModelAgent --all
 ```
 
 运行
@@ -225,7 +227,7 @@ Harness SKILL 的优化需要大量黑盒测试和调优.
 下载项目
 
 ```bash
-git clone https://github.com/jihe520/MathModelAgent.git # 克隆项目
+git clone https://github.com/john0123412/MathModelAgent.git # 克隆本项目（个人 fork）
 ```
 
 

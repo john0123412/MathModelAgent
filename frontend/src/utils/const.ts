@@ -12,8 +12,8 @@ export const BILLBILL = "https://space.bilibili.com/400340982";
 export const XHS =
 	"https://www.xiaohongshu.com/user/profile/647a0857000000002a037c03";
 
-/** GitHub 仓库链接 */
-export const GITHUB_LINK = "https://github.com/jihe520/MathModelAgent";
+/** GitHub 仓库链接（本部署为 john0123412 的个人使用 fork） */
+export const GITHUB_LINK = "https://github.com/john0123412/MathModelAgent";
 
 /** Discord 链接 */
 export const DISCORD = "https://discord.gg/3Jmpqg5J";

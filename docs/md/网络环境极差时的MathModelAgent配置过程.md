@@ -44,7 +44,7 @@
 打开命令提示符或 PowerShell，执行以下命令克隆项目：
 
 ```bash
-git clone https://github.com/jihe520/MathModelAgent.git
+git clone https://github.com/john0123412/MathModelAgent.git
 cd MathModelAgent
 ```
 

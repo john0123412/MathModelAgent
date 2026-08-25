@@ -117,7 +117,7 @@ trusted_hosts = (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print(get_ascii_banner())
-    print(center_cli_str("GitHub:https://github.com/jihe520/MathModelAgent"))
+    print(center_cli_str("GitHub:https://github.com/john0123412/MathModelAgent"))
     logger.info("Starting MathModelAgent")
 
     PROJECT_FOLDER = "./project"

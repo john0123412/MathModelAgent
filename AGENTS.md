@@ -1,5 +1,12 @@
 # MathModelAgent 项目规则
 
+## 仓库归属与操作边界（必读）
+
+- 本仓库是 **john0123412 的个人使用部署**（fork 自 jihe520/MathModelAgent），仅限个人使用。
+- `origin` = github.com/john0123412/MathModelAgent —— **唯一允许写操作的远程**（push / PR / 分支只对它）。
+- `upstream` = github.com/jihe520/MathModelAgent —— 仅作上游参照。**严禁对其任何仓库（含 base-box）做任何写操作**（用户死命令，永久生效）；只读查询如非必要也不主动发起。
+- 文档/代码中残留的 jihe520 字样（桌面版下载链接、上游生态资源等）仅表示上游出处，不代表本部署归属或可写目标；发现新的归属性表述指向 jihe520 时，按本节口径修正。
+
 ## Agent 接手顺序
 
 新 agent 接手时必须先读：

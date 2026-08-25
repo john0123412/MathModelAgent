@@ -1,0 +1,87 @@
+# typst-author 渐进加载路由清单（manifest）
+
+name: typst-author
+version: 1.0.0
+description: >
+  Declarative routing manifest modeled after nature-figure's manifest.yaml.
+  SKILL.md stays a thin index; this manifest decides which documentation
+  fragments to load for the current authoring task. The main axis is the
+  writing task type (create / edit / style / math / table / script /
+  diagram / troubleshoot). Load ONLY the fragments matched by the active
+  axis values plus any on_demand references whose condition holds — the
+  bundled Typst documentation exceeds 190 markdown files and must never be
+  loaded wholesale.
+
+# 每次进入本 skill 先加载的最小集合（SKILL.md 本身即为入口索引）
+always_load: []
+
+axes:
+  task:
+    # 任务类型判定：从用户请求、已打开的 .typ 文件状态与报错信息推断；
+    # 可多值组合（例如 edit-existing + math）。无法判定时先按 create-new
+    # 处理并在回复中说明假设。
+    detect: |
+      Determine the current authoring task from the user request and the
+      workspace state. Multiple values may apply simultaneously; load every
+      matched fragment. If ambiguous between create/edit, prefer the value
+      matching what already exists on disk.
+    values:
+      create-new:      docs/tutorial/writing-in-typst.md
+      edit-existing:   docs/reference/syntax.md
+      styling-theming: docs/reference/styling.md
+      math-formulas:   docs/reference/math/
+      tables-grid:     docs/guides/tables.md
+      page-setup:      docs/guides/page-setup.md
+      scripting-computation:
+        - docs/reference/scripting.md
+        - docs/reference/foundations/
+      diagrams-visual: docs/reference/visualize/
+      text-and-content: docs/reference/text/
+      layout-model:
+        - docs/reference/layout/
+        - docs/reference/model/
+      packages-modules:
+        - docs/reference/foundations/module.md
+        - docs/reference/context.md
+      data-loading:    docs/reference/data-loading/
+      export-targets:
+        - docs/reference/pdf/
+        - docs/reference/png.md
+        - docs/reference/svg.md
+        - docs/reference/html/
+      introspection-probe:
+        - docs/reference/introspection/query.md
+        - docs/reference/introspection/metadata.md
+      changelog-upgrade:
+        - docs/changelog/
+
+references:
+  on_demand:
+    - condition: 判断数组 / 字典 / 内容块的语法细节或 `#` 的使用场景
+      path: docs/reference/foundations/
+    - condition: 编译报错且需要通过无文件 probe 观察求值行为
+      path: docs/reference/introspection/
+    - condition: 定制主题、show/set 规则组合或全文样式重构
+      path: docs/reference/styling.md
+    - condition: 数学公式环境、符号表或自定义运算符
+      path: docs/reference/math/
+    - condition: 表格跨页、单元格合并或三线表样式（数模论文高频）
+      path: docs/guides/tables.md
+    - condition: 页眉页脚、页码、水印或页面尺寸设置
+      path: docs/guides/page-setup.md
+    - condition: 图表编号引用、figure/image 用法或 caption 定制
+      path: docs/reference/model/
+    - condition: 大型项目拆分、模块导入与包依赖（@preview 包）
+      path: docs/reference/foundations/module.md
+    - condition: 需要 typst query / metadata 做元信息抽取或行为探针
+      path: docs/reference/introspection/
+    - condition: 排查字体缺失警告、编译失败或输出异常
+      path: docs/reference/syntax.md
+    - condition: 升级 Typst 版本后核对破坏性变更
+      path: docs/changelog/
+
+loading_protocol:
+  - 只加载 always_load 与命中的 axis values 对应片段。
+  - 仅当某条 on_demand condition 成立时才读取对应 path；读完即止。
+  - 禁止为"以防万一"批量扫描 docs/；文档检索优先 Grep 定位再精读。
+  - 本地文档优先于训练记忆；仍不确定时用 stdin probe（见 SKILL.md）。

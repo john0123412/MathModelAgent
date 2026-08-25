@@ -103,6 +103,16 @@ bash "$SCRIPT_PATH" \
 
 不要生成 `*_typst_includes.typ` 或 `*_latex_includes.tex`；图表必须直接嵌在对应 section 中。
 
+**非数据图版式门禁（正文引用了 `.drawio` 来源图时必检）**：
+
+```bash
+python "<4drawio skill 目录>/scripts/check_layout.py" "<drawio 源文件>" --strict
+```
+
+对论文实际引用的每张非数据图（技术路线图、流程图等）的 `.drawio` 源文件运行上述门禁，
+要求 **FAIL 0 / WARN 0** 才算通过；有报警时回到 `4drawio` 阶段修源文件后重新导出。
+`.drawio` 源文件缺失但 PDF 存在的旧项目，记录为兼容性 `WARN`，不阻断其他验收结论。
+
 ### Step 4: 写作质量和泄露检查
 
 检查并修复：
@@ -159,6 +169,16 @@ python "<skill-dir>/3a-result-freeze/scripts/freeze_results.py" \
 - 中文论文 caption、表题、摘要语言保持中文；英文论文保持英文。
 - 选定的模板入口是否保留所选比赛模板的必要封面、摘要、编号、页眉页脚或提交格式。
 - 不要把模板结构误删成普通空白文档。
+
+**参考文献真实性抽查**（可回溯性核验）：
+
+```bash
+python "<5writing skill 目录>/scripts/paper_search.py" verify --doi <从参考文献条目中提取的 DOI>
+```
+
+- 从参考文献中抽取带 DOI 的条目（不超过 5 条；条目总数不超过 5 条时全抽），逐条运行上述命令。退出码非零表示 DOI 不存在——该条目属于编造引用，除非工作区有人工来源确认记录，否则判 FAIL 并删除或替换该条目。
+- 全部条目均无 DOI 时，检查是否留有可人工核对的真实出处记录；完全没有可追溯出处的参考文献列表同样判 FAIL。
+- 网络不可用导致无法抽查时，在 `VERIFY_REPORT.md` 中明确记录"文献真实性抽查未执行（网络不可用）"，不得默认通过。
 
 
 ### Step 7: 编译
@@ -319,6 +339,8 @@ PASS / FAIL
 - 编译后的 PDF 为空、缺页、页数异常或页面尺寸异常且无法解释。
 - 视觉检查发现正文、表格、图片、公式、页眉页脚、页码等关键元素重叠、裁切、越界或乱码。
 - 已启用提交前匿名门禁（LaTeX 引擎 + 国赛类需匿名比赛）且 `check_pdf_anon.py --identity-mode strict` 命中身份关键词，未人工确认忽略即判 FAIL；匿名扫描为 FAIL 时不得写 `PASS`。
+- 参考文献真实性抽查发现 DOI 无法核验（编造引用）且无人工来源确认记录；或全部参考文献均无可追溯出处。
+- 论文引用的 `.drawio` 非数据图经 `check_layout.py --strict` 门禁存在 FAIL/WARN 报警，且未回修源文件。
 
 ## 警告标准
 

@@ -5,6 +5,17 @@ description: Generate idiomatic Typst (.typ) code, edit and troubleshoot Typst d
 
 # typst-author skill
 
+## Progressive loading protocol (read this first)
+
+本 skill 捆绑了 190+ 份 Typst 文档，**禁止全量加载**。进入本 skill 后：
+
+1. 本 SKILL.md 只是索引；先读 [manifest.yaml](manifest.yaml) 的路由规则。
+2. 按 `axes.task` 判定当前写作任务类型（create / edit / style / math / table /
+   script / diagram / troubleshoot 等，可多选），只加载命中的文档片段。
+3. `references.on_demand` 中的条件成立时才读取对应 path（如编译报错、表格跨页、
+   包导入失败），读完即止。
+4. 文档检索优先 Grep 定位关键词再精读单文件，不要顺序翻目录。
+
 ## Overview
 
 This skill helps agents generate, edit, and reason about Typst documents. It provides quick‑start examples, detailed workflows, and links to the full Typst documentation (guides, tutorials, reference).

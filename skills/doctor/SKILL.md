@@ -8,6 +8,23 @@ allowed-tools: Bash(*), Read, Write
 
 本 skill 检查完整数学建模工作流所需的所有工具是否已就绪，并帮助用户安装缺失项。**本 skill 只在用户显式触发时运行，不自动执行。**
 
+## 结构化检查（首选路径）
+
+优先运行附带的结构化检查脚本（纯标准库；输出 required/recommended/optional 三级结果，
+每项含默认与国内镜像安装建议；同时按 AGENTS.md 检查固定虚拟环境 backend/.venv 规则）：
+
+```bash
+python "<skill-directory>/scripts/check_env.py"               # 人类可读报告
+python "<skill-directory>/scripts/check_env.py" --format json # 机器可读（供上层工具消费）
+```
+
+退出码：0 必须项全部就绪；1 存在缺失必须项。脚本**从不执行任何安装**；
+所有安装命令仅作为建议展示，必须经 Step 5 的用户确认门禁后才可由 agent 代为执行。
+
+脚本不可用或需人工核对时，再使用下文的手工检查流程。多 worktree 场景提示：
+`backend/.venv` 检查针对当前仓库树；worktree 通常复用主检出区的虚拟环境，
+此时该项 MISS 属预期，向用户说明即可。
+
 ## 检查项清单
 
 ### 核心工具

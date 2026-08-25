@@ -1,20 +1,23 @@
 ---
 name: mathmodel-figure-templates
-description: Use this skill in the MathModel LaTeX sandbox when the user asks to reproduce built-in scientific visualization templates, especially prompts from the Improve tab mentioning $mathmodel-figure-templates, 科研绘图模板, SHAP蜂群柱状图, 配对云雨图, 交叉验证ROC, 泰勒图, 相关矩阵组合图, 预测真实值边缘分布图, TPE调参3D曲面, 下三角相关矩阵半边小提琴图, 分组环形热图, 城市公园降温组合图, or Nature和弦图. It provides ready-to-run Python scripts bundled inside the skill.
+description: Use this skill in MathModel projects when the user invokes /mathmodel-figure-templates or asks to reproduce a bundled scientific visualization template, including SHAP, raincloud, ROC, Taylor, correlation, circular, chord, land-temperature, model-comparison, weather-downscaling, Sankey, land-use, ecosystem-service, hotspot, Local Moran, landslide PDP, and biodiversity-atlas figures. It provides deterministic Python scripts, lawful runtime data, and previews bundled inside the skill.
 allowed-tools: Bash(*), Read, Write, Edit, Grep, Glob
 ---
 
 # MathModel Figure Templates
 
-This skill is bundled into the LaTeX sandbox at `/home/user/.claude/skills/mathmodel-figure-templates`. It contains ready-to-run Python/matplotlib scripts for the figure templates exposed in the MathModel Improve tab.
+This skill ships with MathModel and contains ready-to-run Python/matplotlib scripts for the
+figure templates exposed in the MathModel gallery and Improve workflow. Resolve paths relative to
+the directory containing this `SKILL.md`; do not depend on a fixed home-directory or sandbox path.
 
 ## Fast Path
 
 1. Match the requested chart in `references/figure-catalog.md`.
-2. From `/home/user/workspace`, run the renderer with the template id:
+2. From the current project, run the renderer with the template id. Replace `<skill-directory>`
+   with the actual directory containing this `SKILL.md`:
 
 ```bash
-python3 /home/user/.claude/skills/mathmodel-figure-templates/scripts/render_template.py paired-raincloud
+python3 "<skill-directory>/scripts/render_template.py" paired-raincloud --project "./绘图复刻"
 ```
 
 3. The renderer copies the bundled template script into `绘图复刻/scripts/`, runs it there, and writes outputs to `绘图复刻/outputs/`.
@@ -23,7 +26,7 @@ python3 /home/user/.claude/skills/mathmodel-figure-templates/scripts/render_temp
 Use `--list` to show supported ids:
 
 ```bash
-python3 /home/user/.claude/skills/mathmodel-figure-templates/scripts/render_template.py --list
+python3 "<skill-directory>/scripts/render_template.py" --list
 ```
 
 ## Output Contract
@@ -48,6 +51,32 @@ python3 /home/user/.claude/skills/mathmodel-figure-templates/scripts/render_temp
 - `grouped-circular-heatmap`
 - `urban-park-cooling-combo`
 - `nature-chord-diagram`
+- `land-diurnal-lst-maps`
+- `land-morphology-lst-linear`
+- `land-morphology-lst-nonlinear`
+- `land-diurnal-feature-importance`
+- `land-shap-interactions`
+- `land-model-prediction-comparison`
+- `sr-weather-model-evaluation-map`
+- `sr-weather-downscaling-map`
+- `karst-es-sdg-sankey`
+- `karst-land-use-scenarios`
+- `karst-ecosystem-services-atlas`
+- `karst-es-hotspot-scenarios`
+- `esv-grid-zone-scenarios`
+- `esv-local-moran-scenarios`
+- `landslide-shap-decision-heatmaps`
+- `landslide-pdp-interaction-grid`
+- `biodiversity-global-delta-atlas`
+- `biodiversity-global-correlation-atlas`
+
+## Data-backed templates
+
+- The SR-Weather templates copy a bundled SRTM elevation grid and Natural Earth country geometry; they require `scipy`, `cartopy`, and `shapely`.
+- The Karst templates copy a southeastern-Yunnan boundary derivative, and the ESV templates copy a Ganjiang Upstream Basin boundary derivative.
+- The biodiversity atlases copy a simplified Natural Earth public-domain world boundary.
+- Data-backed SR-Weather, Karst, and ESV templates export TIFF in addition to PNG/PDF/SVG. Biodiversity atlases export PNG/PDF/SVG.
+- Internal grids, classes, coefficients, and simulated measurements are deterministic reconstructions. Never present them as the source papers' measured values.
 
 ## When Customizing
 

@@ -81,6 +81,30 @@ DRAWIO PLAN CHECKLIST:
 
 每张图一个 `.drawio` 文件，放在 `figures/`。
 
+**优先套用内置模板**（本 skill 附带 5 个模板生成器，纯标准库；内容 JSON 从
+`reports/ANALYSIS_MODELING_REPORT.md` 与 `reports/RESULTS_REPORT.md` 抽取，
+不要编造）：
+
+| 模板 id | 版式 | 适合表达 |
+|---|---|---|
+| `roadmap-5band` | 954×1296 竖版五带 | 提出问题 → 数据与指标 → 方法与机制 → 结果对比 → 评价推广 |
+| `roadmap-3phase` | 竖版三阶段 + 问题导轨 | 数据与指标 → 两组建模预测 → 情景与路径规划 |
+| `framework-3col` | 三栏内容全景 | 每个阶段对应哪些研究内容、用什么方法 |
+| `stageflow-3col` | 三栏执行流程 | 阶段推进、决策分支、成果分发 |
+| `taskflow-land` | 横版任务流水线（16:9） | 任务一…任务四，每步方法与结论 |
+
+```bash
+# 复制 assets/<模板id>/example.json 改写槽位文字后渲染（语义约定与字数预算见对应 references/<模板id>.md）
+python "$SKILL_DIR/scripts/roadmap_5band.py" content.json -o figures/fig_roadmap.drawio
+```
+
+五个模板默认输出灰白论文版，加 `--theme color` 还原彩色演示风格。语义放错比字数超框严重——
+先读对应 `references/<模板id>.md` 的"语义约定"与"字数预算"两节再动笔。
+
+不适配任何模板的图示（模型结构、指标体系、决策规则等）从零手写 XML，骨架、样式速查、
+中文字宽预算、连接器写法见 `references/authoring.md`；图标等特殊图元见 `references/icons.md`；
+高保真复刻参考图按 `references/replication.md` 执行。三条路的产物可互相接着改。
+
 DrawIO 内容要求：
 
 - 文字语言与论文语言一致。
@@ -122,11 +146,29 @@ else
 fi
 ```
 
+也可用本 skill 附带工具替代手工导出流程：
+
+```bash
+python "$SKILL_DIR/scripts/export_figure.py" figures/fig_roadmap.drawio   # 1:1 PNG + 矢量 PDF（仍需 drawio 命令行）
+python "$SKILL_DIR/scripts/preview_html.py" figures/fig_roadmap.drawio    # 浏览器预览，无需 drawio 命令行
+```
+
 如果无法导出 PDF，保留 `.drawio`，在 `reports/DRAWIO_REPORT.md` 记录失败原因和建议导出命令。
 
 ### Step 5: 自检和修复
 
-每张图必须检查：
+**先过静态版式门禁**（本 skill 附带，中文字宽模型，正常图应达 FAIL 0 / WARN 0；
+`--strict` 下 WARN 也算失败，作为交付门禁必须通过）：
+
+```bash
+python "$SKILL_DIR/scripts/check_layout.py" figures/fig_roadmap.drawio --strict
+```
+
+报警就值得认真看：FAIL 覆盖文字溢出、元素越界、id 重复、盒子重叠、连线穿盒、内嵌位图；
+WARN 覆盖端点压盒边、疑似空盒、字号/配色发散。规则详解与规避手法见
+`references/preflight-rules.md`。门禁不通过时修 `.drawio` 后重跑，直到 FAIL 0 / WARN 0。
+
+然后逐张检查：
 
 - `.drawio` 文件非空。
 - 若导出成功，`.pdf` 文件非空。
@@ -157,6 +199,21 @@ fi
 ```
 
 嵌入建议只说明每张图适合放入哪个章节和建议 caption，不生成 `*_typst_includes.typ`。最终的图表插入代码（Typst 的 `#figure(image(...), caption: [...])` 或 LaTeX 的 `\begin{figure}...\end{figure}`）由 `5writing` 根据论文结构和所选引擎决定。
+
+## 内置实现资产索引
+
+```text
+scripts/
+  roadmap_5band.py roadmap_3phase.py framework_3col.py stageflow_3col.py taskflow_land.py
+                                                    # 5 个模板生成器（content JSON -> .drawio）
+  check_layout.py                                   # 版式门禁：溢出/越界/重叠/穿盒/位图（--strict 作交付门禁）
+  export_figure.py                                  # drawio 命令行导出 PNG/PDF
+  preview_html.py                                   # 本地浏览器预览，无需 drawio 命令行
+assets/<模板id>/example.json + preview.png           # 各模板示例内容与效果图
+assets/icons/tabler/                                 # tabler 图标库子集（见 ATTRIBUTION.md）
+references/                                          # authoring / icons / 各模板说明 / replication /
+                                                     # self-check / preflight-rules / adding-templates
+```
 
 ## 质量要求
 

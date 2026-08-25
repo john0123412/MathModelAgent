@@ -9,8 +9,10 @@
 
 <h5 align="center"><a href="README.md">简体中文</a> | English</h5>
 
+> **📦 Repository ownership**: This repository is a **personal-use fork** of [jihe520/MathModelAgent](https://github.com/jihe520/MathModelAgent), maintained by [john0123412](https://github.com/john0123412/MathModelAgent) for personal use only. Links below for desktop downloads / releases / DeepWiki point to the upstream project and are reference-only; all code changes, issues, and pushes happen exclusively on this fork — no write operations target upstream.
+
 <p align="center">
-    <a href="https://github.com/jihe520/MathModelAgent/releases/latest"><b>⬇️ Download the latest desktop app (recommended)</b></a>
+    <a href="https://github.com/jihe520/MathModelAgent/releases/latest"><b>⬇️ Download the latest desktop app (upstream release)</b></a>
 </p>
 
 ---
@@ -174,7 +176,7 @@ Copy `/frontend/.env.example` to `/frontend/.env.development` (remove the `.exam
 Clone the project
 
 ```bash
-git clone https://github.com/jihe520/MathModelAgent.git
+git clone https://github.com/john0123412/MathModelAgent.git
 ```
 
 Start backend

@@ -866,3 +866,9 @@
   4. Docker 状态：backend 容器重建/kill 连续三次在 daemon 层挂起（疑似优雅停机受 LLM_REQUEST_TIMEOUT_SECONDS=1800 影响），新 env 尚未生效；需人工重启 Docker Desktop 后 docker compose up -d backend。容器旧配置仅影响服务态，宿主机 venv 全功能可用。
 
 - [2026-08-25] **封版定稿（评审终轮两处文字修饰完成，145/22 页冻结）**：4.4.1 的"问题二 P2 代表膝点"统一为"问题二代表膝点 S1_cost_P2"；结论句重构为"并以可复算膝点规则选出代表方案 S1_cost_P2，多起点结果为其起点稳健性提供了佐证，且不虚称全局 Pareto 解"（顺带清除结论段 Markdown 粗体星号残留）。过程备注：首次刷新因评审方查看器占用 res.pdf 文件锁致 PDF 阶段中断（WinError 32），锁释放后重跑成功。终态：task-refresh 全绿 preflight/pdf_visual/submission_audit=PASS+TECHNICAL_PASS；res.pdf 145 页新文案全命中零残留，冻结膝点三数字与调度 SHA 不变；submission_body.pdf 重切 22 页（clip 止于[10]，零附录）。按评审结论正式冻结：不再改任何算法、数据、图或核心论证；剩余仅队伍人工上传项。
+
+- [2026-08-25] **归属口径固化（个人部署声明层）**：
+  1. 背景：项目 Docker/文档沿用上游 jihe520 说法，存在接手 agent 误判归属的风险；用户要求固化为 john 个人使用口径。
+  2. 改动（9 文件 +35/−14）：CLAUDE.md 与 AGENTS.md 开头新增「仓库归属与操作边界（必读）」节（origin=唯一可写远程；upstream jihe520 仅参照、对其任何仓库含 base-box 严禁写操作，死命令永久生效）；README/README_EN 顶部加仓库归属声明块；docker-compose.override.yml 容器名 mathmodelagent_jihe520_* → mathmodelagent_john_*；main.py 启动 banner、frontend const.ts GITHUB_LINK、NavUser.vue 显示名/头像改为 john 口径；两 README 与配置文档的 clone/skills add 操作命令改指 john fork。
+  3. 边界把握：桌面版下载/DeepWiki/Example 等 21 处剩余 jihe520 引用均为合法上游资源链接，已由归属块显式标注 reference-only；纯说明层面零功能逻辑改动，ruff clean。
+  4. 运维提示：容器名变更在下次 docker compose up 时重建容器属预期。已检查说明文件同步需求：STARTUP.md 无容器名引用无需更新。

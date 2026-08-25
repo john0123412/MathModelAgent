@@ -6,6 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MathModelAgent 是数学建模竞赛自动化系统，通过多 Agent 协作完成建模、代码生成和论文撰写。核心工作流：CoordinatorAgent 分析问题 → ModelerAgent 建模 → CoderAgent 编码执行 → WriterAgent 撰写论文。
 
+## 仓库归属与操作边界（必读）
+
+- 本仓库是 **john0123412 的个人使用部署**（fork 自 jihe520/MathModelAgent），仅限个人使用。
+- `origin` = github.com/john0123412/MathModelAgent —— **唯一允许写操作的远程**（push / PR / 分支只对它）。
+- `upstream` = github.com/jihe520/MathModelAgent —— 仅作上游参照。**严禁对其任何仓库（含 base-box）做任何写操作**（用户死命令，永久生效）；只读查询如非必要也不主动发起。
+- 代码与文档中残留的 jihe520 字样（桌面版下载链接、上游生态资源等）仅表示上游出处，不代表本部署的归属或可写目标。
+- 启动 banner、Docker 容器名、README 克隆命令、前端 GitHub 链接均已固化为 john 口径；若发现新的归属性表述指向 jihe520，按本节口径修正。
+
 ## Commands
 
 ### 重要限制：Windows 本机前端 Node 命令

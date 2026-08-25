@@ -1,9 +1,11 @@
+# 个人部署容器命名（john0123412 fork）：与上游 jihe520 无关。
+# 注意：容器名变更后首次 docker compose up 会重建对应容器，属预期行为。
 services:
   redis:
-    container_name: mathmodelagent_jihe520_redis
+    container_name: mathmodelagent_john_redis
 
   backend:
-    container_name: mathmodelagent_jihe520_backend
+    container_name: mathmodelagent_john_backend
 
   frontend:
-    container_name: mathmodelagent_jihe520_frontend
+    container_name: mathmodelagent_john_frontend

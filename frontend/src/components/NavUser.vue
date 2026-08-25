@@ -32,9 +32,9 @@ const props = defineProps({
 	user: {
 		type: Object,
 		default: () => ({
-			name: "San Jin",
+			name: "Johnny",
 			email: "mathmodel@mathmodel.com",
-			avatar: "https://github.com/jihe520.png",
+			avatar: "https://github.com/john0123412.png",
 		}),
 	},
 });

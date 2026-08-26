@@ -349,6 +349,15 @@ Docker 后端镜像现在默认已安装 Pandoc / TeX Live（含 `fonts-liberati
 - 西文字体为 `Times New Roman`。
 - 页边距为左/右 `3.17cm`、上 `3cm`、下 `2.8cm`。
 
+### 附录代码块样式（全 profile 通用，2026-08-26 起）
+
+所有 export profile 的 PDF 主导出与 LaTeX sidecar 中，附录源程序代码块统一为：
+**纯白背景（无底纹）+ 浅灰单线边框（`frame=single`, gray!35）+ 左侧行号
+（`numbers=left`）+ 左缩进 14pt**。参数落在 `export_profiles.py`
+的 `PDF_CODE_BLOCK_STYLE`、`tex_project_exporter.py` 各内嵌模板及
+`cumcm2025/gmcmthesis.cls`；行号边距会使长代码行换行点后移，重导出的 PDF
+页数可能比旧版多 1 页左右，属预期。
+
 历史兼容的 `default` profile 才使用上/下 `2.6cm`；较早的
 `backend/scripts/export_pdf_local.py` 也是仅支持该默认参考排版的旧脚本。高教社杯/国赛应使用
 下文的 `app.tools.export_cli --profile cumcm2026`，不要把旧脚本的边距或目录选项当作

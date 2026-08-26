@@ -49,3 +49,17 @@
 - 综合改进方案第 1–6 批全部落地（PR #37/#38/#39）；方案文档
   `D:\Users\Johnny\downloads\mathmodel-re\consolidated-improvement-plan.md` 已标完成态。
 - 第 7 批（base-box 市场上架）已被 jihe520 死命令封死，除非用户提供自有分发目标并当次授权，视为不执行。
+
+- [2026-08-26] **Phase C/B 收尾完成：Q2 v2（五算子 LNS/MILP）替换版在新目录通过全套导出验收**：
+  1. 任务目录 20260825-phasec-replace-v2：合格池 35（剔除 v2_baseline__ 与超时算子）→ 非支配 23 点；代表膝点 gpu_peak_pressure__anchor_carbon（门禁指定；垂距规则交叉核选相邻候选 eps_latency_25，两候选均落表，差异已记录不静默）；LP 独立复算 cost=1,905,939,325.34/carbon=2,079,325.83 与池值一致，功率残差 5.68e-14；迁移 8,935 次（修复 8,514+LNS 421）；GPU_Demand×overlap 官方口径已写入 audit/evidence/正文。
+  2. frozen_results.json 手工更新 5 个 sources 哈希 + 8 个 ques2 指标值；execution_validation.json 经 record_execution_evidence 受控重绑（validation=PASS）。res.md 十二处 Q2 同步（含表3 新端点 marginal_cost__anchor_cost/latency_reduction__anchor_latency、421/8,935、overlap 口径、膝点交叉核验声明）；res.json 为历史 Writer 恢复草稿（含更旧数值），未篡改该 provenance，仅登记说明。
+  3. task-refresh(profile=huashubei 照抄 task_request) 全绿：execution_validation/preflight/pdf_visual/submission_audit=PASS+TECHNICAL_PASS；candidate_manifest artifact_hashes 5/5 MATCH、submission_file res.pdf 哈希一致；PyMuPDF 抽核 146 页新值全命中、旧值/旧名零残留。表6 宽表条件门禁两轮收敛（167→121→阈值 120 以下），根因为门禁源码 max_line_length>=120。
+  4. 旧目录一致性：文件数 204=204；主控快照 tmp/pre_replace_snapshot_C.txt 哈希 dd4737... 的 recipe 未提供，11 种标准 recipe 均未复现——按熔断停止猜测；我方文档化 recipe（排序 relpath+"sha256␣␣"+LF 连接）复算哈希 85a01385780ab0a45707...，供主控用其原 recipe 比对；本会话全部写入仅限新目录。
+  5. 已知边界：附录代码清单仍为冻结 v1 q2_energy_aware_solver.py，v2 产物的生成管线脚本位于 recovered/phase_a1（q2_lns_a1b_*.py）未入附录清单——provenance 归属待主控定夺；Q4 冻结数值基于旧代表调度，4.4.1 已更新指针名称，Q4 是否需随新调度重跑由主控决策。
+
+- [2026-08-26] **代码块样式 + v2 终稿收尾**：① 导出链路代码块统一"白底+浅灰边框+左行号"
+  （export_profiles.py / tex_project_exporter.py×4 / gmcmthesis.cls，含删除上游原有底纹）；
+  ② **最终交付 = work_dir/20260825-phasec-replace-v2/**：res.pdf 146 页（新值全命中）+
+  submission_body.pdf 重切 22 页（internal/build_submission_body.py，clip 止于[10]，
+  新值命中/零 S1_cost_P2）；旧目录 20260823-040225 已被 v2 取代仅作存档；
+  ③ 原版四件交付物备份在 tmp/backup_res_pdf_precodestyle_20260826/（SHA256SUMS_before.txt）。

@@ -63,3 +63,12 @@
   submission_body.pdf 重切 22 页（internal/build_submission_body.py，clip 止于[10]，
   新值命中/零 S1_cost_P2）；旧目录 20260823-040225 已被 v2 取代仅作存档；
   ③ 原版四件交付物备份在 tmp/backup_res_pdf_precodestyle_20260826/（SHA256SUMS_before.txt）。
+
+- [2026-08-26] **终稿复核轮（引用/AI 声明/排版三整改）**：① 参考文献净化：摘除 [9]/[10] AI 工具条目，
+  8 条文献经 Crossref/doi.org/OpenLibrary/SJTU 原文页逐一核实为真实（[4]=ICAC'14 GreenWorks）；
+  ② AI 使用声明独立成节置于参考文献之后（结论章旧声明+附录C 迁移合并）：
+  ensure_huashubei_ai_disclosure 重写（幂等出口+围栏声明头自愈前置）、_check_ai_disclosure 新契约、
+  normalize_chinese_references 与 references/reference_format 两处分区改"任意级标题截止"
+  （修粘连 bug：声明节曾被吸成末条目续行）；③ 表3 长英文标识符列重叠修复（中文标签前置+全名入表注）；
+  ④ 回归 134/104 tests OK；收尾清单新增引用可查证/AI 声明独立/阅读器目检三项；
+  最终 res.pdf 146 页 + submission_body 22 页（clip 止于表7 y=240.2），四门禁全绿。

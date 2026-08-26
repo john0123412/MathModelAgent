@@ -178,10 +178,18 @@ uv run python -m app.tools.export_cli task-refresh `
 - 坐标轴、图例、色条是否可读。
 - 表格小数位是否一致。
 - 图片中文字是否不是乱码或方框。
+- 在真实 PDF 阅读器中逐页目检：表格列是否无重叠/溢出（长英文标识符列尤其容易
+  压到相邻数值列，必要时中文标签前置、长名移入表注），图与正文间距是否美观，
+  代码块是否为统一"白底+边框+行号"样式且无底纹。
 
 ## 参考文献
 
 - 是否真实可查。
+- 每条文献是否为具体可在线检索到的真实文献（Crossref/doi.org/出版方页面可命中，
+  作者-标题-年份-出处逐项吻合），并按 GB/T 7714 标准格式著录；发现虚构条目必须
+  替换为可查证的真实文献或删除。
+- 参考文献中是否不含 AI 工具条目（AI 使用情况只能进入独立的"AI 工具使用声明"节，
+  不得以 `[N] 工具名` 形式写进文献列表）。
 - 如正文引用外部背景、方法或数据来源，是否至少有基础来源；若全文无引用，是否确实没有需要支撑的外部事实。
 - 正文引用编号是否对应。
 - 自动预检会检查编号对应关系；人工仍需确认引用内容真实支撑对应句子。
@@ -211,6 +219,10 @@ uv run python -m app.tools.export_cli task-refresh `
 - notebook 或脚本是否能说明主要图表来源。
 - 对确定性题，源码附录中可见标签是否没有继续宣称 Monte Carlo/随机模拟为正式分析。
 - PDF 文本中是否没有 `print(`、`printf`、`console.log`、`logger.debug` 等控制台输出痕迹。
+- AI 使用声明是否独立成节、置于参考文献之后（不挂在结论章下、不作为文献条目、
+  不再单设附录C），节内是否含工具详情表；`paper_preflight_report.json ->
+  checks.ai_disclosure` 是否全字段通过（含 `declaration_after_references`、
+  `reference_tool_entries_absent`、`details_table_in_section`、`appendix_code_headers`）。
 
 ## PDF 人工翻阅
 

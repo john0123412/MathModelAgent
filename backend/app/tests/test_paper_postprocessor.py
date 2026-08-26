@@ -243,6 +243,44 @@ class TestNormalizeChineseReferences(unittest.TestCase):
         self.assertTrue(report["checks"]["references"]["passed"])
         self.assertEqual(report["checks"]["references"]["inline"], [])
 
+    def test_references_gate_stops_at_any_heading_after_list(self):
+        """文献区止于下一个任意级标题：后续独立章节不得按杂行计入硬门禁。"""
+        markdown = (
+            "正文引用文献[1]。\n\n"
+            "## 参考文献\n\n[1] 文献。\n\n"
+            "## AI工具使用声明\n\n本节单独列出全部 AI 使用情况，不计入参考文献。\n\n"
+            "# 附录\n\n## 附录A 支撑材料文件列表\n"
+        )
+
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(),
+            markdown=markdown,
+            code_sources=[],
+        )
+
+        self.assertTrue(report["checks"]["references"]["passed"])
+        self.assertEqual(report["checks"]["references"]["count"], 1)
+        self.assertEqual(report["checks"]["references"]["bad_lines"], [])
+
+    def test_normalize_references_does_not_swallow_following_section(self):
+        """文献列表后的独立章节不会被 _parse_reference_entries 吸成末条目续行。"""
+        from app.tools.paper_postprocessor import normalize_chinese_references
+
+        markdown = (
+            "正文[1]。\n\n## 参考文献\n\n"
+            "[1] Friedman J H. Greedy function approximation[J]. 2001.\n\n"
+            "## AI工具使用声明\n\n本节单独列出全部 AI 使用情况，不计入参考文献。\n"
+        )
+
+        result = normalize_chinese_references(markdown)
+
+        ref_line = next(
+            line for line in result.splitlines() if line.startswith("[1]")
+        )
+        # 条目保持纯净：声明节的文字没有被拼接进条目行
+        self.assertEqual(ref_line.strip(), "[1] Friedman J H. Greedy function approximation[J]. 2001.")
+        self.assertIn("## AI工具使用声明", result)
+
     def test_preflight_fails_unmatched_inline_numeric_references(self):
         markdown = (
             "正文引用已有文献[1]，但这里误写了缺失文献[2]。\n\n"

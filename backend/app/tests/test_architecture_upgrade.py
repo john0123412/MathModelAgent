@@ -207,7 +207,7 @@ write_csv(frontier, "ques2_pareto_frontier.csv")
         self.assertIn("objective", result_md)
 
     def test_huashubei_ai_disclosure_generation_is_idempotent_and_complete(self):
-        """华数杯章程合规：声明/文献条目/附录B/代码头注释一次性生成且幂等。"""
+        """华数杯合规（2026-08 口径）：声明独立成节置于文献后、不进参考文献、幂等。"""
         from app.tools.paper_postprocessor import ensure_huashubei_ai_disclosure
 
         markdown = (
@@ -223,11 +223,16 @@ write_csv(frontier, "ques2_pareto_frontier.csv")
         self.assertIn("AI工具使用声明", once)
         decl_pos = once.find("AI工具使用声明")
         ref_pos = once.find("参考文献")
-        self.assertLess(decl_pos, ref_pos)
-        # 文献编号顺延：已有 [1][2]，AI 工具条目应为 [3][4]（章程第十条格式）
-        self.assertIn("[3] agnes-2.5-flash", once)
-        self.assertIn("[4] ox-alpha", once)
-        self.assertIn("附录C AI 工具使用详情", once)
+        # 独立成节：置于参考文献之后，而非挂在结论章下
+        self.assertGreater(decl_pos, ref_pos)
+        # 参考文献保持纯净：不得出现 AI 工具条目
+        self.assertRegex(once, r"\[1\] Friedman")
+        self.assertRegex(once, r"\[2\] Huangfu")
+        self.assertNotRegex(once, r"(?m)^\[\d+\]\s*(?:agnes|ox-alpha)")
+        # 声明节内含工具详情表；不再生成附录C
+        self.assertIn("| 工具名称 |", once)
+        self.assertIn("agnes-2.5-flash", once)
+        self.assertNotIn("附录C", once)
         self.assertIn("本程序及代码是在AI 工具辅助下完成的", once)
         self.assertNotIn("``````", once)
 
@@ -235,19 +240,50 @@ write_csv(frontier, "ques2_pareto_frontier.csv")
         self.assertEqual(twice, once)
 
     def test_huashubei_ai_disclosure_heals_partial_markdown(self):
-        """增量修复：对仅有声明/文献残留的 md 也能补齐附录C 与代码头注释。"""
+        """历史文本迁移：旧版声明节/工具文献条目被净化并迁移到规范位置。"""
         from app.tools.paper_postprocessor import ensure_huashubei_ai_disclosure
 
         partial = (
+            "# 七、结论\n\n## AI工具使用声明\n\n本参赛队使用了AI工具。\n\n"
             "# 参考文献\n\n"
-            "[1] Friedman J H. Greedy function approximation[J]. 2001.\n\n"
+            "[1] Friedman J H. Greedy function approximation[J]. 2001.\n"
+            "[2] agnes-2.5-flash, agnes-2.5-flash, Agnes AI, 2026-08-23。\n\n"
             "```python\nimport pandas as pd\n```\n"
         )
         healed = ensure_huashubei_ai_disclosure(partial)
-        self.assertIn("AI工具使用声明", healed)
-        self.assertIn("[2] agnes-2.5-flash", healed)
-        self.assertIn("附录C AI 工具使用详情", healed)
+        # 文献净化：仅剩真实文献 [1]，工具条目行被移除
+        self.assertRegex(healed, r"\[1\] Friedman")
+        self.assertNotRegex(healed, r"(?m)^\[\d+\]\s*agnes")
+        # 声明节迁移到参考文献之后且含详情表
+        self.assertGreater(
+            healed.find("AI工具使用声明"), healed.find("参考文献")
+        )
+        self.assertIn("| 工具名称 |", healed)
+        self.assertNotIn("附录C", healed)
         self.assertEqual(healed.count("本程序及代码是在AI"), 1)
+
+        twice = ensure_huashubei_ai_disclosure(healed)
+        self.assertEqual(twice, healed)
+
+    def test_huashubei_ai_disclosure_restores_missing_code_headers(self):
+        """自愈：声明节已就位但围栏丢失声明头时仍必须补齐（先于幂等出口）。"""
+        from app.tools.paper_postprocessor import ensure_huashubei_ai_disclosure
+
+        markdown = (
+            "# 七、结论\n\n本文完成四问求解。\n\n"
+            "# 参考文献\n\n[1] Friedman J H. Greedy function approximation[J]. 2001.\n\n"
+            "## AI工具使用声明\n\n本节单独列出全部 AI 使用情况，不计入参考文献。\n\n"
+            "| 工具名称 | 版本/型号 | 开发机构/公司 | 使用日期 | 使用方式 |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| agnes-2.5-flash | agnes-2.5-flash | Agnes AI | 2026-08-23 | 思路探索 |\n\n"
+            "```python\nimport pandas as pd\n```\n"
+        )
+
+        healed = ensure_huashubei_ai_disclosure(markdown)
+        self.assertEqual(healed.count("本程序及代码是在AI"), 1)
+
+        twice = ensure_huashubei_ai_disclosure(healed)
+        self.assertEqual(twice, healed)
 
     def test_audit_cross_modal_writes_report(self):
         report = audit_cross_modal(self.work_dir, markdown_text="正文测试", code_sources=[])

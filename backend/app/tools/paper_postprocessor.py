@@ -510,10 +510,12 @@ def normalize_chinese_references(markdown: str) -> str:
     body = markdown[: match.start()].rstrip()
     reference_text = markdown[match.end() :].strip()
     appendix_text = ""
-    appendix_match = APPENDIX_HEADING_RE.search(reference_text)
-    if appendix_match:
-        appendix_text = reference_text[appendix_match.start() :].strip()
-        reference_text = reference_text[: appendix_match.start()].strip()
+    # 文献列表止于下一个任意级别的 Markdown 标题（附录、AI 声明节等）；
+    # 否则紧随其后的独立章节会被 _parse_reference_entries 吸成末条目的续行。
+    next_heading_offset = _next_heading_outside_fences(reference_text, 0)
+    if next_heading_offset is not None:
+        appendix_text = reference_text[next_heading_offset:].strip()
+        reference_text = reference_text[:next_heading_offset].strip()
 
     entries = _parse_reference_entries(reference_text)
     if not entries:
@@ -1607,14 +1609,16 @@ def _check_abstract_structure(markdown: str, *, min_paragraphs: int) -> dict:
 
 
 def _reference_lines(markdown: str) -> list[str]:
-    """Return only numbered bibliography entries before the appendix."""
+    """Return only numbered bibliography entries before the next heading."""
     match = REFERENCE_HEADING_RE.search(markdown)
     if not match:
         return []
     entries: list[str] = []
     for line in markdown[match.end() :].splitlines():
         stripped = line.strip()
-        if stripped.startswith("# 附录"):
+        # 文献列表止于下一个任意级别的标题：附录、AI 声明节等后续章节
+        # 的行不能计入文献区，否则会被误判为格式非法条目。
+        if re.match(r"^#{1,6}\s+", stripped):
             break
         if stripped:
             entries.append(stripped)
@@ -3992,25 +3996,41 @@ def _check_ai_disclosure(work_dir: str, markdown: str, export_profile: str | Non
     """Enforce the CUMCM 2026 declaration and support-material PDF contract."""
     profile = get_export_profile_config(export_profile).key.value
     if profile == "huashubei":
-        # 华数杯章程（第三/十/十三/十四条）：正文声明 + 参考文献条目 +
-        # 附录B 详情节 + 附录代码头注释，全部由 ensure_huashubei_ai_disclosure 生成。
-        declaration = bool(AI_USAGE_DECLARATION_RE.search(markdown))
-        ref_entries = bool(
-            re.search(r"(?mi)^\[\d+\]\s*(?:agnes-2\.5-flash|ox-alpha)\s*,", markdown)
+        # 华数杯合规契约（2026-08 口径）：独立声明节位于参考文献之后 +
+        # 节内工具详情表 + 参考文献不含 AI 工具条目 + 附录代码头注释。
+        declaration_m = AI_USAGE_DECLARATION_RE.search(markdown)
+        declaration = bool(declaration_m)
+        refs_m = REFERENCE_HEADING_RE.search(markdown)
+        declaration_after_references = bool(
+            declaration_m
+            and (refs_m is None or declaration_m.start() > refs_m.start())
         )
-        details_section = bool(
-            re.search(r"(?mi)^#{1,6}\s*附录C\s*AI\s*工具使用详情\s*$", markdown)
-        )
+        tool_refs_absent = not _AI_TOOL_REF_LINE_RE.search(markdown)
+        details_table = False
+        if declaration_m:
+            sec_end = _next_heading_outside_fences(markdown, declaration_m.end())
+            sec_end = len(markdown) if sec_end is None else sec_end
+            section_text = markdown[declaration_m.end() : sec_end]
+            details_table = "| 工具名称 |" in section_text and bool(
+                HUASHUBEI_AI_TOOL_REFS[0][0] in section_text
+            )
         fences = re.findall(r"(?ms)^```python\n(.*?)(?=^```)", markdown, re.MULTILINE)
         code_headers = all("本程序及代码是在AI" in f for f in fences) if fences else True
-        passed = declaration and ref_entries and details_section and code_headers
+        passed = bool(
+            declaration
+            and declaration_after_references
+            and tool_refs_absent
+            and details_table
+            and code_headers
+        )
         return {
             "passed": passed,
             "active": True,
             "profile": profile,
             "declaration_present": declaration,
-            "reference_tool_entries": ref_entries,
-            "details_section_appendix_c": details_section,
+            "declaration_after_references": declaration_after_references,
+            "reference_tool_entries_absent": tool_refs_absent,
+            "details_table_in_section": details_table,
             "appendix_code_headers": code_headers,
             "python_fence_count": len(fences),
         }
@@ -4328,9 +4348,10 @@ def build_preflight_report(
             for line in markdown[reference_match.end() :].splitlines()
             if line.strip()
         ]
-        # 附录代码可能位于参考文献之后，遇到附录标题即停止检查参考文献。
+        # 参考文献列表止于下一个任意级别的 Markdown 标题：附录、AI 声明节等
+        # 后续章节都不属于文献区，不能按"杂行"计入硬门禁。
         for index, line in enumerate(reference_lines):
-            if line.startswith("# 附录"):
+            if re.match(r"^#{1,6}\s+", line):
                 reference_lines = reference_lines[:index]
                 break
 
@@ -4806,14 +4827,19 @@ def ensure_question_result_tables(
 # ---------------- 华数杯 AI 工具使用章程（2026）合规生成 ----------------
 
 HUASHUBEI_AI_TOOL_REFS = [
-    # (工具名称, 版本/型号, 开发机构/公司, 使用日期) —— 参考文献条目格式
+    # (工具名称, 版本/型号, 开发机构/公司, 使用日期) —— 独立声明节详情表行格式
     ("agnes-2.5-flash", "agnes-2.5-flash", "Agnes AI（apihub.agnes-ai.com）", "2026-08-23"),
     ("ox-alpha", "stealth/ox-alpha（经 OpenRouter）", "OpenRouter", "2026-08-24"),
 ]
+# 历史版本曾把 AI 工具写进参考文献条目（2026-08-26 口径起禁止），
+# 该模式同时用于净化历史文本与门禁校验"文献中无工具条目"。
+_AI_TOOL_REF_LINE_RE = re.compile(
+    r"(?mi)^\[\d+\]\s*(?:agnes-2\.5-flash|ox-alpha)\s*,[^\n]*$\n?"
+)
 AI_CODE_HEADER_COMMENT = (
     "# 本程序及代码是在AI 工具辅助下完成的。\n"
     "# AI 工具名称：agnes-2.5-flash / ox-alpha（stealth），开发机构：Agnes AI / "
-    "OpenRouter，使用日期：2026-08-23 至 2026-08-24（详见附录B 与参考文献）。"
+    "OpenRouter，使用日期：2026-08-23 至 2026-08-24（详见正文“AI 工具使用声明”节）。"
 )
 
 
@@ -4840,46 +4866,89 @@ def _heal_huashubei_disclosure_numbering(markdown: str) -> str:
     return markdown
 
 
-def ensure_huashubei_ai_disclosure(markdown: str) -> str:
-    """按《华数杯人工智能工具使用章程》逐项补齐声明、文献条目与附录详情。
+def _next_heading_outside_fences(text: str, start: int) -> int | None:
+    """返回 start 之后第一个不在代码围栏内的 Markdown 标题行偏移；无则 None。
 
-    各子项独立幂等：可对部分残留的历史 Markdown 增量修复。
-    附录编号说明：源程序代码附录已占用"附录B"，本详情节使用"附录C"。
+    围栏内以 ``#`` 开头的注释（如附录代码的 AI 声明头）不是标题，
+    必须跳过，否则切节边界会穿过代码块。
+    """
+    offset = start
+    in_fence = False
+    for line in text[start:].splitlines(keepends=True):
+        stripped = line.lstrip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+        elif not in_fence and re.match(r"#{1,6}\s+\S", stripped):
+            return offset
+        offset += len(line)
+    return None
+
+
+def _cut_markdown_sections(markdown: str, heading_pattern: str) -> str:
+    """剪切所有匹配 heading_pattern 的整节（从标题行到下一标题前/文末）。幂等工具。"""
+    while True:
+        m = re.search(heading_pattern, markdown)
+        if not m:
+            return markdown
+        end = _next_heading_outside_fences(markdown, m.end())
+        markdown = (
+            markdown[: m.start()]
+            if end is None
+            else markdown[: m.start()] + markdown[end:]
+        )
+
+
+def _huashubei_ai_section_markdown() -> str:
+    """构造独立的「AI工具使用声明」节：声明文字 + 工具使用详情表。
+
+    2026-08-26 口径：AI 使用情况不计入参考文献，单独成节列于参考文献之后。
+    """
+    rows = "\n".join(
+        f"| {name} | {version} | {org} | {date} | "
+        "思路探索、代码辅助编程、图表制作、文本润色 |"
+        for name, version, org, date in HUASHUBEI_AI_TOOL_REFS
+    )
+    return (
+        "## AI工具使用声明\n\n"
+        "本参赛队在竞赛过程中使用了AI工具，主要用于建模方案审阅、代码调试、"
+        "论文语言与版式整理。本节单独列出全部 AI 使用情况，不计入参考文献。\n\n"
+        "本参赛队仅在章程允许范围内使用上述工具（头脑风暴与思路拓展、"
+        "代码辅助编程、图表制作辅助、文本润色）；核心建模思路、数学推导、结果结论"
+        "均由参赛队独立完成并逐项复核。所有 AI 输出均经参赛队理解、验证与改写后采用；"
+        "数据真实性由附件原始数据与可复算脚本保证。\n\n"
+        "| 工具名称 | 版本/型号 | 开发机构/公司 | 使用日期 | 使用方式 |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        f"{rows}"
+    )
+
+
+def ensure_huashubei_ai_disclosure(markdown: str) -> str:
+    """按华数杯章程补齐 AI 使用声明，并保持参考文献只含真实可查证文献。
+
+    2026-08-26 口径：AI 使用情况独立成节，置于参考文献之后、附录之前；
+    参考文献中不得出现 AI 工具条目。各子项幂等，并对历史文本自动迁移：
+    剪切旧位置声明节与附录C详情表、删除 [N] 工具条目行，再重建规范节。
     条款引用说明：官方章程条款编号未经原文核实，全文统一使用中性表述，
     由 :func:`_heal_huashubei_disclosure_numbering` 保证新旧文本一致。
     """
     markdown = _heal_huashubei_disclosure_numbering(markdown)
+    # 历史代码头注释指针迁移：旧文本指向"附录B 与参考文献"
+    markdown = markdown.replace(
+        "（详见附录B 与参考文献）。",
+        "（详见正文“AI 工具使用声明”节）。",
+    )
 
-    # 1) 声明节：置于参考文献标题之前
-    if not AI_USAGE_DECLARATION_RE.search(markdown):
-        ref_match = REFERENCE_HEADING_RE.search(markdown)
-        insert_at = ref_match.start() if ref_match else len(markdown)
-        block = (
-            AI_USAGE_DECLARATION
-            + "\n\n本参赛队仅在章程允许范围内使用上述工具（头脑风暴与思路拓展、"
-            "代码辅助编程、图表制作辅助、文本润色）；核心建模思路、数学推导、结果结论"
-            "均由参赛队独立完成并逐项复核。\n\n"
-        )
-        markdown = markdown[:insert_at] + block + markdown[insert_at:]
+    # 1) 文献净化：移除历史版本写入的 [N] 工具条目行
+    markdown = _AI_TOOL_REF_LINE_RE.sub("", markdown)
 
-    # 2) 参考文献：按 [编号] 工具名称，版本/型号，开发机构/公司，使用日期 格式顺延追加
-    for name, version, org, date in HUASHUBEI_AI_TOOL_REFS:
-        entry_prefix = re.escape(f"{name}, {version}")
-        if re.search(rf"(?mi)^\[\d+\]\s*{entry_prefix}", markdown):
-            continue
-        existing_nums = [int(n) for n in re.findall(r"(?m)^\[(\d+)\]", markdown)]
-        next_num = (max(existing_nums) + 1) if existing_nums else 1
-        entry = f"[{next_num}] {name}, {version}, {org}, {date}。"
-        if existing_nums:
-            last_ref_iter = list(
-                re.finditer(rf"(?m)^\[{max(existing_nums)}\][^\n]*$\n?", markdown)
-            )
-            insert_pos = last_ref_iter[-1].end()
-            markdown = markdown[:insert_pos] + entry + "\n" + markdown[insert_pos:]
-        else:
-            markdown = markdown.rstrip() + "\n\n" + entry + "\n"
+    # 2) 移除历史附录C详情表（内容并入声明节统一重建）
+    markdown = _cut_markdown_sections(
+        markdown, r"(?mi)^#{1,6}\s*附录C\s*AI\s*工具使用详情\s*$"
+    )
 
-    # 3) 附录代码清单：每个 python 围栏前置声明注释（幂等）
+    # 3) 附录代码清单：每个 python 围栏前置声明注释（幂等）。
+    #    必须先于幂等出口执行：历史管线可能丢失围栏内声明头，
+    #    提前返回会让缺失永远无法自愈。
     def _prepend_comment(match: re.Match) -> str:
         body = match.group("body")
         if "本程序及代码是在AI" in body:
@@ -4893,24 +4962,43 @@ def ensure_huashubei_ai_disclosure(markdown: str) -> str:
         markdown,
     )
 
-    # 4) 附录C 详情表（编号避让源程序代码附录B）
-    if not re.search(r"(?mi)^#{1,6}\s*附录C\s*AI\s*工具使用详情\s*$", markdown):
-        rows = "\n".join(
-            f"| {name} | {version} | {org} | {date} | "
-            "思路探索、代码辅助编程、图表制作、文本润色 |"
-            for name, version, org, date in HUASHUBEI_AI_TOOL_REFS
-        )
-        details = (
-            "\n## 附录C AI 工具使用详情\n\n"
-            "依据竞赛章程关于人工智能工具使用的规定，本附录说明参赛队使用的 AI 工具及具体使用方式。"
-            "所有 AI 输出均经参赛队理解、验证与改写后采用；数据真实性由附件原始数据"
-            "与可复算脚本保证。\n\n"
-            "| 工具名称 | 版本/型号 | 开发机构/公司 | 使用日期 | 使用方式 |\n"
-            "| --- | --- | --- | --- | --- |\n"
-            f"{rows}\n"
-        )
-        markdown = markdown.rstrip() + "\n" + details
-    return markdown
+    # 4) 锚点：参考文献最后一条条目之后；无文献区则附录标题之前；None=文末
+    def _anchor_of(md: str) -> int | None:
+        refs_m = REFERENCE_HEADING_RE.search(md)
+        if refs_m:
+            entries = list(re.finditer(r"(?m)^\[\d+\][^\n]*$", md[refs_m.end() :]))
+            if entries:
+                return refs_m.end() + entries[-1].end()
+        app_m = re.search(r"(?mi)^#{1,6}\s*附录", md)
+        return app_m.start() if app_m else None
+
+    # 5) 幂等出口：声明节已位于锚点之后且自带详情表 → 视为已合规，不再改写。
+    #    （否则第二遍会把声明节后的裸代码围栏误当节内容一并剪切）
+    decl_m = AI_USAGE_DECLARATION_RE.search(markdown)
+    anchor = _anchor_of(markdown)
+    if decl_m and (anchor is None or decl_m.start() >= anchor):
+        sec_end = _next_heading_outside_fences(markdown, decl_m.end())
+        sec_end = len(markdown) if sec_end is None else sec_end
+        if "| 工具名称 |" in markdown[decl_m.end() : sec_end]:
+            return markdown
+
+    # 6) 迁移路径：剪切旧位置声明节（围栏感知），重建规范节插入锚点处
+    markdown = _cut_markdown_sections(
+        markdown, r"(?mi)^#{1,6}\s*AI\s*工具使用声明\s*$"
+    )
+    markdown = re.sub(r"\n{3,}", "\n\n", markdown)
+
+    block = _huashubei_ai_section_markdown()
+    anchor = _anchor_of(markdown)
+    if anchor is None:
+        return markdown.rstrip() + "\n\n" + block + "\n"
+    return (
+        markdown[:anchor].rstrip("\n")
+        + "\n\n"
+        + block
+        + "\n\n"
+        + markdown[anchor:].lstrip("\n")
+    )
 
 
 def prepare_paper_markdown(

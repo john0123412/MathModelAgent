@@ -72,3 +72,14 @@
   （修粘连 bug：声明节曾被吸成末条目续行）；③ 表3 长英文标识符列重叠修复（中文标签前置+全名入表注）；
   ④ 回归 134/104 tests OK；收尾清单新增引用可查证/AI 声明独立/阅读器目检三项；
   最终 res.pdf 146 页 + submission_body 22 页（clip 止于表7 y=240.2），四门禁全绿。
+
+- [2026-08-26] **评审整改轮（代表点双轨 + v2 证据链入附录）**：① 4.2.2 改双轨语义——argmax 垂距规则
+  降级为"独立参考膝点"（选中 eps_latency_25，0.314151），代表方案=phase 门禁指定（anchor_carbon，
+  0.309322）；正文"代表膝点"13 处改名"代表方案"，frozen 标签同步 6 处，evidence JSON rule 改交叉核验
+  语义并补 candidate_table_sha256（原为 null）；② q2_independent_check.py 重写为 v2 双轨校验
+  （9 检查全绿；修 3 项既有失败：null 哈希 / scope_note 无"局部" / 跨工件 1e-7 浮点差→相对容差 5e-10）；
+  ③ v2 solver 入证据链：executed_code_sources 白名单 +q2_lns_a1b_multiobjective.py
+  +q2_lns_energy_system.py（=v2_baseline overlap 口径 q34_solver 的字节一致副本；去 sys.path 引导改
+  同目录导入以过自包含门禁），附录自动重建为 B.1–B.9；④ 结论 `**` 字面残留清除。
+  终版 res.pdf **235 页**（B.5/B.6=v2 实现，代码页增 88 页属预期），submission_body 22 页
+  （p9"见附录B.5"为合法交叉引用），四门禁全绿。

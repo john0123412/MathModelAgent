@@ -52,6 +52,7 @@ _MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 \usepackage{longtable}
 \usepackage{calc}
 \usepackage{listings}
+\usepackage{xcolor}
 \IfFontExistsTF{{Consolas}}{{\setmonofont{{Consolas}}}}{{\IfFontExistsTF{{Courier New}}{{\setmonofont{{Courier New}}}}{{}}}}
 \lstset{
   breaklines=true,
@@ -61,7 +62,15 @@ _MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
   showspaces=false,
   showstringspaces=false,
   showtabs=false,
-  basicstyle=\ttfamily\footnotesize
+  basicstyle=\ttfamily\footnotesize,
+  frame=single,
+  framerule=0.4pt,
+  rulecolor=\color{gray!35},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  numbersep=6pt,
+  xleftmargin=14pt,
+  framexleftmargin=14pt
 }
 \providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
 
@@ -107,6 +116,7 @@ _CUMCM2025_MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 \usepackage{longtable}
 \usepackage{calc}
 \usepackage{listings}
+\usepackage{xcolor}
 \IfFontExistsTF{{Consolas}}{{\setmonofont{{Consolas}}}}{{\IfFontExistsTF{{Courier New}}{{\setmonofont{{Courier New}}}}{{}}}}
 \lstset{
   breaklines=true,
@@ -116,7 +126,15 @@ _CUMCM2025_MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
   showspaces=false,
   showstringspaces=false,
   showtabs=false,
-  basicstyle=\ttfamily\footnotesize
+  basicstyle=\ttfamily\footnotesize,
+  frame=single,
+  framerule=0.4pt,
+  rulecolor=\color{gray!35},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  numbersep=6pt,
+  xleftmargin=14pt,
+  framexleftmargin=14pt
 }
 \providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
 
@@ -186,6 +204,7 @@ _CUMCM2026_MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
 \usepackage{longtable}
 \usepackage{calc}
 \usepackage{listings}
+\usepackage{xcolor}
 \IfFontExistsTF{{Consolas}}{{\setmonofont{{Consolas}}}}{{\IfFontExistsTF{{Courier New}}{{\setmonofont{{Courier New}}}}{{}}}}
 \lstset{
   breaklines=true,
@@ -195,7 +214,15 @@ _CUMCM2026_MAIN_TEX_TEMPLATE = r"""% !TEX program = xelatex
   showspaces=false,
   showstringspaces=false,
   showtabs=false,
-  basicstyle=\ttfamily\footnotesize
+  basicstyle=\ttfamily\footnotesize,
+  frame=single,
+  framerule=0.4pt,
+  rulecolor=\color{gray!35},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  numbersep=6pt,
+  xleftmargin=14pt,
+  framexleftmargin=14pt
 }
 \providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
 
@@ -286,11 +313,15 @@ _HUASHUBEI_MAIN_TEX_TEMPLATE = rf"""% !TEX program = xelatex
 \IfFontExistsTF{{Consolas}}{{\setmonofont{{Consolas}}}}{{\IfFontExistsTF{{Courier New}}{{\setmonofont{{Courier New}}}}{{}}}}
 \lstset{{
   basicstyle=\ttfamily\footnotesize,
-  backgroundcolor=\color{{black!3}},
   frame=single,
   framesep=6pt,
   rulecolor=\color{{black!30}},
   framerule=0.8pt,
+  numbers=left,
+  numberstyle=\tiny\color{{black!50}},
+  numbersep=6pt,
+  xleftmargin=14pt,
+  framexleftmargin=14pt,
   breaklines=true,
   showstringspaces=false,
   columns=fullflexible,

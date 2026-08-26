@@ -36,7 +36,10 @@ PDF_HEADING_STYLE = (
     r"}"
 )
 PDF_CODE_BLOCK_STYLE = (
-    r"header-includes=\usepackage{listings}"
+    # xcolor 供 rulecolor/numberstyle 的 \color 使用；
+    # 不能假设 pandoc 默认模板已加载 xcolor，显式声明一次（重复加载无害）。
+    r"header-includes=\usepackage{xcolor}"
+    r"\usepackage{listings}"
     r"\lstset{"
     r"breaklines=true,"
     r"breakatwhitespace=false,"
@@ -45,7 +48,16 @@ PDF_CODE_BLOCK_STYLE = (
     r"showspaces=false,"
     r"showstringspaces=false,"
     r"showtabs=false,"
-    r"basicstyle=\ttfamily\footnotesize"
+    r"basicstyle=\ttfamily\footnotesize,"
+    r"frame=single,"
+    r"framerule=0.4pt,"
+    r"rulecolor=\color{gray!35},"
+    r"numbers=left,"
+    r"numberstyle=\tiny\color{gray},"
+    r"numbersep=6pt,"
+    # xleftmargin 给行号让位；framexleftmargin 让边框把行号一并框住。
+    r"xleftmargin=14pt,"
+    r"framexleftmargin=14pt"
     r"}"
 )
 PDF_PARAGRAPH_BREAK_STYLE = (

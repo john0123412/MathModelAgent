@@ -83,3 +83,12 @@
   同目录导入以过自包含门禁），附录自动重建为 B.1–B.9；④ 结论 `**` 字面残留清除。
   终版 res.pdf **235 页**（B.5/B.6=v2 实现，代码页增 88 页属预期），submission_body 22 页
   （p9"见附录B.5"为合法交叉引用），四门禁全绿。
+
+- [2026-08-28] **Writer `search_papers` 坏参数续传崩溃已修**：真实任务
+  `20260828-080924-3dd8912d8b76f6ff928175f0e2a9e7bb` 在 RepeatQues 阶段因原生
+  `tool_call.arguments` 非法 JSON 于 Scholar 调用前抛错；`writer_agent.py` 现改为写历史前严格校验并
+  canonicalize、同轮合法 pseudo-XML 仅恢复一次、不可恢复时返回配对 `invalid_arguments` 且不发空查询，
+  同时恢复 Coder/Modeler 熔断上限 3/2。回归：定向 140 tests OK；全量 888 tests OK（skipped=2）；
+  `ruff check .` 通过；Docker 挂载源码 76 tests + Ruff + `/docs` 健康检查通过。该任务仍为 failed，
+  真实 provider resume 与论文全门禁尚未执行，禁止把手工 A 产物
+  当正式候选；恢复脚本已保全至 gitignored `scratch/writer-b-recovery-20260828/`。

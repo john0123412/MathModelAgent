@@ -35,6 +35,134 @@ PSEUDO_TOOL_PARAM_RE = re.compile(
     re.DOTALL,
 )
 
+_SEARCH_PAPERS_ARGUMENTS = frozenset(
+    {
+        "query",
+        "limit",
+        "year_from",
+        "year_to",
+        "min_citations",
+        "source_types",
+        "include_web",
+    }
+)
+_SEARCH_PAPERS_INTEGER_ARGUMENTS = frozenset(
+    {"limit", "year_from", "year_to", "min_citations"}
+)
+
+
+def _load_json_object(raw_arguments: object) -> tuple[dict | None, str | None]:
+    """Load a tool payload without exposing the raw provider output.
+
+    Tool-call arguments arrive as a JSON string for OpenAI-compatible providers,
+    while small test doubles (and a few gateways) may hand us a dict directly.
+    The search tool contract is stricter than ``json.loads``: scalars and arrays
+    are not valid argument objects.
+    """
+    if isinstance(raw_arguments, dict):
+        candidate = raw_arguments
+    elif isinstance(raw_arguments, str):
+        try:
+            candidate = json.loads(raw_arguments)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None, "arguments 不是合法 JSON"
+    else:
+        return None, "arguments 必须是 JSON 对象或 JSON 字符串"
+
+    if not isinstance(candidate, dict):
+        return None, "arguments 顶层必须是 JSON 对象"
+    try:
+        # A directly supplied dict can contain a value which json.dumps cannot
+        # serialize.  Treat that as malformed instead of leaking it downstream.
+        json.dumps(candidate, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return None, "arguments 包含不可序列化字段"
+    return candidate, None
+
+
+def _canonical_json_object(arguments: dict) -> str:
+    """Serialize a validated tool object deterministically for provider history."""
+    return json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+
+
+def _validate_search_papers_arguments(
+    raw_arguments: object,
+) -> tuple[dict | None, str | None]:
+    """Validate and normalize native ``search_papers`` arguments.
+
+    Validation deliberately happens before the Redis progress message and the
+    Scholar call.  Invalid payloads become a tool-level error; they must never
+    be silently converted to an empty query.
+    """
+    arguments, error = _load_json_object(raw_arguments)
+    if arguments is None:
+        return None, error
+
+    unknown = [
+        key
+        for key in arguments
+        if not isinstance(key, str) or key not in _SEARCH_PAPERS_ARGUMENTS
+    ]
+    if unknown:
+        return None, "arguments 含不支持的字段"
+
+    query = arguments.get("query")
+    if not isinstance(query, str) or not query.strip():
+        return None, "query 必须是非空字符串"
+
+    normalized = dict(arguments)
+    normalized["query"] = query.strip()
+    for name in _SEARCH_PAPERS_INTEGER_ARGUMENTS:
+        value = normalized.get(name)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None, f"{name} 必须是整数或 null"
+        if name == "limit" and value < 1:
+            return None, "limit 必须大于等于 1"
+        if name == "min_citations" and value < 0:
+            return None, "min_citations 不能为负数"
+
+    source_types = normalized.get("source_types")
+    if source_types is not None:
+        if not isinstance(source_types, list) or any(
+            not isinstance(item, str) or not item.strip() for item in source_types
+        ):
+            return None, "source_types 必须是字符串数组或 null"
+        normalized["source_types"] = [item.strip() for item in source_types]
+
+    include_web = normalized.get("include_web")
+    if include_web is not None and not isinstance(include_web, bool):
+        return None, "include_web 必须是布尔值或 null"
+
+    return normalized, None
+
+
+def _canonicalize_tool_arguments(raw_arguments: object) -> str:
+    """Return provider-safe JSON for any tool-call history entry."""
+    arguments, _error = _load_json_object(raw_arguments)
+    return _canonical_json_object(arguments) if arguments is not None else "{}"
+
+
+def _prepare_search_papers_arguments(
+    raw_arguments: object,
+    pseudo_fallback: dict | None = None,
+) -> tuple[dict | None, bool]:
+    """Resolve native search arguments, optionally consuming one pseudo fallback."""
+    arguments, _error = _validate_search_papers_arguments(raw_arguments)
+    if arguments is not None:
+        return arguments, False
+
+    if pseudo_fallback is not None:
+        fallback_arguments, _fallback_error = _validate_search_papers_arguments(
+            pseudo_fallback
+        )
+        if fallback_arguments is not None:
+            return fallback_arguments, True
+        # The pseudo fallback is intentionally not retried when it is itself
+        # structurally invalid.
+    return None, False
+
 
 def _has_pseudo_tool_call(content: str) -> bool:
     return bool(PSEUDO_SEARCH_TOOL_RE.search(content or ""))
@@ -51,18 +179,50 @@ def _parse_pseudo_search_tool_call(content: str) -> dict | None:
         name = param.group("name")
         value = param.group("value").strip()
         if name in {"limit", "year_from", "year_to", "min_citations"}:
-            params[name] = int(value) if value and value.lower() != "none" else None
+            if not value or value.lower() == "none":
+                params[name] = None
+            else:
+                try:
+                    params[name] = int(value)
+                except (TypeError, ValueError):
+                    return None
+                if name == "limit" and params[name] < 1:
+                    return None
+                if name == "min_citations" and params[name] < 0:
+                    return None
         elif name == "include_web":
             lowered = value.lower()
-            params[name] = None if lowered == "none" else lowered == "true"
+            if lowered == "none":
+                params[name] = None
+            elif lowered in {"true", "false"}:
+                params[name] = lowered == "true"
+            else:
+                return None
         elif name == "source_types":
             try:
-                params[name] = json.loads(value)
-            except json.JSONDecodeError:
-                params[name] = [value] if value else None
+                parsed_source_types = json.loads(value)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                # A few compatible models emit a single unquoted type.  Keep
+                # that narrow compatibility form, but still normalize it to a
+                # string array so the native search validator can inspect it.
+                parsed_source_types = [value] if value else None
+            if parsed_source_types is not None and (
+                not isinstance(parsed_source_types, list)
+                or any(
+                    not isinstance(item, str) or not item.strip()
+                    for item in parsed_source_types
+                )
+            ):
+                return None
+            params[name] = (
+                [item.strip() for item in parsed_source_types]
+                if parsed_source_types is not None
+                else None
+            )
         else:
             params[name] = value
-    return params if params.get("query") else None
+    query = params.get("query")
+    return params if isinstance(query, str) and query.strip() else None
 
 
 def _is_valid_sub_title(sub_title: str | None) -> bool:
@@ -611,10 +771,46 @@ class WriterAgent(Agent):
 
             if response.tool_calls:
                 had_tool_calls = True
-                await self._append_assistant_tool_calls_msg(response)
+                # Some gateways emit both a native tool call and the legacy
+                # pseudo-XML representation in ``content``.  Parse that
+                # compatibility form once so a malformed native search call
+                # can be recovered without executing the search twice.
+                pseudo_fallback = _parse_pseudo_search_tool_call(response.content)
+                fallback_available = pseudo_fallback is not None
+                normalized_tool_calls: list[ToolCall] = []
                 for tool_call in response.tool_calls:
                     if tool_call.name == "search_papers":
-                        tool_result, _papers = await self._execute_search_papers(tool_call)
+                        fallback = pseudo_fallback if fallback_available else None
+                        arguments, used_fallback = (
+                            _prepare_search_papers_arguments(
+                                tool_call.arguments, fallback
+                            )
+                        )
+                        if used_fallback:
+                            fallback_available = False
+                        canonical_arguments = _canonical_json_object(arguments or {})
+                    else:
+                        canonical_arguments = _canonicalize_tool_arguments(
+                            tool_call.arguments
+                        )
+                    normalized_tool_calls.append(
+                        ToolCall(
+                            id=tool_call.id,
+                            name=tool_call.name,
+                            arguments=canonical_arguments,
+                        )
+                    )
+
+                # Always put provider-safe, parseable arguments in history
+                # before the matching role=tool responses are appended.
+                await self._append_assistant_tool_calls_msg(
+                    response, tool_calls=normalized_tool_calls
+                )
+                for tool_call in normalized_tool_calls:
+                    if tool_call.name == "search_papers":
+                        tool_result, _papers = await self._execute_search_papers(
+                            tool_call
+                        )
                         tool_msg: dict = {
                             "role": "tool",
                             "tool_call_id": tool_call.id,
@@ -1058,9 +1254,12 @@ class WriterAgent(Agent):
         return cleaned
 
     async def _append_assistant_tool_calls_msg(
-        self, response: StandardResponse
+        self,
+        response: StandardResponse,
+        tool_calls: list[ToolCall] | None = None,
     ) -> None:
         """把带 tool_calls 的 assistant 响应写入对话历史。"""
+        calls = tool_calls if tool_calls is not None else response.tool_calls
         assistant_msg: dict = {"role": "assistant", "content": response.content}
         if response.reasoning_content:
             assistant_msg["reasoning_content"] = response.reasoning_content
@@ -1068,13 +1267,25 @@ class WriterAgent(Agent):
             {
                 "id": tc.id,
                 "type": "function",
-                "function": {"name": tc.name, "arguments": tc.arguments},
+                "function": {
+                    "name": tc.name,
+                    "arguments": (
+                        _canonical_json_object(
+                            _validate_search_papers_arguments(tc.arguments)[0] or {}
+                        )
+                        if tc.name == "search_papers"
+                        else _canonicalize_tool_arguments(tc.arguments)
+                    ),
+                },
             }
-            for tc in response.tool_calls
+            for tc in calls
         ]
         await self.append_chat_history(assistant_msg)
 
-    async def _execute_search_papers(self, tool_call: ToolCall) -> str:
+    async def _execute_search_papers(
+        self,
+        tool_call: ToolCall,
+    ) -> tuple[str, list[dict]]:
         """执行 search_papers 工具调用并返回文本结果。"""
         logger.info("调用工具: search_papers")
         await redis_manager.publish_message(
@@ -1082,8 +1293,27 @@ class WriterAgent(Agent):
             SystemMessage(content=f"写作手调用{tool_call.name}工具"),
         )
 
-        arguments = json.loads(tool_call.arguments or "{}")
-        query = arguments.get("query", "")
+        arguments, argument_error = _validate_search_papers_arguments(
+            tool_call.arguments
+        )
+        if arguments is None:
+            safe_error = argument_error or "arguments 无效"
+            logger.warning(f"search_papers 参数校验失败: {safe_error}")
+            return (
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "invalid_arguments",
+                            "message": safe_error,
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                [],
+            )
+
+        query = arguments["query"]
 
         await redis_manager.publish_message(
             self.task_id,

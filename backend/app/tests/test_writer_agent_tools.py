@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 from app.config.setting import ApiType
 from app.core.agents.writer_agent import MAX_TOOL_ROUNDS, WriterAgent
 from app.core.llm.types import StandardResponse, ToolCall
+from app.core.llm.providers.anthropic import AnthropicProvider
 from app.schemas.enums import CompTemplate, FormatOutPut
 
 
@@ -82,6 +83,53 @@ class FakeScholar:
 
     def papers_to_str(self, papers):
         return "Dantzig G B. Linear programming[J]. Operations Research, 1955."
+
+
+class TrackingScholar(FakeScholar):
+    """记录参数的无网络 Scholar 测试替身。"""
+
+    def __init__(self):
+        self.search_calls = []
+
+    async def search_papers(self, **kwargs):
+        self.search_calls.append(kwargs)
+        return await super().search_papers(**kwargs)
+
+
+class FakeNativeToolThenTextModel:
+    """第一轮发出一个原生工具调用，随后输出正文。"""
+
+    api_type = ApiType.OPENAI_CHAT
+
+    def __init__(self, tool_call: ToolCall, first_content: str = ""):
+        self.tool_call = tool_call
+        self.first_content = first_content
+        self.calls = 0
+
+    async def chat(self, history, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            return StandardResponse(
+                content=self.first_content,
+                tool_calls=[self.tool_call],
+            )
+        return StandardResponse(content="正文内容")
+
+
+def _pseudo_search_content(query: str = "fallback query") -> str:
+    return (
+        "<tool_call>\n"
+        "<function=search_papers>\n"
+        f"<parameter=query>{query}</parameter>\n"
+        "<parameter=limit>3</parameter>\n"
+        "<parameter=year_from>2010</parameter>\n"
+        "<parameter=year_to>2024</parameter>\n"
+        "<parameter=min_citations>10</parameter>\n"
+        "<parameter=source_types>[\"journal\"]</parameter>\n"
+        "<parameter=include_web>false</parameter>\n"
+        "</function>\n"
+        "</tool_call>"
+    )
 
 
 class FakeToolChainModel:
@@ -198,6 +246,190 @@ def _paired_tool_ids(history: list[dict]) -> tuple[list[str], list[str]]:
         msg.get("tool_call_id") for msg in history if msg.get("role") == "tool"
     ]
     return call_ids, response_ids
+
+
+class WriterSearchArgumentRecoveryTest(unittest.IsolatedAsyncioTestCase):
+    """search_papers 参数边界、历史协议与兼容恢复测试。"""
+
+    def _make_agent(self, model, scholar):
+        return WriterAgent(
+            task_id="t1",
+            model=model,
+            comp_template=CompTemplate.CHINA,
+            format_output=FormatOutPut.Markdown,
+            scholar=scholar,
+        )
+
+    async def test_malformed_native_json_uses_one_legal_pseudo_fallback(self):
+        native_call = ToolCall(
+            id="call-recover",
+            name="search_papers",
+            arguments='{"query":"native payload"',
+        )
+        scholar = TrackingScholar()
+        model = FakeNativeToolThenTextModel(
+            native_call,
+            first_content=_pseudo_search_content("pseudo fallback"),
+        )
+        agent = self._make_agent(model, scholar)
+
+        with patch(
+            "app.core.agents.writer_agent.redis_manager.publish_message",
+            new=AsyncMock(),
+        ):
+            result = await agent.run("写文献检索章节", sub_title="ques1")
+
+        self.assertEqual(result.response_content, "正文内容")
+        self.assertEqual(
+            scholar.search_calls,
+            [
+                {
+                    "query": "pseudo fallback",
+                    "limit": 3,
+                    "year_from": 2010,
+                    "year_to": 2024,
+                    "min_citations": 10,
+                    "source_types": ["journal"],
+                    "include_web": False,
+                }
+            ],
+        )
+
+        assistant_tool = next(
+            msg for msg in agent.chat_history if msg.get("tool_calls")
+        )
+        stored_arguments = assistant_tool["tool_calls"][0]["function"]["arguments"]
+        self.assertEqual(json.loads(stored_arguments)["query"], "pseudo fallback")
+        self.assertEqual(
+            _paired_tool_ids(agent.chat_history),
+            (["call-recover"], ["call-recover"]),
+        )
+
+    async def test_malformed_native_json_without_fallback_returns_structured_error(self):
+        native_call = ToolCall(
+            id="call-invalid",
+            name="search_papers",
+            arguments='{"query":"secret malformed payload"',
+        )
+        scholar = TrackingScholar()
+        model = FakeNativeToolThenTextModel(native_call, first_content="请处理工具调用")
+        agent = self._make_agent(model, scholar)
+
+        with patch(
+            "app.core.agents.writer_agent.redis_manager.publish_message",
+            new=AsyncMock(),
+        ):
+            result = await agent.run("写文献检索章节", sub_title="ques1")
+
+        self.assertEqual(result.response_content, "正文内容")
+        self.assertEqual(scholar.search_calls, [])
+        assistant_tool = next(
+            msg for msg in agent.chat_history if msg.get("tool_calls")
+        )
+        self.assertEqual(
+            assistant_tool["tool_calls"][0]["function"]["arguments"], "{}"
+        )
+        tool_result = next(
+            msg for msg in agent.chat_history if msg.get("role") == "tool"
+        )
+        error_payload = json.loads(tool_result["content"])
+        self.assertFalse(error_payload["ok"])
+        self.assertEqual(error_payload["error"]["code"], "invalid_arguments")
+        self.assertNotIn("secret malformed payload", tool_result["content"])
+
+        # Canonical history must also be consumable by Anthropic's follow-up
+        # conversion, which otherwise calls json.loads on tool arguments.
+        _system_prompt, anthropic_messages = AnthropicProvider()._convert_messages(
+            agent.chat_history
+        )
+        tool_use = next(
+            block
+            for msg in anthropic_messages
+            if msg.get("role") == "assistant"
+            for block in msg.get("content", [])
+            if block.get("type") == "tool_use"
+        )
+        self.assertEqual(tool_use["input"], {})
+
+    async def test_invalid_pseudo_numeric_does_not_trigger_search(self):
+        native_call = ToolCall(
+            id="call-invalid-pseudo",
+            name="search_papers",
+            arguments='{"query":"native payload"',
+        )
+        pseudo_content = _pseudo_search_content("pseudo query").replace(
+            "<parameter=limit>3</parameter>",
+            "<parameter=limit>not-a-number</parameter>",
+        )
+        scholar = TrackingScholar()
+        model = FakeNativeToolThenTextModel(native_call, first_content=pseudo_content)
+        agent = self._make_agent(model, scholar)
+
+        with patch(
+            "app.core.agents.writer_agent.redis_manager.publish_message",
+            new=AsyncMock(),
+        ):
+            await agent.run("写文献检索章节", sub_title="ques1")
+
+        self.assertEqual(scholar.search_calls, [])
+        tool_result = next(
+            msg for msg in agent.chat_history if msg.get("role") == "tool"
+        )
+        self.assertEqual(
+            json.loads(tool_result["content"])["error"]["code"],
+            "invalid_arguments",
+        )
+
+    async def test_non_object_missing_and_empty_query_never_call_scholar(self):
+        scholar = TrackingScholar()
+        agent = self._make_agent(None, scholar)
+        invalid_arguments = [
+            "[]",
+            '{"limit":3}',
+            '{"query":"   "}',
+        ]
+
+        with patch(
+            "app.core.agents.writer_agent.redis_manager.publish_message",
+            new=AsyncMock(),
+        ):
+            for index, arguments in enumerate(invalid_arguments):
+                result, papers = await agent._execute_search_papers(
+                    ToolCall(
+                        id=f"call-invalid-{index}",
+                        name="search_papers",
+                        arguments=arguments,
+                    )
+                )
+                payload = json.loads(result)
+                self.assertFalse(payload["ok"])
+                self.assertEqual(payload["error"]["code"], "invalid_arguments")
+                self.assertEqual(papers, [])
+
+        self.assertEqual(scholar.search_calls, [])
+
+    async def test_valid_native_call_is_not_repeated_for_pseudo_content(self):
+        native_call = ToolCall(
+            id="call-native",
+            name="search_papers",
+            arguments=json.dumps({"query": "native query", "limit": 2}),
+        )
+        scholar = TrackingScholar()
+        model = FakeNativeToolThenTextModel(
+            native_call,
+            first_content=_pseudo_search_content("different pseudo query"),
+        )
+        agent = self._make_agent(model, scholar)
+
+        with patch(
+            "app.core.agents.writer_agent.redis_manager.publish_message",
+            new=AsyncMock(),
+        ):
+            await agent.run("写文献检索章节", sub_title="ques1")
+
+        self.assertEqual(len(scholar.search_calls), 1)
+        self.assertEqual(scholar.search_calls[0]["query"], "native query")
+        self.assertEqual(_paired_tool_ids(agent.chat_history), (["call-native"], ["call-native"]))
 
 
 class WriterAgentToolCompatibilityTest(unittest.IsolatedAsyncioTestCase):

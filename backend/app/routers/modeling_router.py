@@ -2136,6 +2136,8 @@ async def run_resume_task_async(
             SystemMessage(content="任务已停止", type="warning"),
         )
     except Exception as e:
+        import traceback as _tb
+        logger.error("RESUME_TRACEBACK:\n" + _tb.format_exc())
         phase = "最终产物收尾失败" if workflow_completed else "任务续传失败"
         logger.error(f"任务 {task_id} {phase}: {type(e).__name__}")
         write_task_status(task_id, "failed", f"{phase}: {e}")

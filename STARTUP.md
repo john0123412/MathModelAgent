@@ -510,6 +510,11 @@ uv run python -m app.tools.export_cli task-refresh `
   --task-id <task_id> --profile cumcm2026 --local
 ```
 
+`task-refresh` 在预检无硬失败（`PASS` 或 `CONDITIONAL_PASS`）时继续重建交付物；
+只有硬门禁 `FAIL` 才拒绝。`huashubei` profile 的视觉/预检阈值另有部署放宽口径
+（内容边距 0.6cm、正文 35 页、关键词任意页、claim_trace ≤20 条不阻断），
+详见 `docs/md/PDF模板导出说明.md`。
+
 `--local` 只让刷新时优先检测 Windows 正式字体；没有该参数也不会改变模板合同。Docker
 调用时，两个输入文件必须先位于容器可见路径（例如任务目录的
 `/app/project/work_dir/<task_id>/`），然后执行同一组命令：

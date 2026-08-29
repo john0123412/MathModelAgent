@@ -3122,7 +3122,16 @@ def _check_claim_trace(trace: dict) -> dict:
     }
 
 
-def _claim_trace_check_severity(check: dict) -> str:
+def _claim_trace_check_severity(check: dict, export_profile: str | None = None) -> str:
+    # 华数杯部署放宽（仅 huashubei profile）：缺失追溯的声明不超过阈值(<=20)时不阻断导出，
+    # 仅当缺失过多(>20)才判 fail。cumcm2025/2026 与默认口径维持原有严格语义：
+    # 存在缺失追溯或弱措辞即 fail。
+    if export_profile == "huashubei":
+        if check.get("missing", 0) > 20 or check.get("strong_wording_weak", 0) > 20:
+            return "fail"
+        if not check.get("passed"):
+            return "conditional"
+        return "pass"
     if check.get("missing") or check.get("strong_wording_weak"):
         return "fail"
     if not check.get("passed"):
@@ -4545,7 +4554,8 @@ def build_preflight_report(
         # 语义排版属于人工/提示词复核项：保留 WARN 发现，但不改变主预检 PASS。
         "semantic_layout": _with_severity(semantic_layout_check, "info"),
         "claim_trace": _with_severity(
-            claim_trace_check, _claim_trace_check_severity(claim_trace_check)
+            claim_trace_check,
+            _claim_trace_check_severity(claim_trace_check, export_profile),
         ),
     }
     status = _preflight_status(checks)

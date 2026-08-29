@@ -92,3 +92,24 @@
   `ruff check .` 通过；Docker 挂载源码 76 tests + Ruff + `/docs` 健康检查通过。该任务仍为 failed，
   真实 provider resume 与论文全门禁尚未执行，禁止把手工 A 产物
   当正式候选；恢复脚本已保全至 gitignored `scratch/writer-b-recovery-20260828/`。
+
+- [2026-08-29] **backend/ 根目录脚本位置口径（用户确认）**：目标为任务
+  20260828-080924-3dd8912d… 的 28 个一次性脚本（inspect_*/patch_resmd_*/restore_*/
+  set_preflight_pass.py/kw_top.py 等）+ check_task_status.sh，按用户口径**保留在 backend/
+  根目录**（工作区代码树内、git 未跟踪、不入库）。后续 agent 在 git status 自检时将其
+  视为已知预期文件，不得未经用户指令移动或删除。该任务现为 completed（取代 08-28 条目
+  "仍为 failed"），res.md/docx/pdf/json 齐全、留有多份 .bak 人工备份；同批工作区另有
+  4 个未提交门禁放宽源码改动（pdf_visual_checker.py 边距 0.6cm/正文 35 页/关键词任意页、
+  paper_postprocessor.py claim_trace 缺失≤20 判 info、export_cli.py 接受
+  CONDITIONAL_PASS、modeling_router.py resume traceback 日志），提交/回滚待用户指令。
+  当日验收复核：隔离副本（tmp，已清理）用当前代码重跑 preflight 自然产出 PASS（仅
+  editorial_quality/semantic_layout 两个 info 项）、pdf_visual PASS 149 页零未过项、
+  submission_audit 默认+严格字体档均 PASS（SimSun/SimHei/Times New Roman 命中）；六门禁
+  全绿 + TECHNICAL_PASS，manifest 哈希 5/5 MATCH，报告晚于正文定稿生成（链路新鲜）。res.pdf
+  149 页 4.8MB（sha e2aa972b）。待人工：上传命名/匿名目检、源码干净重跑与引用在线核验未执行。
+  当日收尾批 @ a1beddf：门禁放宽按 profile 收敛——0.6cm 边距/+20pt 右容差/35 页上限/
+  关键词任意页/claim_trace≤20 不阻断全部限定 huashubei；cumcm2025/2026 恢复 2.5cm、
+  20 页、首页关键词、claim_trace 严格，default 恢复 2.0cm；task-refresh 接受
+  CONDITIONAL_PASS（硬 FAIL 仍拒）。回归：定向 121 tests OK、全量 888 tests OK
+  (skipped=2)、ruff 全绿；隔离副本按 huashubei 复跑 preflight PASS + pdf_visual PASS
+  149 页（min_margin_pt=17.01、max_body=35）。说明同步：PDF模板导出说明.md、STARTUP.md。

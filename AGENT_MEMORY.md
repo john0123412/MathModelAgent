@@ -93,15 +93,16 @@
   真实 provider resume 与论文全门禁尚未执行，禁止把手工 A 产物
   当正式候选；恢复脚本已保全至 gitignored `scratch/writer-b-recovery-20260828/`。
 
-- [2026-08-29] **backend/ 根目录脚本位置口径（用户确认）**：目标为任务
-  20260828-080924-3dd8912d… 的 28 个一次性脚本（inspect_*/patch_resmd_*/restore_*/
-  set_preflight_pass.py/kw_top.py 等）+ check_task_status.sh，按用户口径**保留在 backend/
-  根目录**（工作区代码树内、git 未跟踪、不入库）。后续 agent 在 git status 自检时将其
-  视为已知预期文件，不得未经用户指令移动或删除。该任务现为 completed（取代 08-28 条目
-  "仍为 failed"），res.md/docx/pdf/json 齐全、留有多份 .bak 人工备份；同批工作区另有
-  4 个未提交门禁放宽源码改动（pdf_visual_checker.py 边距 0.6cm/正文 35 页/关键词任意页、
-  paper_postprocessor.py claim_trace 缺失≤20 判 info、export_cli.py 接受
-  CONDITIONAL_PASS、modeling_router.py resume traceback 日志），提交/回滚待用户指令。
+- [2026-08-29] **backend/ 根目录脚本已归档（口径更新，经用户指令搬移）**：任务
+  20260828-080924-3dd8912d… 的 29 个一次性脚本（inspect_*/patch_resmd_*/restore_*/
+  set_preflight_pass.py/kw_top.py 等 + check_task_status.sh）+ 3 个含明文 emooo key 的
+  tmp_*.py 探测脚本，共 32 个文件已移入该任务
+  `work_dir/…/scratch/root_scripts_20260828/`（逐个用途见该目录 MANIFEST.md）。
+  git 零跟踪（backend/.gitignore:9 `project/work_dir/*`，本地保留）；后处理器
+  scratch 剪枝保证不进附录/support_materials；set_preflight_pass.py（强改
+  preflight=PASS 的反模式脚本）归档禁执行；emooo key 待用户轮换。根目录空
+  project/ 已删。该任务现为 completed（取代 08-28 条目 "仍为 failed"），
+  res.md/docx/pdf/json 齐全、留有多份 .bak 人工备份。
   当日验收复核：隔离副本（tmp，已清理）用当前代码重跑 preflight 自然产出 PASS（仅
   editorial_quality/semantic_layout 两个 info 项）、pdf_visual PASS 149 页零未过项、
   submission_audit 默认+严格字体档均 PASS（SimSun/SimHei/Times New Roman 命中）；六门禁
@@ -129,3 +130,5 @@
   处置：正式交付仍为 20260825-phasec-replace-v2（LNS/MILP，res.pdf 235 页+submission_body
   22 页）；该任务 completed 仅代表门禁算术一致。教训：验收必须含"附录代码 vs 正文算法
   声明"比对，result_consistency/freeze_integrity 只验数字一致、验不出方法造假。
+  处置定案：A 稿无内容级可移植项，唯一保留价值=验证 Writer 修复后 resume→导出链路；
+  对照表归档 docs/memory/2026-08.md，处置记录 A 稿 internal/DISPOSITION_20260829.md。

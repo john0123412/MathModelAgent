@@ -132,3 +132,8 @@
   声明"比对，result_consistency/freeze_integrity 只验数字一致、验不出方法造假。
   处置定案：A 稿无内容级可移植项，唯一保留价值=验证 Writer 修复后 resume→导出链路；
   对照表归档 docs/memory/2026-08.md，处置记录 A 稿 internal/DISPOSITION_20260829.md。
+  work_dir 清理（经用户指令）：20 目录 851MB→5 目录 263MB。保留=20260817-163525（微构体
+  题历史 PASS）、20260823-040225（v1 冻结稿 145 页 PASS）、20260825-phasec-replace-v2
+  （正式交付）、20260828-080924（否决稿+处置记录+归档脚本/待轮换 key）、
+  backup_frozen_task_20260824（v1 备份回退路径）；删除=Phase A 两沙盒（求解器已在 v2 有
+  副本）+13 个 failed/cancelled/interrupted 任务目录。

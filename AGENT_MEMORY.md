@@ -19,28 +19,16 @@
   门禁算术一致），处置记录在其 internal/DISPOSITION_20260829.md。
 - 该任务 scratch/root_scripts_20260828/ **仅剩 MANIFEST.md**：32 个 backend 根目录一次性脚本
   08-29 23:03 被并行清理删除、工作区无副本（本文件旧条目"保留归档脚本"作废，以本条为准）；
-  3 个含明文 emooo key 的 tmp_*.py 一并消失，**key 仍待轮换**。
-- **活跃任务 20260829-151338-f3652c56（2026 华数杯 C 题重跑）**：Modeler 完成（checkpoint
-  23:15）；23:24 曾因缺 E2B_API_KEY resume 失败；23:33 并行会话以
-  docker-compose.local-execution.yml 重建 backend（CODE_INTERPRETER_KIND=local、
-  ALLOW_LOCAL_CODE_EXECUTION=true，E2B_API_KEY 仍缺），23:34 resume 进入 Coder，本地解释器
-  执行正常（迭代自修复中）。本任务同时验证 114b938 Writer 修复后的 resume→导出全链路；
-  终态以 task_status.json 与门禁报告为准。
-- **上任务终态（08-29 深夜）**：ques1 真实通过（RMSE 5.40≤10、R²_test 0.333 如实偏低）；
-  ques2 初版 pivot 字典方向 bug 全零→execution-review 打回修复（基线 1.8B 真实，ε 前沿仅
-  2 点且一点=基线）；ques3 仍零解（储能零充放、5/6 区域基线丢失），质量返修预算每任务
-  一次已耗尽（409），任务停于 waiting_quality_review（review_id 3a38c70d…），拒绝批准零解
-  进 Writer。教训：机器质量筛查查不出全零退化解；返修预算应留给最重子题。
-- **v4 重跑已发起（08-29 深夜，同一题面/附件/huashubei/require_model_review）**：预注入
-  全部确诊 bug 模式（列名清单/字典方向/区域自检/零解断言/跨问基线一致/ε 单调/禁硬编码）。
-  .env.dev 已回退 agnes-2.5-flash @ apihub.agnes-ai.com/v1（用户供 key，仅存 gitignored
-  .env.dev）。
-- **v4 终态（failed，已停止自动重试）**：Modeler 计划合格并批准；ques1 证据 3 次被拒
-  （metrics 值 538.0/144.0 无法在绑定 source_path 中复查）→ 注入绑定修复引导 resume →
-  熔断器 PLAN_CONFLICT 立即触发（evidence_failure_budget 跨 resume 持久化，须修正计划）。
-  结论：三轮自动运行（20260828 原始、v3、v4）均止于不同门禁，唯一走完全程的是 v1
-  （→v2 交付）。若再战 v5：必须在 ModelPlan 层面规定验收表格式（每指标值写入
-  acceptance CSV 并绑定自身路径），并把 revise-modeling 预算留给计划层修正。
+  3 个含明文 emooo key 的 tmp_*.py 一并消失（key 已由用户轮换，2026-08-30 确认，风险关闭）。
+- **重跑战役 v3-v14（08-29~30，12 轮，agnes flash）**：死因逐轮确诊并修复——证据 id 三处
+  一致（自动绑定）、零解断言、pivot 字典方向、数据地基自检、ques3 LP 新能源项口径（等式漏
+  新能源项→残差=新能源量级）、pro 模型 key 无权限、XGBoost 未装→sklearn GBR+滞后特征、
+  容器被并行 compose up 重建（ExitCode=0 非 OOM）后"本轮未更新"拒证据。**v8/v9 证明
+  ques1/2 可真实通过**（RMSE 90.76≤120、R² 0.346≥0）；v10 起注入 LP/预测逐字模板于
+  tmp/renun_20260829/。**当前墙：08-30 12:10 起容器到 Cloudflare 网段（apihub/1.1.1.1）
+  Errno 101/timeout，宿主机 200 正常，backend 与 Docker Desktop 重启均无效（pypi/百度可达）**
+  ——疑宿主防火墙/安全软件拦 Docker NAT 流量，待用户处置（或提供本地代理端口设
+  LLM_OUTBOUND_PROXY）。恢复后一键重启 v15：创建→waiting_review→注入 id 表+模板→批准。
 
 ## 门禁与导出基线（a1beddf，2026-08-29 入库）
 
@@ -63,7 +51,6 @@
 
 ## 待人工 / 待办
 
-- emooo 中转站 key 轮换（明文曾入已删 tmp_*.py，key 本体仍有效）。
 - 平台上传三件事（文件命名 / 匿名目检 / 诚信声明）；tag 动作待指令：
   `git tag -f v2026.08.24-paper-final 37391e8 && git push origin v2026.08.24-paper-final`。
 - 20260828 两个低危观察待决策：5.3 节"SOC 恰好回到初始值"与数据不符；全篇无论文献区。

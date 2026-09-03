@@ -144,8 +144,15 @@ async def get_download_url(task_id: str, filename: str):
     file_path = safe_join_work_dir(safe_task_id, safe_filename)
     if not os.path.isfile(file_path):
         raise HTTPException(status_code=404, detail="文件不存在")
+    relative_path = f"/static/{safe_task_id}/{safe_filename}"
+    base = (settings.SERVER_HOST or "").rstrip("/")
+    absolute = f"{base}{relative_path}" if base else relative_path
     return {
-        "download_url": f"{settings.SERVER_HOST}/static/{safe_task_id}/{safe_filename}"
+        "download_url": absolute,
+        "path": relative_path,
+        "url": relative_path,
+        "download_url_absolute": absolute,
+        "download_url_relative": relative_path,
     }
 
 
@@ -195,8 +202,15 @@ async def get_download_all_url(task_id: str):
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="任务不存在") from exc
     _create_task_archive(work_dir)
+    relative_path = f"/static/{safe_task_id}/{ARCHIVE_FILENAME}"
+    base = (settings.SERVER_HOST or "").rstrip("/")
+    absolute = f"{base}{relative_path}" if base else relative_path
     return {
-        "download_url": f"{settings.SERVER_HOST}/static/{safe_task_id}/{ARCHIVE_FILENAME}"
+        "download_url": absolute,
+        "path": relative_path,
+        "url": relative_path,
+        "download_url_absolute": absolute,
+        "download_url_relative": relative_path,
     }
 
 

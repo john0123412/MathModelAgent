@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 from pathlib import Path
 from datetime import datetime
 
@@ -124,6 +125,54 @@ def _feature_guardrail_warnings() -> list[dict[str, str]]:
     return warnings
 
 
+def _get_deployment_info() -> dict:
+    """返回 Agent 可读的部署信息（不含凭据）。"""
+    info: dict = {
+        "source_mounted": False,
+        "git_commit": None,
+        "git_dirty": None,
+        "capability_version": "2026-09-03-roadmap-A",
+    }
+    # 源码是否通过 volume 挂载（开发模式）
+    try:
+        # backend/app 挂载时，宿主机 .git 往往不在容器内；通过检查 /app/app 是否为挂载点近似判断
+        info["source_mounted"] = os.path.ismount("/app/app") or os.path.exists("/app/app/.git") or os.path.exists("/app/.git")
+        if not info["source_mounted"]:
+            # 宿主机开发挂载时，WORK_DIR 通常也是挂载
+            info["source_mounted"] = os.path.ismount("/app/project/work_dir")
+    except Exception:
+        pass
+    # git 信息（尽量不依赖 git 二进制，优先读环境变量）
+    env_commit = os.getenv("GIT_COMMIT") or os.getenv("MMA_GIT_COMMIT")
+    if env_commit:
+        info["git_commit"] = env_commit[:40]
+        # dirty 由外部注入 MMA_GIT_DIRTY 显式标记，否则未知
+        dirty_env = os.getenv("MMA_GIT_DIRTY")
+        if dirty_env is not None:
+            info["git_dirty"] = dirty_env.lower() in ("1", "true", "dirty")
+        return info
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL, timeout=2
+        ).decode().strip()
+        info["git_commit"] = commit
+        try:
+            porcelain = subprocess.check_output(
+                ["git", "status", "--porcelain"], stderr=subprocess.DEVNULL, timeout=2
+            ).decode().strip()
+            info["git_dirty"] = bool(porcelain)
+        except Exception:
+            info["git_dirty"] = None
+    except Exception:
+        # 容器内无 git 或非 git 目录，保留 None 避免误报可复现
+        pass
+    # 镜像标识（若构建时注入）
+    image_tag = os.getenv("MMA_IMAGE_TAG") or os.getenv("IMAGE_TAG")
+    if image_tag:
+        info["image_tag"] = image_tag
+    return info
+
+
 @router.get("/")
 async def root():
     return {"message": "Hello World"}
@@ -138,6 +187,7 @@ async def config():
         "max_chat_turns": settings.MAX_CHAT_TURNS,
         "max_retries": settings.MAX_RETRIES,
         "CORS_ALLOW_ORIGINS": settings.CORS_ALLOW_ORIGINS,
+        "deployment": _get_deployment_info(),
     }
 
 
@@ -176,6 +226,7 @@ async def get_service_status():
         },
         "redis": {"status": "unknown", "message": "Redis connection status unknown"},
         "code_execution": get_code_execution_status(),
+        "deployment": _get_deployment_info(),
     }
 
     # 检查Redis连接状态

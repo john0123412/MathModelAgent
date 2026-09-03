@@ -1,6 +1,6 @@
 """建模任务路由模块，提供任务创建、API 验证和配置管理等接口。"""
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, Header, UploadFile
 from app.core.checkpoint import CheckpointManager, TaskCheckpoint
 from app.core.workflow import MathModelWorkFlow
 from app.schemas.enums import CompTemplate, ExportProfile, FormatOutPut
@@ -15,6 +15,17 @@ from app.services.task_status import (
     write_task_status_to_dir,
 )
 from app.services.token_usage import USAGE_REPORT_FILENAME
+from app.services.idempotency import (
+    check_idempotency,
+    compute_file_hashes,
+    compute_guidance_hash,
+    record_idempotency,
+)
+from app.services.agent_operations import (
+    get_single_task_status,
+    get_task_artifacts,
+    get_task_events,
+)
 from app.schemas.request import DEFAULT_MODELING_EXPORT_PROFILE, Problem
 from app.schemas.A2A import ModelerToCoder
 from app.schemas.response import SystemMessage
@@ -427,6 +438,7 @@ class GuidanceRequest(BaseModel):
     content: str
     purpose: Literal["modeling", "execution", "review", "recovery"] = "review"
     source: Literal["codex", "operator"] = "operator"
+    guidance_id: str | None = None
 
 
 class GuidanceResponse(BaseModel):
@@ -434,6 +446,8 @@ class GuidanceResponse(BaseModel):
     target: str
     status: str
     audit_file: str
+    guidance_id: str | None = None
+    consumed: bool = False
 
 
 def _require_safe_task_id(task_id: str) -> str:
@@ -803,6 +817,7 @@ async def modeling(
         "review"
     ),
     files: list[UploadFile] = File(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     if len(ques_all) > settings.MAX_PROBLEM_TEXT_CHARS:
         raise HTTPException(status_code=413, detail="题目文本超过大小上限")
@@ -854,6 +869,50 @@ async def modeling(
         logger.exception("保存上传文件失败")
         raise HTTPException(status_code=400, detail="保存上传文件失败")
 
+    # Idempotency check (roadmap B-2): same key + same content -> replay, same key + different -> 409
+    try:
+        file_hashes = compute_file_hashes(uploaded_records)
+        guidance_hash = compute_guidance_hash(guidance_content)
+        # comp_template/format_output/export_profile may be enums
+        ct_val = comp_template.value if hasattr(comp_template, "value") else str(comp_template)
+        fo_val = format_output.value if hasattr(format_output, "value") else str(format_output)
+        ep_val = export_profile.value if hasattr(export_profile, "value") else str(export_profile)
+        from app.services.idempotency import build_request_hash
+
+        request_hash = build_request_hash(ques_all, ct_val, fo_val, ep_val, file_hashes, guidance_hash)
+        existing, conflict = check_idempotency(idempotency_key, request_hash)
+        if conflict:
+            shutil.rmtree(work_dir, ignore_errors=True)
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error_code": "idempotency_conflict",
+                    "message": conflict,
+                    "retryable": False,
+                    "idempotency_key": idempotency_key,
+                },
+            )
+        if existing:
+            shutil.rmtree(work_dir, ignore_errors=True)
+            # Replay: return original task without creating new work
+            try:
+                status_payload = get_single_task_status(existing)
+                return {
+                    "task_id": existing,
+                    "status": status_payload.get("task_status", "processing"),
+                    "idempotent_replay": True,
+                    "idempotency_key": idempotency_key,
+                }
+            except FileNotFoundError:
+                # Stale mapping, fall through to create new
+                pass
+            except Exception:
+                return {"task_id": existing, "status": "processing", "idempotent_replay": True, "idempotency_key": idempotency_key}
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"幂等检查失败，继续创建新任务: {type(exc).__name__}")
+
     # Reserve before the first scheduling-side effect.  If Redis, audit,
     # publish, or direct runner setup fails, the exact token is released.
     reserved_cancel_event = _reserve_active_task(task_id)
@@ -894,10 +953,23 @@ async def modeling(
             export_profile,
             require_model_review=require_model_review,
         )
+        # Record idempotency after successful reservation
+        try:
+            file_hashes = compute_file_hashes(uploaded_records)
+            guidance_hash = compute_guidance_hash(guidance_content)
+            ct_val = comp_template.value if hasattr(comp_template, "value") else str(comp_template)
+            fo_val = format_output.value if hasattr(format_output, "value") else str(format_output)
+            ep_val = export_profile.value if hasattr(export_profile, "value") else str(export_profile)
+            from app.services.idempotency import build_request_hash
+
+            request_hash = build_request_hash(ques_all, ct_val, fo_val, ep_val, file_hashes, guidance_hash)
+            record_idempotency(idempotency_key, request_hash, task_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"记录幂等键失败: {type(exc).__name__}")
     except BaseException:
         _release_active_task(task_id, reserved_cancel_event)
         raise
-    return {"task_id": task_id, "status": "processing"}
+    return {"task_id": task_id, "status": "processing", "idempotency_key": idempotency_key}
 
 
 async def run_modeling_task_async(
@@ -1031,7 +1103,22 @@ async def queue_guidance(task_id: str, request: GuidanceRequest):
     content = user_input_queue.normalize_content(request.content.strip())
     if not content:
         raise HTTPException(status_code=422, detail="引导内容不能为空")
-    if not user_input_queue.push(safe_task_id, content, request.target):
+    # Idempotent guidance: same guidance_id returns existing receipt without duplicating queue
+    if request.guidance_id:
+        existing = user_input_queue.get_guidance_receipt(safe_task_id, request.guidance_id)
+        if existing is not None:
+            status = existing.get("status", "accepted")
+            audit_file = "internal_guidance_audit.jsonl"
+            # If already consumed, report consumed, else accepted
+            return GuidanceResponse(
+                task_id=safe_task_id,
+                target=request.target,
+                status="consumed" if status == "consumed" else "accepted",
+                audit_file=audit_file,
+                guidance_id=request.guidance_id,
+                consumed=(status == "consumed"),
+            )
+    if not user_input_queue.push(safe_task_id, content, request.target, guidance_id=request.guidance_id):
         raise HTTPException(status_code=429, detail="引导队列已满或目标无效")
 
     audit_file = _append_guidance_audit(
@@ -1052,8 +1139,10 @@ async def queue_guidance(task_id: str, request: GuidanceRequest):
     return GuidanceResponse(
         task_id=safe_task_id,
         target=request.target,
-        status="queued",
+        status="accepted",
         audit_file=audit_file,
+        guidance_id=request.guidance_id,
+        consumed=False,
     )
 
 

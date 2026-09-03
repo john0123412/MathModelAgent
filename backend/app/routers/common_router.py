@@ -379,3 +379,45 @@ async def list_tasks():
     # 按创建时间倒序排列
     tasks.sort(key=lambda x: x["created_at"], reverse=True)
     return tasks
+
+
+@router.get("/tasks/{task_id}")
+async def get_single_task(task_id: str):
+    """Roadmap B-2: 单任务状态（不扫描全部历史目录）。"""
+    from app.services.agent_operations import get_single_task_status
+
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        return get_single_task_status(safe_task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/tasks/{task_id}/events")
+async def get_task_events(task_id: str, after: str | None = None, limit: int = 50):
+    """Roadmap B-2: 消息游标（稳定序号，仅增量）。"""
+    from app.services.agent_operations import get_task_events as _get_events
+
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        return _get_events(safe_task_id, after=after, limit=limit)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/tasks/{task_id}/artifacts")
+async def get_task_artifacts(task_id: str):
+    """Roadmap B-2: 产物清单（复用 manifest + 哈希）。"""
+    from app.services.agent_operations import get_task_artifacts as _get_artifacts
+
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        return _get_artifacts(safe_task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

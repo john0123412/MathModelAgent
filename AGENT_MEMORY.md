@@ -73,4 +73,4 @@
 - [09-03 优化轮] Q1基线对照（朴素72.86 vs GBR 54.99，+24.53%，notebook补Q1 cell）；6.1.1重写
   真实OAT+表6弹性；表号1-8重排、空6.2删、6.3并7.2、关键词标准词。终态74页正文30全绿。
 - [2026-09-03] LP fdd491（完整 ID 见归档）已 completed / TECHNICAL_PASS；default 预检条件项、审计 WARN 仍需复核。外审发现正文数值/图文/排版问题，保留现稿待受控返修。7 cell 新内核重跑、3 表 MATCH；详 docs/memory/2026-09.md。
-- [2026-09-03] 未提交修复：default 条件放行限定显式 profile，失败 sensitivity 不向 Writer 传数值/图；paper_review 三版本必填且写前校验，缺失产物判 stale。52 项定向单测、ruff、Compose config 通过。
+- [2026-09-04] PR #40 已合并 main（merge 68cb89d）：批 A-F+P1/P2+P2 边界（default 条件放行限定显式 profile、失败 sensitivity 不向 Writer 传数值/图、paper_review 三版本写前校验）+finalize 失败清理半成品 manifest+旧断言同步批 A 契约；CI 全量 905 项转绿（此前分支 CI 一直失败）。

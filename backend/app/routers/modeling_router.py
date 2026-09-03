@@ -388,6 +388,13 @@ def _finalize_docx_and_manifest(
                             os.remove(orig)
                     except OSError:
                         pass
+        # 首轮运行没有旧备份可回滚时，循环不会覆盖新写出的清单；
+        # 审计失败后必须移除这份从未通过校验的 candidate_manifest，避免假发布。
+        if manifest_path not in backups and os.path.isfile(manifest_path):
+            try:
+                os.remove(manifest_path)
+            except FileNotFoundError:
+                pass
         raise
 
 

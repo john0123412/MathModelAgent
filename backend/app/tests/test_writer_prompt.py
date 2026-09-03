@@ -25,7 +25,7 @@ class TestWriterPrompt(unittest.TestCase):
     def test_abstract_length_is_quality_target_not_official_rule(self):
         prompt = get_writer_prompt(FormatOutPut.Markdown)
 
-        self.assertIn("摘要信息密度和首屏可读性的内容质量目标", prompt)
+        self.assertIn("摘要信息完整度和首屏可读性的内容质量目标", prompt)
         self.assertIn("不是 CUMCM 官方页数规则或硬性字数规定", prompt)
 
 

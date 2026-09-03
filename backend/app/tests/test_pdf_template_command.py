@@ -235,7 +235,7 @@ class TestPdfTemplateCommand(unittest.TestCase):
             self.assertLess(appendix_marker, captured["pdf_markdown"].index("# 附录"))
 
     def test_pdf_command_huashubei_profile_uses_confirmed_margin_baseline(self):
-        """huashubei profile 先按国赛基线 2.5cm 接入，等待官方规范发布后复核。"""
+        """huashubei profile 基线：2.5cm 页边距 + 11pt/1.3 正文（批 A-1 收敛），官方规范发布后复核。"""
         with tempfile.TemporaryDirectory() as work_dir:
             md_path = os.path.join(work_dir, "res.md")
             pdf_path = os.path.join(work_dir, "res.pdf")
@@ -255,8 +255,8 @@ class TestPdfTemplateCommand(unittest.TestCase):
         command = run_mock.call_args.args[0]
         self.assertIn("documentclass=ctexart", command)
         self.assertIn("geometry:left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm", command)
-        self.assertIn("fontsize=12pt", command)
-        self.assertIn("linestretch=1.6", command)
+        self.assertIn("fontsize=11pt", command)
+        self.assertIn("linestretch=1.3", command)
         self.assertTrue(
             any(r"\fontsize{14pt}{16.8pt}" in item and r"\centering" in item for item in command)
         )

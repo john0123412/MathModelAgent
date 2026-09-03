@@ -188,8 +188,8 @@ HUASHUBEI_PROFILE = ExportProfileConfig(
     key=ExportProfile.HUASHUBEI,
     label="华数杯模板",
     description=(
-        "按现有 Huashubei 模板做版式参数级接入：A4、12pt、2.5cm 页边距、"
-        "1.6 倍行距和 14pt 居中一级标题；官方规范发布后需复核。"
+        "按现有 Huashubei 模板做版式参数级接入：A4、11pt、2.5cm 页边距、"
+        "1.3 倍行距和 14pt 居中一级标题；官方规范发布后需复核。"
     ),
     pdf_variables=[
         "documentclass=ctexart",

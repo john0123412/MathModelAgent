@@ -8,19 +8,7 @@
 - [2026-07](docs/memory/2026-07.md) —— 华数杯前史与早期工程修复
 - [2026-08](docs/memory/2026-08.md) —— 更早 235 条 + 2026-08-29 压缩轮出的 08-26~08-29 全部详细条目
 
-## 正式交付与任务现状（2026-08-29 深夜）
-
-- 正式交付=work_dir/20260825-phasec-replace-v2/（TECHNICAL_PASS）；work_dir 保留5目录定案、
-  A稿否决、0826-0829 细节均已轮出 docs/memory/2026-08.md「主文件轮出」节。
-
-## 门禁与导出基线（a1beddf，2026-08-29 入库）
-
-- huashubei profile：0.6cm 边距 / +20pt 右余量 / 35 页上限 / 关键词任意页 / claim_trace≤20
-  不阻断（pdf_visual_checker.py HUASHUBEI_* 常量+条件分支）；cumcm2025/2026 = 2.5cm、20 页、
-  首页关键词、claim_trace 严格；default = 2.0cm；export_cli 接受 CONDITIONAL_PASS（硬 FAIL 仍拒）。
-  **复跑 0825/0828 族任务必须 profile=huashubei，否则按严格基线卡。**
-- 全量回归口径：backend 下 `python -m unittest discover app/tests` 888 OK (skipped=2) +
-  `ruff check app` 全绿；跨 worktree 验收必须"待测代码树 + 原生 venv"。
+- 8 月交付/导出基线已轮转至 docs/memory/2026-08.md；0825/0828 族复跑须用 huashubei。
 
 ## 仓库归属与环境要点
 
@@ -40,15 +28,9 @@
 
 ## v23 算电协同·去伪造重建（2026-09-02 落地，task=20260830-234433-4b3226317d54a94062be7a3379cf1a10）
 
-- **真值复现**：QMkhv8（清空 `internal/audit_20260901/q4_mc_cache` 后重跑 q4_model.py，26min）
-  得到 `CI半宽=0.0597`、`mean_cost=1,331,802,275.35` ——与论文 `res.md` 引用**逐字吻合**。
-  之前 `0.0683 / 1,343,892,334` 是 per-sample `RandomState(42+i)` 的 RNG 漂移假象。
-- **产物全真**：notebook 4 code cell 全部 `ec=1` + 真实 stdout；cell 8 由 `patch_q4_cell.py`
-  注入 QMkhv8 日志（1346 chars，Traceback=0）。`ques4_uncertainty_ci.png`（08-31 伪图）由
-  `draw_q4_ci.py` 用 50 MC 真实样本重绘（双面板：直方图 + 序列带）。
-- **清单 rebind**：`rebind_manifest.py`（不调 trusted writer，走"rebind→hash 重算→委托
-  _check_constraint"）刷新 `execution_validation.json` + `frozen_results.json` 全部约束
-  actual/metric value + source.sha256 + figure.data_sha256。
+- **真值与血统（已被 09-02~09-03 多轮更新覆盖）**：notebook 4 code cell 全真实执行；Q4 曾因
+  `scenario_objective_range` 方向写反误报，修后 100 样本真实达标；frozen/manifest 走
+  rebind→hash 重算受控刷新。当前冻结数字以 09-03 终态为准（MC 均值 1,284,013,383）。
 - **Q4 争议已消解（09-02 17:00 轮）**：原 Q4 失败是 `scenario_objective_range` **约束方向写
   反**（写成 `lte 0.5`，实为 `gte 0.05`），不是模型不行。修 `lp_core.py`/`q4_model.py` 后按
   **100 样本真实重算**（q4_rerun5）：非支配 6≥5、CI 0.0457≤0.05、一致性 6.1e-05≤0.01、
@@ -64,20 +46,12 @@
   compress_resmd2.py, regen_pdf.py, **fix_appendix.py, fix_support_caption.py,
   reconcile_gates2.py**}`。复用原则：任务级脚本只放 work_dir 内部审计子目录（见 AGENTS.md
   工作区防污染铁律）。详细过程见 `.workbuddy-ai/memory/2026-09-02.md`。
-- [09-02 第五/六轮] P0-P3 收敛+摘要重构：jupyter_client 真实重跑 cell2/6/8、frozen 哈希受控重绑、
-  附录重建+表7表题、摘要 5 段 839 字、huashubei→cumcm_formal 编辑政策、writer.py 提示词 600-900 字
-  ≥4 段。六门禁 TECHNICAL_PASS。陷阱：append_code_appendix 必跟 fix_support_caption.py。详见
-  docs/memory/2026-09.md。
-- [09-02/03 第七轮] 审计新发现已修：11 孤立引用行删除、9 悬空文献内嵌（Mavrotas 张冠李戴
-  {[6]}→[9]）、重复 6.2→6.3；BZD AI 痕迹审计 24.5→复评约21（🟢边缘）：选型闭环/图表锚点/
-  网格必要性/去"融合"/溯源 五项改进并重导，TECHNICAL_PASS 12/12。教训：reference_format
-  门禁验"有引用"验不出"挂句上"。报告 internal/audit_20260901/AI_trace_audit_report.html。
-- [09-03 精修轮] 外审86-89→四项方法语义对齐落地：①Q2 全文统一"碳价λ扫描+LP对偶边际定价"
-  （ε-约束仅留方法学对比）；②真实支配检验：6 候选→非支配 {lam0,lam1500}，CSV+frozen
-  (pareto_point_count 5.0→2.0)+notebook 同步重绑；③Q3 披露 N^cycle=1.5 次/日循环约束+标定
-  （基准 0.64-0.83 次/日）+敏感性；④Q4 降格"固定迁移下多情景电力层再优化"，三维非支配+MC 聚合
-  代理口径；⑤成本 CI 与 Wilson CI 拆分、±2.94%→±4.57%、关键词换五项。修 7.1 断尾+7.2 真实局限。
-  正文压回 30 页。终态 PDF 72 页、TECHNICAL_PASS 12/12、五件哈希 MATCH。
+- [09-02 第五~七轮+09-03 精修轮] P0-P3收敛、摘要5段、提示词/编辑政策治本；审计修复（11孤立
+  引用删、9悬空内嵌、Mavrotas{[6]}→[9]、6.2→6.3、AI审计24.5→约21）；外审86-89→四项语义对齐
+  （Q2统一λ扫描+对偶定价+真实支配检验{lam0,lam1500}、Q3披露循环约束1.5次/日+敏感性、Q4降格
+  固定迁移再优化、CI拆分±4.57%、关键词五项、7.2真实局限）。终态PDF 72页正文30、TECHNICAL_PASS
+  12/12、五件哈希MATCH。陷阱：append_code_appendix 必跟 fix_support_caption.py。
+  详文 docs/memory/2026-09.md。
 
 ## Agent 调用 Docker 后端路线图（2026-09-03，PR #40）
 
@@ -89,3 +63,14 @@
 - **批 E**：`figure_plan` 路由（data/template/diagram/physical）+ 多面板+追溯校验；`doctor` 容器体检与模板能力表（`huawei→huaweibei` 别名，后端仅 4 profile）。
 - **批 F**：`test_agent_docker_backend.py` 10 项契约验收 + 轻量 LP 烟雾题 + 完整链路哈希核对；`STARTUP.md` 增 Agent 调用手册。
 - 取证：`mathmodel_workspace_0.0.15 (323 MB)`；验证：`task_client doctor` + `docker compose config` + `unittest` 10/10。
+
+- [09-03 LNS升级实测→不采纳] v2 LNS全链本机跑通（MILP 22s/次、单算子7候选0违反），但缝合验证
+  判死：LNS自口径改进−0.4%，跨当前 lp_core+份额口径 1833.7M > 贪心λ点 1440.1M（anchor vs share
+  口径差27%不可通约）。强行缝合=新造假链。决策：保留88-90全绿交付态，LNS产物留v2目录不进主链；
+  快照未动；"聚合近似"扣分如实保留在论文7.2。
+- [09-03 LNS终局] milp options"threads"致Not Set（已修）；share口径负优化−0.07%+GPU违反2→242，
+  双重证伪终结。
+- [09-03 优化轮] Q1基线对照（朴素72.86 vs GBR 54.99，+24.53%，notebook补Q1 cell）；6.1.1重写
+  真实OAT+表6弹性；表号1-8重排、空6.2删、6.3并7.2、关键词标准词。终态74页正文30全绿。
+- [2026-09-03] LP fdd491（完整 ID 见归档）已 completed / TECHNICAL_PASS；default 预检条件项、审计 WARN 仍需复核。外审发现正文数值/图文/排版问题，保留现稿待受控返修。7 cell 新内核重跑、3 表 MATCH；详 docs/memory/2026-09.md。
+- [2026-09-03] 未提交修复：default 条件放行限定显式 profile，失败 sensitivity 不向 Writer 传数值/图；paper_review 三版本必填且写前校验，缺失产物判 stale。52 项定向单测、ruff、Compose config 通过。

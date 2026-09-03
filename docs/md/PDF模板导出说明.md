@@ -149,6 +149,12 @@ PDF 只允许字体、字号、行距、`geometry`、A4 和最小内容边距；
 > 正式字体、主交付文件和完整源码附录均通过时才为 `TECHNICAL_PASS`。该状态仍不替代数学、引用、
 > PDF 人工翻阅及平台规则的人工复核，报告会始终标注 `PENDING_HUMAN_REVIEW`。
 
+最终技术验收仅对显式 `export_profile=default` 接受预检 `CONDITIONAL_PASS`、提交审计
+`WARN/CONDITIONAL_PASS`，并在检查项保留原状态与 `warning` 严重性。缺失或未知 profile、
+`huashubei`、`cumcm2025/2026` 保持原先的严格 PASS 要求。所有 profile 的硬 `FAIL`、报告缺失、
+执行验证、冻结来源、PDF 视觉、字体、主产物哈希和完整源码附录门禁均未放宽。
+该例外仅表示通用任务可交付，不能把条件项视为已完成人工复核。
+
 > **TeX Live 本机复核边界**：已安装 TeX Live 的 Windows 主机可在执行验证、冻结和正文预检均通过后，
 > 用 `export_cli pdf --local --update-status` 或导出的 `latex_project/` 进行正式字体 PDF 复核。
 > TeX 编译只验证排版和字体，不能把 `execution_validation_report.json = FAIL` 的任务变为可验收论文。

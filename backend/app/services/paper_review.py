@@ -43,6 +43,19 @@ def _file_sha256(path: Path) -> str | None:
     return h.hexdigest()
 
 
+def _current_versions(work_dir: Path) -> dict[str, str | None]:
+    try:
+        manifest = json.loads((work_dir / "candidate_manifest.json").read_text(encoding="utf-8"))
+        artifact_set_id = manifest.get("artifact_set_id")
+    except (OSError, ValueError, AttributeError):
+        artifact_set_id = None
+    return {
+        "manuscript_sha256": _file_sha256(work_dir / "res.md"),
+        "frozen_result_id": _file_sha256(work_dir / "frozen_results.json"),
+        "artifact_set_id": artifact_set_id,
+    }
+
+
 def assemble_review_packet(task_id: str) -> dict[str, Any]:
     """Collect evidence for outer Agent review. Does not call LLM."""
     work_dir = Path(get_work_dir(task_id))
@@ -138,13 +151,8 @@ def assemble_review_packet(task_id: str) -> dict[str, Any]:
                     packet["paper"]["res.md_preview"] = text[:2000]
                 except Exception:
                     pass
-    # Artifact set
-    try:
-        cm = work_dir / "candidate_manifest.json"
-        if cm.is_file():
-            packet["artifact_set_id"] = json.loads(cm.read_text(encoding="utf-8")).get("artifact_set_id")
-    except Exception:
-        pass
+    # Return every binding that the reviewer must echo at submission time.
+    packet.update(_current_versions(work_dir))
 
     # Persist packet for audit
     try:
@@ -157,28 +165,10 @@ def assemble_review_packet(task_id: str) -> dict[str, Any]:
 
 def _is_stale(task_id: str, review: dict[str, Any]) -> bool:
     work_dir = Path(get_work_dir(task_id))
-    for key in ["manuscript_sha256", "frozen_result_id", "artifact_set_id"]:
-        stored = review.get(key)
-        if not stored:
-            continue
-        # Compare with current file hash; deletion (cur is None) is also stale (P1 review)
-        if key == "manuscript_sha256":
-            cur = _file_sha256(work_dir / "res.md")
-            if cur != stored:
-                return True
-        elif key == "frozen_result_id":
-            cur = _file_sha256(work_dir / "frozen_results.json")
-            if cur != stored:
-                return True
-        elif key == "artifact_set_id":
-            try:
-                cm = json.loads((work_dir / "candidate_manifest.json").read_text(encoding="utf-8"))
-                cur = cm.get("artifact_set_id")
-                if cur and cur != stored:
-                    return True
-            except Exception:
-                pass
-    return False
+    return any(
+        not current or review.get(key) != current
+        for key, current in _current_versions(work_dir).items()
+    )
 
 
 def save_review(task_id: str, review: dict[str, Any]) -> Path:
@@ -186,7 +176,7 @@ def save_review(task_id: str, review: dict[str, Any]) -> Path:
     work_dir = Path(get_work_dir(task_id))
 
     # Required fields
-    required = ["reviewer_type", "manuscript_sha256", "findings"]
+    required = ["reviewer_type", "manuscript_sha256", "frozen_result_id", "artifact_set_id", "findings"]
     for field in required:
         if field not in review:
             raise ValueError(f"评审缺少必需字段: {field}")
@@ -197,7 +187,9 @@ def save_review(task_id: str, review: dict[str, Any]) -> Path:
         raise ValueError("scores 必须为对象")
     for dim, _ in SIX_DIMENSIONS:
         val = scores.get(dim, "not_assessed")
-        if val != "not_assessed" and not (isinstance(val, (int, float)) and 0 <= val <= 10):
+        if val != "not_assessed" and not (
+            isinstance(val, (int, float)) and not isinstance(val, bool) and 0 <= val <= 10
+        ):
             raise ValueError(f"维度 {dim} 分数必须为 0-10 或 not_assessed")
 
     # Findings must have location and suggested scope
@@ -213,21 +205,15 @@ def save_review(task_id: str, review: dict[str, Any]) -> Path:
         if f["suggested_scope"] not in {"model", "numeric", "manuscript", "layout", "citation"}:
             raise ValueError(f"findings[{idx}].suggested_scope 必须为 model/numeric/manuscript/layout/citation")
 
-    # Bind to current artifact versions
+    # Never fill absent bindings with the current version: that would turn an
+    # old review into an apparent review of files the reviewer has not seen.
+    for key, current in _current_versions(work_dir).items():
+        if not current or not review.get(key) or review[key] != current:
+            raise ValueError(f"评审版本不匹配或产物缺失: {key}；请重新获取 review/packet")
+    if review.get("task_id", task_id) != task_id:
+        raise ValueError("评审 task_id 与目标任务不匹配")
     review.setdefault("task_id", task_id)
     review.setdefault("created_at", datetime.now().isoformat())
-    review.setdefault("reviewer_type", review.get("reviewer_type", "outer_agent"))
-    # Fill current hashes if not provided
-    if not review.get("manuscript_sha256"):
-        review["manuscript_sha256"] = _file_sha256(work_dir / "res.md")
-    if not review.get("frozen_result_id"):
-        review["frozen_result_id"] = _file_sha256(work_dir / "frozen_results.json")
-    if not review.get("artifact_set_id"):
-        try:
-            cm = json.loads((work_dir / "candidate_manifest.json").read_text(encoding="utf-8"))
-            review["artifact_set_id"] = cm.get("artifact_set_id")
-        except Exception:
-            pass
 
     # Write JSON
     out_json = work_dir / REVIEW_JSON

@@ -121,6 +121,70 @@ class _RepairOutput:
 
 
 class WorkflowExecutionGateTest(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_sensitivity_continues_but_never_reaches_writer_as_evidence(self):
+        for resume in (False, True):
+            with self.subTest(resume=resume), tempfile.TemporaryDirectory() as raw_work_dir:
+                checkpoint_manager = CheckpointManager(raw_work_dir)
+                checkpoint_manager.save(TaskCheckpoint(
+                    task_id="task", ques_all="test", comp_template="cumcm",
+                    format_output="markdown", ques_count=2,
+                    questions={"ques_count": 2, "ques1": "q1", "ques2": "q2"},
+                    modeler_response={"questions_solution": {}}, updated_at="now",
+                ))
+                failed = CoderToWriter(
+                    code_response="UNVERIFIED_PROFIT_999999", created_images=["bad.png"],
+                    execution_attempted=True, execution_succeeded=False,
+                    execution_error_occurred=True,
+                )
+                if resume:
+                    checkpoint_manager.mark_solution_coder_completed(
+                        "sensitivity_analysis", failed.model_dump()
+                    )
+                events = []
+                flows = _Flows()
+                flows.get_solution_flows = lambda *_: {
+                    "sensitivity_analysis": {"coder_prompt": "explore"},
+                    "ques1": {"coder_prompt": "solve q1"},
+                    "ques2": {"coder_prompt": "solve q2"},
+                }
+                flows.get_writer_prompt = lambda key, response, *_: f"{key}: {response}"
+                coder = _Coder(events)
+                original_run = coder.run
+
+                async def run(prompt, subtask_title):
+                    if subtask_title == "sensitivity_analysis":
+                        self.assertFalse(resume, "resume must reuse the optional outcome")
+                        return failed
+                    return await original_run(prompt, subtask_title)
+
+                coder.run = run
+                workflow = MathModelWorkFlow()
+                workflow.task_id = "task"
+                workflow.work_dir = raw_work_dir
+                writer = _Writer(events)
+                writer.run = AsyncMock(wraps=writer.run)
+
+                def freeze(directory):
+                    Path(directory, "frozen_results.json").write_text("{}", encoding="utf-8")
+
+                with (
+                    patch("app.core.workflow.redis_manager.publish_message", AsyncMock()),
+                    patch("app.core.workflow.write_execution_validation_report", return_value={"status": "PASS"}),
+                    patch("app.core.workflow.write_frozen_results_from_execution_validation", side_effect=freeze),
+                    patch("app.core.workflow.write_execution_quality_review", return_value={"status": "PASS"}),
+                ):
+                    await workflow._run_solution_flows(
+                        flows, ModelerToCoder(questions_solution={}), coder, writer,
+                        _Interpreter(raw_work_dir), _Output(), checkpoint_manager, {},
+                    )
+                self.assertEqual([e[1] for e in events if e[0] == "code"], ["ques1", "ques2"])
+                sensitivity_call = writer.run.call_args_list[0]
+                self.assertNotIn("UNVERIFIED_PROFIT", sensitivity_call.args[0])
+                self.assertIn("不可引用", sensitivity_call.args[0])
+                self.assertEqual(sensitivity_call.kwargs["available_images"], [])
+                saved = checkpoint_manager.get_solution_coder_response("sensitivity_analysis")
+                self.assertFalse(saved["execution_succeeded"])
+
     async def test_quality_review_pauses_before_writer_and_binds_checkpoint(self):
         with tempfile.TemporaryDirectory() as raw_work_dir:
             work_dir = Path(raw_work_dir)

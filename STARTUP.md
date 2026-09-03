@@ -170,6 +170,7 @@ cd backend
 .\.venv\Scripts\python.exe -m app.tools.task_client submit --ques "题目..." --comp CHINA --profile cumcm2026 --file data.xlsx --require-model-review --receipt receipt.json
 .\.venv\Scripts\python.exe -m app.tools.task_client inspect --task-id <id> --base http://127.0.0.1:8000
 .\.venv\Scripts\python.exe -m app.tools.task_client events --task-id <id> --after 0 --limit 20
+.\.venv\Scripts\python.exe -m app.tools.task_client resume --task-id <id> --base http://127.0.0.1:8000
 .\.venv\Scripts\python.exe -m app.tools.task_client guide --task-id <id> --role modeler --content "请加强约束检验"
 .\.venv\Scripts\python.exe -m app.tools.task_client approve-model --task-id <id>
 .\.venv\Scripts\python.exe -m app.tools.task_client review-results --task-id <id> --action approve --review-id <id> --base http://127.0.0.1:8000
@@ -177,6 +178,18 @@ cd backend
 ```
 
 `--receipt` 与 `Idempotency-Key` 保证重复提交返回同一任务；`inspect/events/artifacts/review/packet` 支持游标与版本绑定；`guide --guidance-id` 区分已接收/已消费；下载链接返回 `path`（相对）与 `download_url_absolute`（可选绝对），Agent 用 `8000` 基址拼接即可，无需前端代理。
+
+续传前先用 `inspect` 检查 `allowed_actions`：仅在包含 `resume` 时续传；`resuming` / `finalizing`
+继续轮询，`completed` 直接取产物。续传继承 checkpoint 和累计预算，不重置调用额度。
+非正式 `sensitivity_analysis` 探索失败保留失败记录，不阻断正式 `quesN`；Writer 只能使用正式题
+已验证的冻结结果，不得引用该失败探索的数值或图表，正式题的执行门禁仍有效。
+
+完成后用 `GET http://127.0.0.1:8000/tasks/<id>/review/packet` 获取评审材料包，审阅正文和证据，
+再向同基址 `POST /tasks/<id>/review` 提交 `reviewer_type`、六维 `scores`、`findings`，以及材料包
+顶层原样返回的 `manuscript_sha256`、`frozen_result_id`（冻结文件 SHA-256）、`artifact_set_id`。
+版本缺失或不匹配返回 `422`，不会覆盖已有评审；重新 GET 材料并复核后才能重交。
+`GET /tasks/<id>/review` 的 `_stale=false` 表示版本仍匹配；文件或 manifest 缺失也会使评审过期。
+`completed` 与 `TECHNICAL_PASS` 不表示六维评审通过；`default` 的预检条件项和审计警告仍须查看。
 
 Docker 前端通过 Vite dev server 代理访问后端：浏览器请求
 `http://localhost:5173/api/*` 会被转发到 Compose 内部的 `backend:8000`，

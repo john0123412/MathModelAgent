@@ -178,11 +178,16 @@ class TestPaperReviewPacket(unittest.TestCase):
             os.makedirs(work_dir, exist_ok=True)
             with open(os.path.join(work_dir, "res.md"), "w", encoding="utf-8") as f:
                 f.write("content")
+            with open(os.path.join(work_dir, "frozen_results.json"), "w", encoding="utf-8") as f:
+                json.dump({"results": []}, f)
+            with open(os.path.join(work_dir, "candidate_manifest.json"), "w", encoding="utf-8") as f:
+                json.dump({"artifact_set_id": "current-set"}, f)
             with mock.patch.object(common_utils, "WORK_DIR_ROOT", tmp):
                 with mock.patch("app.services.paper_review.get_work_dir", return_value=work_dir):
                     review = {
                         "reviewer_type": "outer_agent",
-                        "manuscript_sha256": "abc",
+                        **{key: value for key, value in assemble_review_packet(task_id).items()
+                           if key in {"manuscript_sha256", "frozen_result_id", "artifact_set_id"}},
                         "scores": {"abstract": 8, "assumptions": 7, "modeling": 8, "results": 7, "figures": 6, "format": 7},
                         "findings": [
                             {"category": "model", "severity": "major", "location": "§3.2", "evidence": "method mismatch", "suggested_scope": "model"}

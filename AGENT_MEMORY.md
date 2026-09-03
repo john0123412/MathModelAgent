@@ -78,3 +78,14 @@
   （基准 0.64-0.83 次/日）+敏感性；④Q4 降格"固定迁移下多情景电力层再优化"，三维非支配+MC 聚合
   代理口径；⑤成本 CI 与 Wilson CI 拆分、±2.94%→±4.57%、关键词换五项。修 7.1 断尾+7.2 真实局限。
   正文压回 30 页。终态 PDF 72 页、TECHNICAL_PASS 12/12、五件哈希 MATCH。
+
+## Agent 调用 Docker 后端路线图（2026-09-03，PR #40）
+
+- **目标**：外层 Agent 稳定调用本机 Docker 后端（`docker compose up` 仅 backend+redis，前端 `--profile frontend` 可选），0.0.15 规则进入实际执行链而非仅 `skills/`。
+- **批 A**：`writer 600-900字4段 / 11pt1.3 / 30页+摘要单页` 收敛至 profile；手机号漏检等通用修复；`docker-compose.yml` 去 `5173/api` 耦合、`frontend` 加 profile、`common_router` 增 `deployment`、`task_client` 基址切 `8000`。
+- **批 B**：`task_client.py` 薄客户端（`doctor/submit/inspect/events/guide/approve-model/revise-model/review-results/resume/cancel/artifacts/repair-*`）+ 后端 `Idempotency-Key/GET /tasks/{id}/events/artifacts` 与 `guidance_id` 回执（`accepted/consumed`）。
+- **批 C**：`task_budget.json` 累计预算（调用/known token/运行时长）持久化、未知 usage 标 `unknown`、`_finalize` 备份保留+`to_thread` 防阻塞、`cancel` 保留停止证据。
+- **批 D**：`backend/app/resources/modeling_guides/{01-05}.md`（确定性基线/硬约束/统计严谨/Pareto/溯源）按诊断 profile 加载；`paper_review` 六维评审材料包+版本绑定（`manuscript_sha256/frozen_result_id/artifact_set_id`）+ 五类分流。
+- **批 E**：`figure_plan` 路由（data/template/diagram/physical）+ 多面板+追溯校验；`doctor` 容器体检与模板能力表（`huawei→huaweibei` 别名，后端仅 4 profile）。
+- **批 F**：`test_agent_docker_backend.py` 10 项契约验收 + 轻量 LP 烟雾题 + 完整链路哈希核对；`STARTUP.md` 增 Agent 调用手册。
+- 取证：`mathmodel_workspace_0.0.15 (323 MB)`；验证：`task_client doctor` + `docker compose config` + `unittest` 10/10。

@@ -117,6 +117,20 @@ class LLM:
         agent_name: str = "SystemAgent",
         sub_title: str | None = None,
     ) -> StandardResponse:
+        # Roadmap C: budget check before each provider call (cumulative, persisted, resume-inherited)
+        if self.task_id:
+            try:
+                from app.services.task_budget import check_budget_before_call
+                from app.utils.common_utils import get_work_dir as _get_wd
+
+                wd = _get_wd(self.task_id)
+                allowed, reason = check_budget_before_call(wd, self.task_id)
+                if not allowed:
+                    raise RuntimeError(f"任务预算已耗尽，拒绝新调用: {reason}")
+            except RuntimeError:
+                raise
+            except Exception:
+                pass
         if max_retries is not None:
             max_attempts = max_retries
         else:

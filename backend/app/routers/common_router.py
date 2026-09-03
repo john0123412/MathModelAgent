@@ -421,3 +421,122 @@ async def get_task_artifacts(task_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/tasks/{task_id}/review/packet")
+async def get_review_packet(task_id: str):
+    """Roadmap D: 组装六维评审材料包（外层 Agent 审阅用）。"""
+    from app.services.paper_review import assemble_review_packet
+
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        return assemble_review_packet(safe_task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/tasks/{task_id}/review")
+async def get_review(task_id: str):
+    """Roadmap D: 读取已保存的六维评审（含过期判定）。"""
+    from app.services.paper_review import load_review
+
+    safe_task_id = _require_safe_task_id(task_id)
+    data = load_review(safe_task_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="未找到评审")
+    return data
+
+
+@router.post("/tasks/{task_id}/review")
+async def post_review(task_id: str, payload: dict):
+    """Roadmap D: 保存外层 Agent 的六维评审（结构化校验+版本绑定）。"""
+    from app.services.paper_review import save_review
+
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        # Ensure work_dir exists
+        from app.utils.common_utils import get_work_dir
+
+        get_work_dir(safe_task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try:
+        save_review(safe_task_id, payload)
+        return {"task_id": safe_task_id, "status": "saved", "review": payload}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/doctor")
+async def get_doctor():
+    """Roadmap E: 容器能力体检（与宿主机 doctor 分离）。"""
+    from app.services.doctor import container_doctor, template_capabilities
+
+    return {"container": container_doctor(), "templates": template_capabilities()}
+
+
+@router.get("/templates/capabilities")
+async def get_template_capabilities():
+    """Roadmap E: 模板能力表（后端 profile vs skill 模板）。"""
+    from app.services.doctor import template_capabilities
+
+    return template_capabilities()
+
+
+@router.post("/tasks/{task_id}/figure-plan")
+async def post_figure_plan(task_id: str, payload: dict):
+    """Roadmap E: 创建/更新配图计划（路由+追溯）。"""
+    from app.services.figure_plan import create_figure_plan
+
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        from app.utils.common_utils import get_work_dir
+
+        get_work_dir(safe_task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    figures = payload.get("figures")
+    if not isinstance(figures, list):
+        raise HTTPException(status_code=422, detail="figures 必须为数组")
+    try:
+        plan = create_figure_plan(safe_task_id, figures)
+        return plan
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/tasks/{task_id}/figure-plan")
+async def get_figure_plan(task_id: str):
+    """Roadmap E: 读取配图计划。"""
+    from app.services.figure_plan import load_figure_plan
+
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        from app.utils.common_utils import get_work_dir
+
+        get_work_dir(safe_task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    plan = load_figure_plan(safe_task_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="未找到 figure plan")
+    return plan
+
+
+@router.get("/tasks/{task_id}/figure-plan/validate")
+async def validate_figure_plan(task_id: str):
+    """Roadmap E: 校验配图产物与数据追溯。"""
+    from app.services.figure_plan import validate_figure_artifacts
+
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        from app.utils.common_utils import get_work_dir
+
+        get_work_dir(safe_task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return validate_figure_artifacts(safe_task_id)

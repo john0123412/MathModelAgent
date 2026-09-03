@@ -96,13 +96,32 @@ def record_token_usage(
     usage: Usage | None,
 ) -> None:
     """记录一次 LLM 调用的 token usage，只保存聚合数字。"""
-    if not task_id or usage is None:
+    if not task_id:
+        return
+    # usage=None 意味着远端未返回 usage，记为 unknown 调用（不报 0 费用）
+    if usage is None:
+        try:
+            from app.services.task_budget import record_provider_call as _record_budget_unknown
+            from app.utils.common_utils import get_work_dir as _get_wd
+
+            wd = _get_wd(task_id)
+            _record_budget_unknown(wd, task_id, known_tokens=None, duration_seconds=None)
+        except Exception:
+            pass
         return
     safe_task_id = common_utils.ensure_safe_task_id(task_id)
     prompt_tokens = _normalize_usage_value(usage.prompt_tokens)
     completion_tokens = _normalize_usage_value(usage.completion_tokens)
     total_tokens = prompt_tokens + completion_tokens
+    # 0 token 也要记为一次调用（unknown 区分），但此处 total 0 往往是 usage 缺失的另一种表现
     if total_tokens == 0:
+        try:
+            from app.services.task_budget import record_provider_call as _record_budget_zero
+
+            wd = common_utils.get_work_dir(safe_task_id)
+            _record_budget_zero(wd, safe_task_id, known_tokens=0, duration_seconds=None)
+        except Exception:
+            pass
         return
 
     with _LOCK:
@@ -136,6 +155,14 @@ def record_token_usage(
         data["estimated"] = True
         data["updated_at"] = datetime.datetime.now().isoformat()
         _write_atomic(path, data)
+    # 同步到 task_budget（累计任务预算，重启后继承）
+    try:
+        from app.services.task_budget import record_provider_call as _record_budget
+
+        wd = common_utils.get_work_dir(safe_task_id)
+        _record_budget(wd, safe_task_id, known_tokens=total_tokens, duration_seconds=None)
+    except Exception:
+        pass
 
 
 def read_token_usage(task_id: str) -> dict[str, Any]:

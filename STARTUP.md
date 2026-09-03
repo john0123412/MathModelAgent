@@ -147,6 +147,37 @@ Invoke-WebRequest http://127.0.0.1:5173/api/docs -UseBasicParsing |
   Select-Object -ExpandProperty StatusCode
 ```
 
+### Agent 调用 Docker 后端（无前端，路线图 2026-09-03）
+
+纯后端模式是外层执行 Agent 的正式入口，前端为可选（`--profile frontend`）：
+
+```powershell
+# 仅后端+Redis（Agent 推荐，不依赖 5173 前端代理）
+docker compose up -d --wait
+curl.exe http://127.0.0.1:8000/status
+curl.exe http://127.0.0.1:8000/docs
+
+# 需要前端时显式启用
+docker compose --profile frontend up -d --wait
+curl.exe http://127.0.0.1:5173/
+```
+
+任务客户端（固定 `backend/.venv`，不读取 provider 凭据）：
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m app.tools.task_client doctor --base http://127.0.0.1:8000
+.\.venv\Scripts\python.exe -m app.tools.task_client submit --ques "题目..." --comp CHINA --profile cumcm2026 --file data.xlsx --require-model-review --receipt receipt.json
+.\.venv\Scripts\python.exe -m app.tools.task_client inspect --task-id <id> --base http://127.0.0.1:8000
+.\.venv\Scripts\python.exe -m app.tools.task_client events --task-id <id> --after 0 --limit 20
+.\.venv\Scripts\python.exe -m app.tools.task_client guide --task-id <id> --role modeler --content "请加强约束检验"
+.\.venv\Scripts\python.exe -m app.tools.task_client approve-model --task-id <id>
+.\.venv\Scripts\python.exe -m app.tools.task_client review-results --task-id <id> --action approve --review-id <id> --base http://127.0.0.1:8000
+.\.venv\Scripts\python.exe -m app.tools.task_client artifacts --task-id <id>
+```
+
+`--receipt` 与 `Idempotency-Key` 保证重复提交返回同一任务；`inspect/events/artifacts/review/packet` 支持游标与版本绑定；`guide --guidance-id` 区分已接收/已消费；下载链接返回 `path`（相对）与 `download_url_absolute`（可选绝对），Agent 用 `8000` 基址拼接即可，无需前端代理。
+
 Docker 前端通过 Vite dev server 代理访问后端：浏览器请求
 `http://localhost:5173/api/*` 会被转发到 Compose 内部的 `backend:8000`，
 WebSocket 请求 `ws://localhost:5173/ws/task/<task_id>` 会被转发到后端

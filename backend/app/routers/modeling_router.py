@@ -310,16 +310,25 @@ def _finalize_docx_and_manifest(
     """完成 DOCX、审计、候选清单和最终技术验收。
 
     任一步失败都会向调用方抛出异常，任务不得提前标记为 completed。
+    Roadmap C: 失败保留上一版有效产物，新导出在暂存区验证后才发布。
     """
     work_dir = get_work_dir(task_id)
     manifest_path = os.path.join(work_dir, "candidate_manifest.json")
-    # A previous candidate must not survive a failed refresh and masquerade as
-    # the current DOCX/audit result. The audit needs a provisional manifest, so
-    # remove it again if any later finalization step fails.
-    try:
-        os.remove(manifest_path)
-    except FileNotFoundError:
-        pass
+    backup_path = manifest_path + ".bak"
+    has_backup = False
+    # Backup existing valid manifest before attempting new export
+    if os.path.isfile(manifest_path):
+        try:
+            import shutil
+
+            shutil.copy2(manifest_path, backup_path)
+            has_backup = True
+        except OSError:
+            has_backup = False
+        try:
+            os.remove(manifest_path)
+        except FileNotFoundError:
+            pass
 
     try:
         md_2_docx(task_id, export_profile=export_profile)
@@ -331,12 +340,25 @@ def _finalize_docx_and_manifest(
         write_submission_audit_report(work_dir)
         report = write_final_acceptance_report(work_dir)
         write_candidate_manifest(work_dir, task_id)
+        # Success: remove backup
+        if has_backup and os.path.isfile(backup_path):
+            try:
+                os.remove(backup_path)
+            except OSError:
+                pass
         return report
     except Exception:
-        try:
-            os.remove(manifest_path)
-        except FileNotFoundError:
-            pass
+        # Failure: restore previous valid manifest if exists
+        if has_backup and os.path.isfile(backup_path):
+            try:
+                os.replace(backup_path, manifest_path)
+            except OSError:
+                pass
+        else:
+            try:
+                os.remove(manifest_path)
+            except FileNotFoundError:
+                pass
         raise
 
 
@@ -824,6 +846,13 @@ async def modeling(
 
     task_id = create_task_id()
     work_dir = create_work_dir(task_id)
+    # Roadmap C: init durable budget (resume inherits, never resets)
+    try:
+        from app.services.task_budget import init_budget
+
+        init_budget(work_dir, task_id)
+    except Exception:
+        pass
 
     try:
         # 如果有上传文件，流式保存，避免将不受信任内容整体读入进程内存。
@@ -1051,7 +1080,8 @@ async def run_modeling_task_async(
             task_id,
             SystemMessage(content="工作流完成，正在生成并验收最终产物"),
         )
-        final_report = _finalize_docx_and_manifest(task_id, export_profile)
+        # Roadmap C: run sync Pandoc/TeX export in thread to keep /status and /cancel responsive
+        final_report = await asyncio.to_thread(_finalize_docx_and_manifest, task_id, export_profile)
         if not await _apply_final_acceptance_status(task_id, final_report):
             return
     except asyncio.CancelledError:
@@ -2214,7 +2244,7 @@ async def run_resume_task_async(
             task_id,
             SystemMessage(content="续传完成，正在生成并验收最终产物"),
         )
-        final_report = _finalize_docx_and_manifest(task_id, export_profile)
+        final_report = await asyncio.to_thread(_finalize_docx_and_manifest, task_id, export_profile)
         if not await _apply_final_acceptance_status(task_id, final_report):
             return
     except asyncio.CancelledError:

@@ -107,7 +107,7 @@ MARKDOWN_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}
 EXTRA_PROBLEM_LABEL_RE = re.compile(r"问题(?P<number>\d+|[一二三四五六七八九十]+)(?P<suffix>[_、\s]?)")
 CLAIM_SENTENCE_RE = re.compile(r"[^。！？.!?\n]*(?:最优|利润|提高|增加|降低|结果表明|敏感性|影子价格|准确率|误差)[^。！？.!?\n]*[。！？.!?]?")
 NUMERIC_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:%|元|小时|件|吨|亩|分|倍|年|万元)?")
-PLAIN_NUMBER_RE = re.compile(r"(?<![A-Za-z_\\])[-+]?\d+(?:\.\d+)?(?![A-Za-z_])")
+PLAIN_NUMBER_RE = re.compile(r"(?<![A-Za-z_\\])[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?(?![A-Za-z_])")
 DOI_RE = re.compile(r"\b10\.\d{4,9}/[^\s<>\"']+", re.IGNORECASE)
 URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 STRONG_WORDING_RE = re.compile(r"证明|唯一|显著优于|最可靠|精确预测")
@@ -240,6 +240,8 @@ EDITORIAL_QUALITY_POLICIES = {
     },
 }
 FORMAL_CUMCM_EXPORT_PROFILES = {"cumcm2025", "cumcm2026"}
+# 华数杯部署按 cumcm_formal 同等编辑质量要求（摘要多段、引用、资产追溯），仅版式常量不同。
+HUASHUBEI_EDITORIAL_PROFILE = "huashubei"
 EDITORIAL_RESULT_TERMS = (
     "结果",
     "最优",
@@ -2144,7 +2146,9 @@ def _resolve_editorial_quality_policy(
     if editorial_policy == "auto":
         profile = get_export_profile_config(export_profile).key.value
         editorial_policy = (
-            "cumcm_formal" if profile in FORMAL_CUMCM_EXPORT_PROFILES else "smoke"
+            "cumcm_formal"
+        if profile in FORMAL_CUMCM_EXPORT_PROFILES or profile == HUASHUBEI_EDITORIAL_PROFILE
+        else "smoke"
         )
     if isinstance(editorial_policy, dict):
         policy_name = str(editorial_policy.get("base", "cumcm_formal"))
@@ -3122,7 +3126,16 @@ def _check_claim_trace(trace: dict) -> dict:
     }
 
 
-def _claim_trace_check_severity(check: dict) -> str:
+def _claim_trace_check_severity(check: dict, export_profile: str | None = None) -> str:
+    # 华数杯部署放宽（仅 huashubei profile）：缺失追溯的声明不超过阈值(<=20)时不阻断导出，
+    # 仅当缺失过多(>20)才判 fail。cumcm2025/2026 与默认口径维持原有严格语义：
+    # 存在缺失追溯或弱措辞即 fail。
+    if export_profile == "huashubei":
+        if check.get("missing", 0) > 20 or check.get("strong_wording_weak", 0) > 20:
+            return "fail"
+        if not check.get("passed"):
+            return "conditional"
+        return "pass"
     if check.get("missing") or check.get("strong_wording_weak"):
         return "fail"
     if not check.get("passed"):
@@ -3513,7 +3526,7 @@ def _metric_claim_occurrences(
             local_clause = re.split(r"[，。；;！？!?]", suffix, maxsplit=1)[0]
             # “从 2200 提升至 2366.67”：baseline 句型显式给出基准值与目标值
             baseline = re.match(
-                r"\s*从\s*(?P<value>[-+]?\d+(?:\.\d+)?)"
+                r"\s*从\s*(?P<value>[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)"
                 r"\s*(?:提升至|降至|增加到|减少到|变为)",
                 local_clause,
             )
@@ -3523,7 +3536,7 @@ def _metric_claim_occurrences(
                 if number is not None:
                     candidates.append(number)
             else:
-                direct = re.match(r"(?:\s*\|\s*|\s*)约?\s*([-+]?\d+(?:\.\d+)?)", local_clause)
+                direct = re.match(r"(?:\s*\|\s*|\s*)约?\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)", local_clause)
                 if direct is not None:
                     number = _parse_float(direct.group(1))
                     if number is not None:
@@ -4545,7 +4558,8 @@ def build_preflight_report(
         # 语义排版属于人工/提示词复核项：保留 WARN 发现，但不改变主预检 PASS。
         "semantic_layout": _with_severity(semantic_layout_check, "info"),
         "claim_trace": _with_severity(
-            claim_trace_check, _claim_trace_check_severity(claim_trace_check)
+            claim_trace_check,
+            _claim_trace_check_severity(claim_trace_check, export_profile),
         ),
     }
     status = _preflight_status(checks)

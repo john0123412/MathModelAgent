@@ -188,8 +188,8 @@ HUASHUBEI_PROFILE = ExportProfileConfig(
     key=ExportProfile.HUASHUBEI,
     label="华数杯模板",
     description=(
-        "按现有 Huashubei 模板做版式参数级接入：A4、12pt、2.5cm 页边距、"
-        "1.6 倍行距和 14pt 居中一级标题；官方规范发布后需复核。"
+        "按现有 Huashubei 模板做版式参数级接入：A4、11pt、2.5cm 页边距、"
+        "1.3 倍行距和 14pt 居中一级标题；官方规范发布后需复核。"
     ),
     pdf_variables=[
         "documentclass=ctexart",
@@ -202,8 +202,8 @@ HUASHUBEI_PROFILE = ExportProfileConfig(
         HUASHUBEI_PDF_HEADING_STYLE,
         PDF_CODE_BLOCK_STYLE,
         HUASHUBEI_GEOMETRY,
-        "fontsize=12pt",
-        "linestretch=1.6",
+        "fontsize=11pt",
+        "linestretch=1.3",
         # 图形随文定位：禁止浮动体漂移到下一页顶端插断句子（评审反馈的版式问题）。
         "header-includes=\\usepackage{float}\\floatplacement{figure}{H}",
         # 孤行/寡行治理：避免整句仅一两字被拆到下一页页首（评审反馈 p9→p10）。

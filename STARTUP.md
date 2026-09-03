@@ -147,6 +147,50 @@ Invoke-WebRequest http://127.0.0.1:5173/api/docs -UseBasicParsing |
   Select-Object -ExpandProperty StatusCode
 ```
 
+### Agent 调用 Docker 后端（无前端，路线图 2026-09-03）
+
+纯后端模式是外层执行 Agent 的正式入口，前端为可选（`--profile frontend`）：
+
+```powershell
+# 仅后端+Redis（Agent 推荐，不依赖 5173 前端代理）
+docker compose up -d --wait
+curl.exe http://127.0.0.1:8000/status
+curl.exe http://127.0.0.1:8000/docs
+
+# 需要前端时显式启用
+docker compose --profile frontend up -d --wait
+curl.exe http://127.0.0.1:5173/
+```
+
+任务客户端（固定 `backend/.venv`，不读取 provider 凭据）：
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m app.tools.task_client doctor --base http://127.0.0.1:8000
+.\.venv\Scripts\python.exe -m app.tools.task_client submit --ques "题目..." --comp CHINA --profile cumcm2026 --file data.xlsx --require-model-review --receipt receipt.json
+.\.venv\Scripts\python.exe -m app.tools.task_client inspect --task-id <id> --base http://127.0.0.1:8000
+.\.venv\Scripts\python.exe -m app.tools.task_client events --task-id <id> --after 0 --limit 20
+.\.venv\Scripts\python.exe -m app.tools.task_client resume --task-id <id> --base http://127.0.0.1:8000
+.\.venv\Scripts\python.exe -m app.tools.task_client guide --task-id <id> --role modeler --content "请加强约束检验"
+.\.venv\Scripts\python.exe -m app.tools.task_client approve-model --task-id <id>
+.\.venv\Scripts\python.exe -m app.tools.task_client review-results --task-id <id> --action approve --review-id <id> --base http://127.0.0.1:8000
+.\.venv\Scripts\python.exe -m app.tools.task_client artifacts --task-id <id>
+```
+
+`--receipt` 与 `Idempotency-Key` 保证重复提交返回同一任务；`inspect/events/artifacts/review/packet` 支持游标与版本绑定；`guide --guidance-id` 区分已接收/已消费；下载链接返回 `path`（相对）与 `download_url_absolute`（可选绝对），Agent 用 `8000` 基址拼接即可，无需前端代理。
+
+续传前先用 `inspect` 检查 `allowed_actions`：仅在包含 `resume` 时续传；`resuming` / `finalizing`
+继续轮询，`completed` 直接取产物。续传继承 checkpoint 和累计预算，不重置调用额度。
+非正式 `sensitivity_analysis` 探索失败保留失败记录，不阻断正式 `quesN`；Writer 只能使用正式题
+已验证的冻结结果，不得引用该失败探索的数值或图表，正式题的执行门禁仍有效。
+
+完成后用 `GET http://127.0.0.1:8000/tasks/<id>/review/packet` 获取评审材料包，审阅正文和证据，
+再向同基址 `POST /tasks/<id>/review` 提交 `reviewer_type`、六维 `scores`、`findings`，以及材料包
+顶层原样返回的 `manuscript_sha256`、`frozen_result_id`（冻结文件 SHA-256）、`artifact_set_id`。
+版本缺失或不匹配返回 `422`，不会覆盖已有评审；重新 GET 材料并复核后才能重交。
+`GET /tasks/<id>/review` 的 `_stale=false` 表示版本仍匹配；文件或 manifest 缺失也会使评审过期。
+`completed` 与 `TECHNICAL_PASS` 不表示六维评审通过；`default` 的预检条件项和审计警告仍须查看。
+
 Docker 前端通过 Vite dev server 代理访问后端：浏览器请求
 `http://localhost:5173/api/*` 会被转发到 Compose 内部的 `backend:8000`，
 WebSocket 请求 `ws://localhost:5173/ws/task/<task_id>` 会被转发到后端
@@ -509,6 +553,11 @@ uv run python -m app.tools.export_cli template show `
 uv run python -m app.tools.export_cli task-refresh `
   --task-id <task_id> --profile cumcm2026 --local
 ```
+
+`task-refresh` 在预检无硬失败（`PASS` 或 `CONDITIONAL_PASS`）时继续重建交付物；
+只有硬门禁 `FAIL` 才拒绝。`huashubei` profile 的视觉/预检阈值另有部署放宽口径
+（内容边距 0.6cm、正文 35 页、关键词任意页、claim_trace ≤20 条不阻断），
+详见 `docs/md/PDF模板导出说明.md`。
 
 `--local` 只让刷新时优先检测 Windows 正式字体；没有该参数也不会改变模板合同。Docker
 调用时，两个输入文件必须先位于容器可见路径（例如任务目录的

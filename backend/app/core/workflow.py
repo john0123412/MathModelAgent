@@ -609,6 +609,23 @@ class MathModelWorkFlow(WorkFlow):
                     or not coder_response.execution_succeeded
                     or coder_response.execution_error_occurred
                 ):
+                    # This exploratory stage does not own formal quesN evidence.
+                    # Preserve its failed flags; formal questions still validate.
+                    if key == "sensitivity_analysis":
+                        await redis_manager.publish_message(
+                            self.task_id,
+                            SystemMessage(
+                                content=f"非正式阶段 {key} 执行未成功，已跳过并继续正式问题（不阻断）。",
+                                type="warning",
+                            ),
+                        )
+                        logger.warning(f"非正式阶段 {key} 失败已容忍，继续正式问题")
+                        # Persist the outcome to avoid repeating this optional call on resume.
+                        coder_responses[key] = coder_response
+                        checkpoint_manager.mark_solution_coder_completed(
+                            key, coder_response.model_dump()
+                        )
+                        continue
                     await redis_manager.publish_message(
                         self.task_id,
                         SystemMessage(
@@ -847,6 +864,21 @@ class MathModelWorkFlow(WorkFlow):
         # 也必须重写，避免把冻结前生成的未验证数值带入本次导出。
         for key, coder_response in coder_responses.items():
             await self._check_cancelled()
+            if key == "sensitivity_analysis" and (
+                not coder_response.execution_attempted
+                or not coder_response.execution_succeeded
+                or coder_response.execution_error_occurred
+            ):
+                # Covers both fresh failures and pre-existing checkpoints.
+                # Do not hand unverified numerical prose or images to Writer.
+                coder_response = coder_response.model_copy(update={
+                    "code_response": (
+                        "敏感性探索未成功执行，其数值与图表不可引用。"
+                        "如需扩展分析，只能引用本轮正式题的结果 CSV、"
+                        "execution_validation.json 和冻结结果；不得新增敏感性数值。"
+                    ),
+                    "created_images": [],
+                })
             writer_prompt = flows.get_writer_prompt(
                 key,
                 coder_response.code_response or "",

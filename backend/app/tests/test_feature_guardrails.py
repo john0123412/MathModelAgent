@@ -78,7 +78,11 @@ class TestFeatureGuardrails(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertEqual(set(data.keys()), {"backend", "redis", "code_execution"})
+        self.assertEqual(set(data.keys()), {"backend", "redis", "code_execution", "deployment"})
+        self.assertEqual(
+            set(data["deployment"].keys()),
+            {"source_mounted", "git_commit", "git_dirty", "capability_version"},
+        )
         self.assertIn("feature_warnings", data["backend"])
         self.assertEqual(data["backend"]["feature_warnings"][0]["feature"], "RAG_ENABLED")
         self.assertEqual(data["code_execution"]["status"], "ready")

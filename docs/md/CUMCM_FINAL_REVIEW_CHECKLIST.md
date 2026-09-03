@@ -13,6 +13,12 @@
 `final_acceptance_report.json -> complete_source_appendix` 会检查附录是否实际包含完整源码。
 但自动报告仍不能替代人工运行源码、核对结果、阅读 PDF/DOCX 或确认最终提交规则。
 
+外层六维评审通过 `GET /tasks/<id>/review/packet` 取材料后，必须在 `POST /tasks/<id>/review`
+原样携带三项版本：`manuscript_sha256`、`frozen_result_id`（冻结文件 SHA-256）、`artifact_set_id`。
+缺项或版本不符返回 `422`，不得用当前版本替旧评审补号；重新读取材料并审阅后再提交。
+保存后检查 `GET /tasks/<id>/review` 的 `_stale`，正文、冻结文件或 manifest 缺失/变化需重新复核。
+通用 `default` profile 的 `TECHNICAL_PASS` 可包含条件警告，不适用于正式 CUMCM 的严格门禁。
+
 ## 主 Agent（Codex / Gemini Antigravity / 当前对话 Agent）代为执行的可机检复核
 
 当用户授权主 Agent（无论当前运行环境为 Codex、Gemini Antigravity、Claude Code 或其他对话 Agent）处理可机器复核的“人工项”时，以下项目不应留给后续 agent 口头确认，而必须有实际命令或在线核验结果；每一项应在任务汇报中说明证据和结论。

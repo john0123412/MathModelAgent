@@ -1,6 +1,6 @@
 """建模任务路由模块，提供任务创建、API 验证和配置管理等接口。"""
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, Header, UploadFile
 from app.core.checkpoint import CheckpointManager, TaskCheckpoint
 from app.core.workflow import MathModelWorkFlow
 from app.schemas.enums import CompTemplate, ExportProfile, FormatOutPut
@@ -15,6 +15,13 @@ from app.services.task_status import (
     write_task_status_to_dir,
 )
 from app.services.token_usage import USAGE_REPORT_FILENAME
+from app.services.idempotency import (
+    check_idempotency,
+    compute_file_hashes,
+    compute_guidance_hash,
+    record_idempotency,
+)
+from app.services.agent_operations import get_single_task_status
 from app.schemas.request import DEFAULT_MODELING_EXPORT_PROFILE, Problem
 from app.schemas.A2A import ModelerToCoder
 from app.schemas.response import SystemMessage
@@ -67,6 +74,20 @@ _task_locks: Dict[str, asyncio.Lock] = {}
 # Runtime API configuration updates are serialized so concurrent requests can
 # never leave an endpoint and its key from different requests interleaved.
 _api_config_lock = asyncio.Lock()
+
+# Roadmap P1-2: per-idempotency-key async lock to make check+record atomic
+_idempotency_locks: Dict[str, asyncio.Lock] = {}
+
+
+def _get_idempotency_lock(key: str | None) -> asyncio.Lock:
+    if not key:
+        # No key -> use a dummy lock that never contends (create ephemeral)
+        return asyncio.Lock()
+    # Normalize key for lock dict
+    k = key.strip()
+    if k not in _idempotency_locks:
+        _idempotency_locks[k] = asyncio.Lock()
+    return _idempotency_locks[k]
 
 _AGENT_CONFIG_BLOCKS: Tuple[Tuple[str, str], ...] = (
     ("coordinator", "COORDINATOR"),
@@ -299,16 +320,29 @@ def _finalize_docx_and_manifest(
     """完成 DOCX、审计、候选清单和最终技术验收。
 
     任一步失败都会向调用方抛出异常，任务不得提前标记为 completed。
+    Roadmap C & P1-5: 失败保留上一版完整产物，新导出在校验后才发布（不混入临时文件）。
     """
     work_dir = get_work_dir(task_id)
     manifest_path = os.path.join(work_dir, "candidate_manifest.json")
-    # A previous candidate must not survive a failed refresh and masquerade as
-    # the current DOCX/audit result. The audit needs a provisional manifest, so
-    # remove it again if any later finalization step fails.
-    try:
-        os.remove(manifest_path)
-    except FileNotFoundError:
-        pass
+    docx_path = os.path.join(work_dir, "res.docx")
+    # Backup existing valid deliverables before attempting new export
+    backups: dict[str, str] = {}
+    for p in [manifest_path, docx_path]:
+        if os.path.isfile(p):
+            bak = p + ".bak"
+            try:
+                import shutil
+
+                shutil.copy2(p, bak)
+                backups[p] = bak
+            except OSError:
+                pass
+            # Remove manifest proactively to avoid stale candidate masquerading, but keep docx backup
+            if p == manifest_path:
+                try:
+                    os.remove(p)
+                except FileNotFoundError:
+                    pass
 
     try:
         md_2_docx(task_id, export_profile=export_profile)
@@ -320,12 +354,47 @@ def _finalize_docx_and_manifest(
         write_submission_audit_report(work_dir)
         report = write_final_acceptance_report(work_dir)
         write_candidate_manifest(work_dir, task_id)
+        # Success: remove backups
+        for bak in backups.values():
+            try:
+                os.remove(bak)
+            except OSError:
+                pass
         return report
     except Exception:
-        try:
-            os.remove(manifest_path)
-        except FileNotFoundError:
-            pass
+        # Failure: restore previous valid deliverables
+        for orig, bak in backups.items():
+            if os.path.isfile(bak):
+                try:
+                    os.replace(bak, orig)
+                except OSError:
+                    pass
+            else:
+                # If no backup (first success), ensure no partial new file remains
+                if orig == manifest_path:
+                    try:
+                        os.remove(orig)
+                    except FileNotFoundError:
+                        pass
+                # For docx, if we had no backup, remove the newly generated partial docx
+                # to avoid hash mismatch with restored manifest
+                if orig == docx_path and os.path.isfile(orig):
+                    # Only remove if we had a backup (meaning we overwrote a valid docx)
+                    # If no backup, the docx was newly created and should be removed on failure
+                    # to keep work_dir consistent (no valid deliverable yet)
+                    try:
+                        # Check if manifest was restored (has_backup); if not, remove docx as well
+                        if manifest_path in backups:
+                            os.remove(orig)
+                    except OSError:
+                        pass
+        # 首轮运行没有旧备份可回滚时，循环不会覆盖新写出的清单；
+        # 审计失败后必须移除这份从未通过校验的 candidate_manifest，避免假发布。
+        if manifest_path not in backups and os.path.isfile(manifest_path):
+            try:
+                os.remove(manifest_path)
+            except FileNotFoundError:
+                pass
         raise
 
 
@@ -427,6 +496,7 @@ class GuidanceRequest(BaseModel):
     content: str
     purpose: Literal["modeling", "execution", "review", "recovery"] = "review"
     source: Literal["codex", "operator"] = "operator"
+    guidance_id: str | None = None
 
 
 class GuidanceResponse(BaseModel):
@@ -434,6 +504,8 @@ class GuidanceResponse(BaseModel):
     target: str
     status: str
     audit_file: str
+    guidance_id: str | None = None
+    consumed: bool = False
 
 
 def _require_safe_task_id(task_id: str) -> str:
@@ -803,101 +875,173 @@ async def modeling(
         "review"
     ),
     files: list[UploadFile] = File(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     if len(ques_all) > settings.MAX_PROBLEM_TEXT_CHARS:
         raise HTTPException(status_code=413, detail="题目文本超过大小上限")
 
-    task_id = create_task_id()
-    work_dir = create_work_dir(task_id)
+    # P1-2: atomic idempotency check+record via per-key async lock
+    # Hold lock from work_dir creation through record to prevent concurrent same-key double runner
+    _idem_lock = _get_idempotency_lock(idempotency_key)
+    async with _idem_lock:
+        task_id = create_task_id()
+        work_dir = create_work_dir(task_id)
+        # Roadmap C: init durable budget (resume inherits, never resets)
+        try:
+            from app.services.task_budget import init_budget
 
-    try:
-        # 如果有上传文件，流式保存，避免将不受信任内容整体读入进程内存。
-        uploaded_records: list[dict[str, Any]] = []
-        if files:
-            logger.info(f"开始处理上传的文件，工作目录: {work_dir}")
-            total_uploaded_bytes = 0
-            uploaded_filenames: set[str] = set()
-            for file in files:
-                if not file.filename:
-                    logger.warning("跳过空文件名")
-                    await file.close()
-                    continue
-                safe_filename = ensure_safe_filename(file.filename)
-                if safe_filename in uploaded_filenames:
-                    await file.close()
-                    raise HTTPException(status_code=400, detail="不允许重复上传同名文件")
-                uploaded_filenames.add(safe_filename)
-                data_file_path = safe_join_work_dir(task_id, safe_filename)
-                file_size = await _save_uploaded_file(
-                    file,
-                    data_file_path,
-                    total_uploaded_bytes=total_uploaded_bytes,
+            init_budget(work_dir, task_id)
+        except Exception:
+            pass
+
+        try:
+            # 如果有上传文件，流式保存，避免将不受信任内容整体读入进程内存。
+            uploaded_records: list[dict[str, Any]] = []
+            if files:
+                logger.info(f"开始处理上传的文件，工作目录: {work_dir}")
+                total_uploaded_bytes = 0
+                uploaded_filenames: set[str] = set()
+                for file in files:
+                    if not file.filename:
+                        logger.warning("跳过空文件名")
+                        await file.close()
+                        continue
+                    safe_filename = ensure_safe_filename(file.filename)
+                    if safe_filename in uploaded_filenames:
+                        await file.close()
+                        raise HTTPException(status_code=400, detail="不允许重复上传同名文件")
+                    uploaded_filenames.add(safe_filename)
+                    data_file_path = safe_join_work_dir(task_id, safe_filename)
+                    file_size = await _save_uploaded_file(
+                        file,
+                        data_file_path,
+                        total_uploaded_bytes=total_uploaded_bytes,
+                    )
+                    total_uploaded_bytes += file_size
+                    with open(data_file_path, "rb") as f_in:
+                        f_hash = hashlib.sha256(f_in.read()).hexdigest()
+                    uploaded_records.append({
+                        "name": safe_filename,
+                        "relative_path": safe_filename,
+                        "size_bytes": file_size,
+                        "sha256": f_hash,
+                    })
+                    logger.info(f"上传文件已保存: {safe_filename} ({file_size} bytes)")
+            else:
+                logger.warning("没有上传文件")
+            _write_input_manifest(work_dir, task_id, uploaded_records)
+        except HTTPException:
+            shutil.rmtree(work_dir, ignore_errors=True)
+            raise
+        except Exception:
+            shutil.rmtree(work_dir, ignore_errors=True)
+            logger.exception("保存上传文件失败")
+            raise HTTPException(status_code=400, detail="保存上传文件失败")
+
+        # Idempotency check (roadmap B-2): same key + same content -> replay, same key + different -> 409
+        # Include behavior-affecting params in hash (P1-2 review)
+        try:
+            file_hashes = compute_file_hashes(uploaded_records)
+            guidance_hash = compute_guidance_hash(guidance_content)
+            ct_val = comp_template.value if hasattr(comp_template, "value") else str(comp_template)
+            fo_val = format_output.value if hasattr(format_output, "value") else str(format_output)
+            ep_val = export_profile.value if hasattr(export_profile, "value") else str(export_profile)
+            from app.services.idempotency import build_request_hash
+
+            request_hash = build_request_hash(
+                ques_all, ct_val, fo_val, ep_val, file_hashes, guidance_hash,
+                require_model_review=require_model_review,
+                guidance_target=guidance_target,
+                guidance_purpose=guidance_purpose,
+            )
+            existing, conflict = check_idempotency(idempotency_key, request_hash)
+            if conflict:
+                shutil.rmtree(work_dir, ignore_errors=True)
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error_code": "idempotency_conflict",
+                        "message": conflict,
+                        "retryable": False,
+                        "idempotency_key": idempotency_key,
+                    },
                 )
-                total_uploaded_bytes += file_size
-                with open(data_file_path, "rb") as f_in:
-                    f_hash = hashlib.sha256(f_in.read()).hexdigest()
-                uploaded_records.append({
-                    "name": safe_filename,
-                    "relative_path": safe_filename,
-                    "size_bytes": file_size,
-                    "sha256": f_hash,
-                })
-                logger.info(f"上传文件已保存: {safe_filename} ({file_size} bytes)")
-        else:
-            logger.warning("没有上传文件")
-        _write_input_manifest(work_dir, task_id, uploaded_records)
-    except HTTPException:
-        shutil.rmtree(work_dir, ignore_errors=True)
-        raise
-    except Exception:
-        shutil.rmtree(work_dir, ignore_errors=True)
-        logger.exception("保存上传文件失败")
-        raise HTTPException(status_code=400, detail="保存上传文件失败")
+            if existing:
+                shutil.rmtree(work_dir, ignore_errors=True)
+                try:
+                    status_payload = get_single_task_status(existing)
+                    return {
+                        "task_id": existing,
+                        "status": status_payload.get("task_status", "processing"),
+                        "idempotent_replay": True,
+                        "idempotency_key": idempotency_key,
+                    }
+                except FileNotFoundError:
+                    pass
+                except Exception:
+                    return {"task_id": existing, "status": "processing", "idempotent_replay": True, "idempotency_key": idempotency_key}
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"幂等检查失败，继续创建新任务: {type(exc).__name__}")
 
-    # Reserve before the first scheduling-side effect.  If Redis, audit,
-    # publish, or direct runner setup fails, the exact token is released.
-    reserved_cancel_event = _reserve_active_task(task_id)
-    if reserved_cancel_event is None:
-        raise HTTPException(status_code=409, detail="任务仍在运行中")
-    try:
-        # 存储任务ID
-        await redis_manager.set(f"task_id:{task_id}", task_id)
-
-        # Optional preloaded guidance removes the race between task creation
-        # and the first Modeler call.
-        if guidance_content.strip():
-            normalized_guidance = user_input_queue.normalize_content(
-                guidance_content.strip()
+        # Reserve before the first scheduling-side effect.
+        reserved_cancel_event = _reserve_active_task(task_id)
+        if reserved_cancel_event is None:
+            shutil.rmtree(work_dir, ignore_errors=True)
+            raise HTTPException(status_code=409, detail="任务仍在运行中")
+        try:
+            await redis_manager.set(f"task_id:{task_id}", task_id)
+            if guidance_content.strip():
+                normalized_guidance = user_input_queue.normalize_content(
+                    guidance_content.strip()
+                )
+                if not user_input_queue.push(
+                    task_id, normalized_guidance, guidance_target
+                ):
+                    raise HTTPException(status_code=429, detail="预注入引导队列已满或目标无效")
+                _append_guidance_audit(
+                    work_dir,
+                    task_id=task_id,
+                    target=guidance_target,
+                    purpose=guidance_purpose,
+                    source="operator",
+                    content=normalized_guidance,
+                )
+            logger.info(f"Scheduling runner for task_id: {task_id}")
+            _schedule_reserved_runner(
+                task_id,
+                reserved_cancel_event,
+                run_modeling_task_async,
+                task_id,
+                ques_all,
+                comp_template,
+                format_output,
+                export_profile,
+                require_model_review=require_model_review,
             )
-            if not user_input_queue.push(
-                task_id, normalized_guidance, guidance_target
-            ):
-                raise HTTPException(status_code=429, detail="预注入引导队列已满或目标无效")
-            _append_guidance_audit(
-                work_dir,
-                task_id=task_id,
-                target=guidance_target,
-                purpose=guidance_purpose,
-                source="operator",
-                content=normalized_guidance,
-            )
+            # Record idempotency after successful reservation (still inside lock)
+            try:
+                file_hashes2 = compute_file_hashes(uploaded_records)
+                guidance_hash2 = compute_guidance_hash(guidance_content)
+                ct_val2 = comp_template.value if hasattr(comp_template, "value") else str(comp_template)
+                fo_val2 = format_output.value if hasattr(format_output, "value") else str(format_output)
+                ep_val2 = export_profile.value if hasattr(export_profile, "value") else str(export_profile)
+                from app.services.idempotency import build_request_hash as _build_hash2
 
-        logger.info(f"Scheduling runner for task_id: {task_id}")
-        _schedule_reserved_runner(
-            task_id,
-            reserved_cancel_event,
-            run_modeling_task_async,
-            task_id,
-            ques_all,
-            comp_template,
-            format_output,
-            export_profile,
-            require_model_review=require_model_review,
-        )
-    except BaseException:
-        _release_active_task(task_id, reserved_cancel_event)
-        raise
-    return {"task_id": task_id, "status": "processing"}
+                request_hash2 = _build_hash2(
+                    ques_all, ct_val2, fo_val2, ep_val2, file_hashes2, guidance_hash2,
+                    require_model_review=require_model_review,
+                    guidance_target=guidance_target,
+                    guidance_purpose=guidance_purpose,
+                )
+                record_idempotency(idempotency_key, request_hash2, task_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"记录幂等键失败: {type(exc).__name__}")
+        except BaseException:
+            _release_active_task(task_id, reserved_cancel_event)
+            raise
+        return {"task_id": task_id, "status": "processing", "idempotency_key": idempotency_key}
 
 
 async def run_modeling_task_async(
@@ -974,12 +1118,25 @@ async def run_modeling_task_async(
             return
 
         workflow_completed = True
+        # P1-4: check cancel before finalizing; export runs in thread but must respect cancel
+        if cancel_event.is_set():
+            logger.info(f"任务 {task_id} 在导出前检测到取消，终止交付")
+            _write_cancelled_status_if_active(task_id, "任务在导出前已取消")
+            await _safe_publish_message(task_id, SystemMessage(content="任务在导出前已取消", type="warning"))
+            return
         write_task_status(task_id, "finalizing", "工作流完成，正在生成并验收最终产物")
         await _safe_publish_message(
             task_id,
             SystemMessage(content="工作流完成，正在生成并验收最终产物"),
         )
-        final_report = _finalize_docx_and_manifest(task_id, export_profile)
+        # Roadmap C: run sync Pandoc/TeX export in thread to keep /status and /cancel responsive
+        final_report = await asyncio.to_thread(_finalize_docx_and_manifest, task_id, export_profile)
+        # P1-4: re-check cancel after export; do not let completed overwrite cancelled
+        if cancel_event.is_set():
+            logger.info(f"任务 {task_id} 在导出后检测到取消，终止交付")
+            _write_cancelled_status_if_active(task_id, "任务在导出后已取消")
+            await _safe_publish_message(task_id, SystemMessage(content="任务在导出后已取消", type="warning"))
+            return
         if not await _apply_final_acceptance_status(task_id, final_report):
             return
     except asyncio.CancelledError:
@@ -1006,6 +1163,8 @@ async def run_modeling_task_async(
 class CancelTaskResponse(BaseModel):
     success: bool
     message: str
+    detail: str | None = None
+    cancelled: bool | None = None
 
 
 @router.post(
@@ -1031,7 +1190,22 @@ async def queue_guidance(task_id: str, request: GuidanceRequest):
     content = user_input_queue.normalize_content(request.content.strip())
     if not content:
         raise HTTPException(status_code=422, detail="引导内容不能为空")
-    if not user_input_queue.push(safe_task_id, content, request.target):
+    # Idempotent guidance: same guidance_id returns existing receipt without duplicating queue
+    if request.guidance_id:
+        existing = user_input_queue.get_guidance_receipt(safe_task_id, request.guidance_id)
+        if existing is not None:
+            status = existing.get("status", "accepted")
+            audit_file = "internal_guidance_audit.jsonl"
+            # If already consumed, report consumed, else accepted
+            return GuidanceResponse(
+                task_id=safe_task_id,
+                target=request.target,
+                status="consumed" if status == "consumed" else "accepted",
+                audit_file=audit_file,
+                guidance_id=request.guidance_id,
+                consumed=(status == "consumed"),
+            )
+    if not user_input_queue.push(safe_task_id, content, request.target, guidance_id=request.guidance_id):
         raise HTTPException(status_code=429, detail="引导队列已满或目标无效")
 
     audit_file = _append_guidance_audit(
@@ -1052,28 +1226,54 @@ async def queue_guidance(task_id: str, request: GuidanceRequest):
     return GuidanceResponse(
         task_id=safe_task_id,
         target=request.target,
-        status="queued",
+        status="accepted",
         audit_file=audit_file,
+        guidance_id=request.guidance_id,
+        consumed=False,
     )
 
 
 @router.post("/modeling/{task_id}/cancel", response_model=CancelTaskResponse)
 async def cancel_task(task_id: str):
-    """取消正在运行的任务。"""
+    """取消正在运行的任务。区分“已接收”与“已停止”，调用方需轮询 /tasks/{id} 确认。"""
     safe_task_id = _require_safe_task_id(task_id)
     if safe_task_id not in _active_tasks:
+        # Check persisted status: if already cancelled/completed, report correctly
+        try:
+            work_dir = get_work_dir(safe_task_id)
+            persisted = read_task_status(work_dir)
+            if persisted and persisted.get("status") == "cancelled":
+                return CancelTaskResponse(success=True, message="任务已停止", detail="already_cancelled", cancelled=True)
+            if persisted and persisted.get("status") in {"completed", "failed"}:
+                return CancelTaskResponse(success=False, message="任务已结束", detail=persisted.get("status"), cancelled=False)
+        except FileNotFoundError:
+            pass
         return CancelTaskResponse(
             success=False,
             message="任务不存在或已完成",
+            detail="not_active",
+            cancelled=False,
         )
 
     _, cancel_event = _active_tasks[safe_task_id]
     cancel_event.set()
     logger.info(f"已发送取消信号给任务 {safe_task_id}")
-
+    # P1-4: do not claim actually stopped; let finally block mark cancelled and client polls
+    # Brief wait to see if task exits quickly (e.g., was in sleep), but do not block long
+    await asyncio.sleep(0.3)
+    still_active = safe_task_id in _active_tasks
+    if still_active:
+        return CancelTaskResponse(
+            success=True,
+            message="停止指令已接收，执行仍在收尾，需轮询 /tasks/{id} 确认已停止",
+            detail="accepted",
+            cancelled=False,
+        )
     return CancelTaskResponse(
         success=True,
-        message="停止指令已发送",
+        message="任务已停止",
+        detail="cancelled",
+        cancelled=True,
     )
 
 
@@ -2120,12 +2320,22 @@ async def run_resume_task_async(
             if checkpoint is not None
             else DEFAULT_MODELING_EXPORT_PROFILE
         )
+        if cancel_event.is_set():
+            logger.info(f"任务 {task_id} 在续传导出前检测到取消，终止交付")
+            _write_cancelled_status_if_active(task_id, "任务在导出前已取消")
+            await _safe_publish_message(task_id, SystemMessage(content="任务在导出前已取消", type="warning"))
+            return
         write_task_status(task_id, "finalizing", "续传完成，正在生成并验收最终产物")
         await _safe_publish_message(
             task_id,
             SystemMessage(content="续传完成，正在生成并验收最终产物"),
         )
-        final_report = _finalize_docx_and_manifest(task_id, export_profile)
+        final_report = await asyncio.to_thread(_finalize_docx_and_manifest, task_id, export_profile)
+        if cancel_event.is_set():
+            logger.info(f"任务 {task_id} 在续传导出后检测到取消，终止交付")
+            _write_cancelled_status_if_active(task_id, "任务在导出后已取消")
+            await _safe_publish_message(task_id, SystemMessage(content="任务在导出后已取消", type="warning"))
+            return
         if not await _apply_final_acceptance_status(task_id, final_report):
             return
     except asyncio.CancelledError:
@@ -2136,6 +2346,8 @@ async def run_resume_task_async(
             SystemMessage(content="任务已停止", type="warning"),
         )
     except Exception as e:
+        import traceback as _tb
+        logger.error("RESUME_TRACEBACK:\n" + _tb.format_exc())
         phase = "最终产物收尾失败" if workflow_completed else "任务续传失败"
         logger.error(f"任务 {task_id} {phase}: {type(e).__name__}")
         write_task_status(task_id, "failed", f"{phase}: {e}")

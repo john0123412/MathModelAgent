@@ -450,6 +450,7 @@ class TestDispatchReservation(unittest.IsolatedAsyncioTestCase):
                         "",
                         "review",
                         None,
+                        idempotency_key=None,
                     )
         self.assertNotIn("dispatch-endpoint", modeling_router._active_tasks)
 
@@ -472,6 +473,7 @@ class TestDispatchReservation(unittest.IsolatedAsyncioTestCase):
                     "",
                     "review",
                     None,
+                    idempotency_key=None,
                 )
                 with self.assertRaises(HTTPException) as caught:
                     await modeling_router.modeling(
@@ -485,6 +487,7 @@ class TestDispatchReservation(unittest.IsolatedAsyncioTestCase):
                         "",
                         "review",
                         None,
+                        idempotency_key=None,
                     )
         self.assertEqual(caught.exception.status_code, 409)
         entry = modeling_router._active_tasks.get("dispatch-endpoint")

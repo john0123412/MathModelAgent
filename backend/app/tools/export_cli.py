@@ -405,7 +405,8 @@ def cmd_task_refresh(args: argparse.Namespace) -> int:
             editorial_policy=editorial_policy,
             template_override_audit=template_override["audit"],
         )
-        if preflight.get("status") != "PASS":
+        # CONDITIONAL_PASS: 仅含 info 级人工复核项，视为可交付放行（硬门禁 FAIL 才拒绝）
+        if preflight.get("status") not in ("PASS", "CONDITIONAL_PASS"):
             print(json.dumps({"ok": False, "preflight": preflight}, ensure_ascii=False, indent=2))
             return 2
         docx_result = md_2_docx(task_id, export_profile=args.profile)

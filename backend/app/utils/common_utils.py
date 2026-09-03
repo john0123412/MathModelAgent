@@ -247,12 +247,26 @@ def transform_link(task_id: str, content: str):
         task_id: 任务 ID，用于构建 URL 路径。
         content: 包含图片链接的 Markdown 文本。
     """
+    base = (settings.SERVER_HOST or "").rstrip("/")
     content = re.sub(
         r"!\[(.*?)\]\((.*?\.(?:png|jpg|jpeg|gif|bmp|webp))\)",
-        lambda match: f"![{match.group(1)}]({settings.SERVER_HOST}/static/{task_id}/{match.group(2)})",
+        lambda match: f"![{match.group(1)}]({base}/static/{task_id}/{match.group(2)})" if base else f"![{match.group(1)}](/static/{task_id}/{match.group(2)})",
         content,
     )
     return content
+
+
+def get_static_relative_path(task_id: str, filename: str) -> str:
+    """返回任务静态资源的相对路径（不依赖 SERVER_HOST）。"""
+    return f"/static/{ensure_safe_task_id(task_id)}/{ensure_safe_filename(filename)}"
+
+
+def get_static_absolute_url(task_id: str, filename: str) -> str | None:
+    """返回可选的绝对 URL（基于 SERVER_HOST）。"""
+    base = (settings.SERVER_HOST or "").rstrip("/")
+    if not base:
+        return None
+    return f"{base}{get_static_relative_path(task_id, filename)}"
 
 
 def _file_sha256(path: str) -> str | None:

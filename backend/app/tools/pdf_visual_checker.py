@@ -21,6 +21,12 @@ CUMCM_MIN_CONTENT_MARGIN_PT = 2.5 / 2.54 * 72
 CUMCM_CONTENT_MARGIN_TOLERANCE_PT = 3.0
 MAX_CUMCM_PDF_SIZE_BYTES = 20 * 1024 * 1024
 MAX_CUMCM_BODY_PAGES = 20
+# 华数杯部署放宽（仅 huashubei profile 生效；cumcm2025/2026 与 default 维持原基线）：
+HUASHUBEI_MIN_CONTENT_MARGIN_PT = 0.6 / 2.54 * 72  # 页边距允许至 0.6cm（公式略超右边距放行）
+HUASHUBEI_MAX_BODY_PAGES = 30  # 原则上正文<=20页；华数杯部署严格按新规正文<=30页（摘要不计入）。
+HUASHUBEI_RIGHT_MARGIN_SLACK_PT = 20.0  # 允许公式/图略超右边距至页面边缘的额外余量
+HUASHUBEI_KEYWORDS_ANY_PAGE = True  # 关键词允许出现在摘要页之后的页面，不强制首页
+MAX_ABSTRACT_PAGES = 1  # 新规：摘要强制控制在首页单页内。
 MAX_CONTENT_MARGIN_ISSUES = 20
 DEFAULT_EDITORIAL_QUALITY_POLICY = "internal_editorial_warn"
 CUMCM2026_STRICT_EDITORIAL_QUALITY_POLICY = "cumcm2026_strict"
@@ -139,12 +145,13 @@ def _find_content_margin_issues(
     page_number: int,
     min_margin: float = CUMCM_MIN_CONTENT_MARGIN_PT,
     tolerance: float = CUMCM_CONTENT_MARGIN_TOLERANCE_PT,
+    right_slack_pt: float = 0.0,
 ) -> list[dict]:
     """Find body text outside the CUMCM 2.5cm minimum content margin."""
     width = float(page.rect.width)
     height = float(page.rect.height)
     left_limit = min_margin - tolerance
-    right_limit = width - min_margin + tolerance
+    right_limit = width - min_margin + tolerance + right_slack_pt
     top_limit = min_margin - tolerance
     bottom_limit = height - min_margin + tolerance
     issues: list[dict] = []
@@ -176,7 +183,9 @@ def _find_content_margin_issues(
     return issues
 
 
-def _check_first_page_is_abstract(page_texts: list[str]) -> dict:
+def _check_first_page_is_abstract(
+    page_texts: list[str], *, keywords_anywhere: bool = False
+) -> dict:
     first_page_text = page_texts[0] if page_texts else ""
     keyword_match = re.search(r"(?:关键词|关键字)\s*[:：]?", first_page_text)
     after_keywords = first_page_text[keyword_match.end() :] if keyword_match else ""
@@ -196,14 +205,21 @@ def _check_first_page_is_abstract(page_texts: list[str]) -> dict:
                 forbidden_terms.append(term)
 
     has_keywords = bool(keyword_match)
+    # 华数杯部署放宽：关键词允许出现在摘要页（含次页）；cumcm/default 仍要求首页含关键词
+    if keywords_anywhere:
+        has_keywords_ok = bool(
+            re.search(r"(?:关键词|关键字)\s*[:：]?", "\n".join(page_texts))
+        )
+    else:
+        has_keywords_ok = has_keywords
     abstract_offset = first_page_text.find("摘要")
     title_prefix = first_page_text[:abstract_offset].strip() if abstract_offset >= 0 else ""
     has_title = bool(title_prefix)
     return {
         "passed": bool(page_texts)
         and "摘要" in first_page_text
-        and has_keywords
         and has_title
+        and has_keywords_ok
         and "目录" not in first_page_text
         and not forbidden_terms,
         "has_abstract": "摘要" in first_page_text,
@@ -269,6 +285,36 @@ def _extract_abstract_text(first_page_text: str) -> str:
     return re.sub(r"\s+", "", first_page_text[abstract_match.end() : abstract_end])
 
 
+def _check_abstract_on_single_page(page_texts: list[str], max_abstract_pages: int = 1) -> dict:
+    """Return passed=True iff the abstract label and keywords are both on page 1
+    and no body-section heading appears on page 1, guaranteeing the abstract
+    fits on one page per the new rule (正文≤30页, 摘要≤1页).
+    """
+    if not page_texts:
+        return {"passed": False, "has_abstract_label": False, "keywords_on_first": False,
+                "body_leak": True, "max_abstract_pages": max_abstract_pages}
+
+    p1 = page_texts[0]
+    has_abstract_label = bool(re.search(r"摘要\s*[:：]?", p1))
+    has_keywords = bool(re.search(r"(?:关键词|关键字)\s*[:：]?", p1))
+
+    keyword_match = re.search(r"(?:关键词|关键字)\s*[:：]?", p1)
+    rest = p1[keyword_match.end():] if keyword_match else p1
+    body_leak = bool(re.search(
+        r"(?:[一二三四五六七八九十]、|[1-5]\.(?:[1-9]\.)?)\s*(?:问题重述|问题分析|模型假设|符号说明|模型建立|模型的建立)",
+        rest,
+    ))
+
+    passed = has_abstract_label and has_keywords and not body_leak
+    return {
+        "passed": passed,
+        "max_abstract_pages": max_abstract_pages,
+        "has_abstract_label": has_abstract_label,
+        "keywords_on_first": has_keywords,
+        "body_leak_on_first_page": body_leak,
+    }
+
+
 def _text_coverage_ratio(page, lines: list[dict]) -> float | None:
     """Estimate text bounding-box coverage; ``None`` means geometry unavailable."""
     boxes: list[tuple[float, float, float, float]] = []
@@ -331,6 +377,14 @@ def _check_editorial_quality(
     body_page_limit = _check_body_page_limit(page_texts, max_body_pages=maximum_pages)
     body_pages = body_page_limit["body_pages_after_abstract"]
     body_range_passed = minimum_pages <= body_pages <= maximum_pages
+    abstract_single_page = _check_abstract_on_single_page(page_texts, max_abstract_pages=MAX_ABSTRACT_PAGES)
+    abstract_single_page_checkpoint = {
+        "passed": abstract_single_page["passed"],
+        "max_abstract_pages": abstract_single_page["max_abstract_pages"],
+        "has_abstract_label": abstract_single_page["has_abstract_label"],
+        "keywords_on_first": abstract_single_page["keywords_on_first"],
+        "body_leak_on_first_page": abstract_single_page["body_leak_on_first_page"],
+    }
     abstract_checkpoint = {
         "passed": abstract_density_passed,
         "abstract_characters": abstract_characters,
@@ -352,6 +406,8 @@ def _check_editorial_quality(
         warnings.append("摘要页内容密度偏低或存在较大空白风险。")
     if not body_range_passed:
         warnings.append("正文页数未落在内部编辑建议范围内。")
+    if not abstract_single_page_checkpoint["passed"]:
+        warnings.append(f"摘要未控制在首页单页内（新规：摘要≤{MAX_ABSTRACT_PAGES}页）。")
     raw_passed = not warnings
     return {
         "passed": raw_passed or not policy["blocking"],
@@ -364,6 +420,7 @@ def _check_editorial_quality(
         "checkpoints": {
             "abstract_page_density": abstract_checkpoint,
             "body_page_range": body_checkpoint,
+            "abstract_on_single_page": abstract_single_page_checkpoint,
         },
     }
 
@@ -442,13 +499,22 @@ def check_pdf_visual(
             min_content_margin_cm, (int, float)
         ) or not 1.0 <= float(min_content_margin_cm) <= 5.0:
             raise ValueError("min_content_margin_cm 必须在 1.0 至 5.0 之间")
-    effective_body_max = MAX_CUMCM_BODY_PAGES if body_max_pages is None else body_max_pages
-    if min_content_margin_cm is None:
-        effective_margin = (
-            CUMCM_MIN_CONTENT_MARGIN_PT
-            if export_profile in ("cumcm2025", "cumcm2026")
-            else 2.0 / 2.54 * 72
+    if body_max_pages is None:
+        effective_body_max = (
+            HUASHUBEI_MAX_BODY_PAGES
+            if export_profile == "huashubei"
+            else MAX_CUMCM_BODY_PAGES
         )
+    else:
+        effective_body_max = body_max_pages
+    if min_content_margin_cm is None:
+        if export_profile == "huashubei":
+            # 华数杯部署放宽：正文页边距允许至 0.6cm（公式略超右边距放行）
+            effective_margin = HUASHUBEI_MIN_CONTENT_MARGIN_PT
+        elif export_profile in ("cumcm2025", "cumcm2026"):
+            effective_margin = CUMCM_MIN_CONTENT_MARGIN_PT
+        else:
+            effective_margin = 2.0 / 2.54 * 72
     else:
         effective_margin = float(min_content_margin_cm) / 2.54 * 72
     report = {
@@ -527,7 +593,14 @@ def check_pdf_visual(
                     text_margin_overflows.extend(page_overflows[:remaining])
                 if len(content_margin_issues) < MAX_CONTENT_MARGIN_ISSUES:
                     page_margin_issues = _find_content_margin_issues(
-                        page, index + 1, min_margin=effective_margin
+                        page,
+                        index + 1,
+                        min_margin=effective_margin,
+                        right_slack_pt=(
+                            HUASHUBEI_RIGHT_MARGIN_SLACK_PT
+                            if export_profile == "huashubei"
+                            else 0.0
+                        ),
                     )
                     remaining = MAX_CONTENT_MARGIN_ISSUES - len(content_margin_issues)
                     content_margin_issues.extend(page_margin_issues[:remaining])
@@ -547,6 +620,9 @@ def check_pdf_visual(
         "body_page_limit": _check_body_page_limit(
             page_texts, max_body_pages=effective_body_max
         ),
+        "abstract_on_single_page": _check_abstract_on_single_page(
+            page_texts, max_abstract_pages=MAX_ABSTRACT_PAGES,
+        ),
         "editorial_quality": _check_editorial_quality(
             page_texts,
             first_page_coverage_ratio,
@@ -558,7 +634,12 @@ def check_pdf_visual(
             "passed": bool(page_sizes) and all(item["a4"] for item in page_sizes),
             "pages": page_sizes,
         },
-        "abstract_first_page": _check_first_page_is_abstract(page_texts),
+        "abstract_first_page": _check_first_page_is_abstract(
+            page_texts,
+            keywords_anywhere=(
+                HUASHUBEI_KEYWORDS_ANY_PAGE and export_profile == "huashubei"
+            ),
+        ),
         "no_table_of_contents": _check_no_table_of_contents(page_texts),
         "submission_anonymity": _check_forbidden_submission_terms(page_texts),
         "markdown_table_leakage": _check_markdown_table_leakage(page_texts),

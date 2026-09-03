@@ -1,94 +1,76 @@
 # AGENT_MEMORY
 
-> 本文件是接手必读的**活跃事实清单**，不是过程日志。
-> **硬性上限：总字符数 ≤10,000**（`wc -m AGENT_MEMORY.md` 实测）。超限时把最旧条目移入
-> `docs/memory/2026-MM.md` 归档（该月无归档则创建）。条目模板：一行结论 + 关键数字/SHA/路径锚点
-> + 指针；**过程叙事直接写归档，不进本文件**。历史细节对归档目录全文 grep 检索。
+> 活跃事实清单：只记现状结论 + 关键锚点 + 指针；过程叙事一律在 docs/memory/ 归档（grep 检索）。
+> **硬上限：主文件 ≤5,000 字符**（用户 2026-08-29 指令，严于原 10,000 规则）。
 
 ## 归档索引
 
 - [2026-07](docs/memory/2026-07.md) —— 华数杯前史与早期工程修复
-- [2026-08](docs/memory/2026-08.md) —— 竞赛任务全过程取证记录、改进方案 1–6 批执行明细
+- [2026-08](docs/memory/2026-08.md) —— 更早 235 条 + 2026-08-29 压缩轮出的 08-26~08-29 全部详细条目
 
-## 项目终态（2026-08-25 封版）
+- 8 月交付/导出基线已轮转至 docs/memory/2026-08.md；0825/0828 族复跑须用 huashubei。
 
-- 华数杯论文冻结 @ origin/main=37391e8：`res.pdf` 145 页 + `submission_body.pdf` 22 页，位于
-  `backend/project/work_dir/20260823-040225-2f42da7fd77c865ebc61480579163b07/`；六门禁全绿 +
-  TECHNICAL_PASS；评审终轮 11 项 PASS、定级 92–93。回退路径：`tmp/backup_frozen_task_20260824` + 沙盒。
-- 待人工项：平台上传三件事（文件命名 / 匿名目检 / 诚信声明）。
-- 待用户指令的 tag 动作：`git tag -f v2026.08.24-paper-final 37391e8 && git push origin v2026.08.24-paper-final`
-  （当前 tag 仍锚在措辞修正前的 48a0e69）。技术侧不再改动任何算法、数据、图或正文。
+## 仓库归属与环境要点
 
-## 当前隔离实验（未纳入冻结交付）
+- john0123412 个人 fork；origin 唯一可写远程；upstream jihe520 严禁任何写操作（死命令）。
+- 容器名 mathmodelagent_john_*；backend 容器重建/kill 曾三次 daemon 层挂起，处置 = 人工重启
+  Docker Desktop 后 `docker compose up -d backend`；本地代码执行用 local-execution 覆盖档
+  （pids_limit 1024、LOCAL_CODE_EXECUTION_TIMEOUT_SECONDS=300），标准档无 E2B key 时
+  Coder 前置直接失败、不自动降级。
+- LLM stealth/ox-alpha 池曾持续 429（两次有界重试即停）；reasoning_effort 管线已恢复（58d01d3）。
+- 第 7 批（base-box 上架）被 jihe520 死命令封死，视为不执行。
 
-- [2026-08-25] Q2 Phase A 在 `20260825-phasea-q2-v2-recovered/` 按官方 `GPU_Demand×overlap` 重建同口径基线并独立 PASS；A1a 释放 1,000 任务的联合 MILP 三锚点均 `optimal/gap=0`，两个可复核锚点把固定参考点 HV 从 0.107084 提至 0.166635 并支配旧候选，见 `phase_a1/a1a_gate_analysis.json`。
-- [2026-08-25] A1b 因两次未形成完整可恢复候选池而 STOP：多算子池、epsilon 池和确定性复跑未完成，Phase A 总门禁 FAIL，不进入 C/B、不刷新冻结链；原沙盒删除与复跑细节见 `RECOVERY.md`、`phase_a1/A1B_STOP_HANDOFF.md`。
+## 待人工 / 待办
 
-## 仓库归属与 main 历史锚点
+- 平台上传三件事（文件命名 / 匿名目检 / 诚信声明）；tag 动作待指令：
+  `git tag -f v2026.08.24-paper-final 37391e8 && git push origin v2026.08.24-paper-final`。
+- 20260828 两个低危观察待决策：5.3 节"SOC 恰好回到初始值"与数据不符；全篇无论文献区。
 
-- 本仓库为 john0123412 个人使用 fork；origin 是唯一可写远程；upstream jihe520 仅参照，
-  对其任何仓库（含 base-box）严禁写操作（死命令永久生效）——详见 CLAUDE.md/AGENTS.md「仓库归属与操作边界」。
-- main 链：b51910d → #37(74be477 改进方案1–6批) → #38(a988df2 合并后验收修复) → 活任务收口
-  (4b69513/58d01d3/37391e8) → #39(2e1a1b7 归属口径固化)。
-- Docker 容器名已改 `mathmodelagent_john_*`；下次 `docker compose up` 会重建容器，属预期。
+## v23 算电协同·去伪造重建（2026-09-02 落地，task=20260830-234433-4b3226317d54a94062be7a3379cf1a10）
 
-## 已知风险与环境要点
+- **真值与血统（已被 09-02~09-03 多轮更新覆盖）**：notebook 4 code cell 全真实执行；Q4 曾因
+  `scenario_objective_range` 方向写反误报，修后 100 样本真实达标；frozen/manifest 走
+  rebind→hash 重算受控刷新。当前冻结数字以 09-03 终态为准（MC 均值 1,284,013,383）。
+- **Q4 争议已消解（09-02 17:00 轮）**：原 Q4 失败是 `scenario_objective_range` **约束方向写
+  反**（写成 `lte 0.5`，实为 `gte 0.05`），不是模型不行。修 `lp_core.py`/`q4_model.py` 后按
+  **100 样本真实重算**（q4_rerun5）：非支配 6≥5、CI 0.0457≤0.05、一致性 6.1e-05≤0.01、
+  区分度 0.7408≥0.05、MC 成本均值 1,284,013,383 —— **四个目标全部真实达标，无需放宽**。
+  res.md 由 `align_resmd_q4_v2.py` 同步到 100 样本数值（0.0597→0.0457 等）。
+- **全门禁已绿（09-02 19:44）**：`final_acceptance=TECHNICAL_PASS`（12/12 项通过）、
+  `submission_audit=PASS`（14/14）、`preflight=PASS`、`pdf_visual=PASS`、`cross_modal=PASS`、
+  `execution_validation_report=PASS`。res.pdf 68 页（正文 30 ≤ 上限 30，附录 27 页为完整源码）、
+  res.docx 2.79MB。三项原 FAIL（`submission_audit` 陈旧 / `artifact_freshness` /
+  `complete_source_appendix`）已清零。
+- 复用脚本：`internal/audit_20260901/{q4_model.py, lp_core.py, patch_q4_cell.py,
+  rebind_manifest.py, run_gates.py, draw_q4_ci.py, align_resmd_q4_v2.py, trim_abstract.py,
+  compress_resmd2.py, regen_pdf.py, **fix_appendix.py, fix_support_caption.py,
+  reconcile_gates2.py**}`。复用原则：任务级脚本只放 work_dir 内部审计子目录（见 AGENTS.md
+  工作区防污染铁律）。详细过程见 `.workbuddy-ai/memory/2026-09-02.md`。
+- [09-02 第五~七轮+09-03 精修轮] P0-P3收敛、摘要5段、提示词/编辑政策治本；审计修复（11孤立
+  引用删、9悬空内嵌、Mavrotas{[6]}→[9]、6.2→6.3、AI审计24.5→约21）；外审86-89→四项语义对齐
+  （Q2统一λ扫描+对偶定价+真实支配检验{lam0,lam1500}、Q3披露循环约束1.5次/日+敏感性、Q4降格
+  固定迁移再优化、CI拆分±4.57%、关键词五项、7.2真实局限）。终态PDF 72页正文30、TECHNICAL_PASS
+  12/12、五件哈希MATCH。陷阱：append_code_appendix 必跟 fix_support_caption.py。
+  详文 docs/memory/2026-09.md。
 
-- Docker Desktop：backend 容器重建/kill 曾连续三次 daemon 层挂起（疑受 LLM_REQUEST_TIMEOUT_SECONDS=1800
-  影响），处置=人工重启 Docker Desktop 后 `docker compose up -d backend`；宿主机 venv 全功能可用。
-- LLM stealth/ox-alpha 共享池曾持续 429（两次有界重试即停，勿无限重试）；glm-5.2:free 探测可用；
-  reasoning_effort 管线已恢复（58d01d3，禁思考语义优先于 effort 透传）。
-- `.claude/hook_lint.sh` 在 worktree 下路径假设失效（找 `./venv`），backend py 编辑会报 hook 错但
-  编辑已生效——既有问题待修。
-- 跨 worktree 验收铁律：unittest discover 导入跟随 cwd，必须以"待测代码树 + 原生 venv"组合执行。
-- 全量回归口径：backend 目录下 `python -m unittest discover app/tests` ≈879 tests OK (skipped=2)
-  + `ruff check app` 全绿。
+## Agent 调用 Docker 后端路线图（2026-09-03，PR #40）
 
-## 工程沉淀指针
+- **目标**：外层 Agent 稳定调用本机 Docker 后端（`docker compose up` 仅 backend+redis，前端 `--profile frontend` 可选），0.0.15 规则进入实际执行链而非仅 `skills/`。
+- **批 A**：`writer 600-900字4段 / 11pt1.3 / 30页+摘要单页` 收敛至 profile；手机号漏检等通用修复；`docker-compose.yml` 去 `5173/api` 耦合、`frontend` 加 profile、`common_router` 增 `deployment`、`task_client` 基址切 `8000`。
+- **批 B**：`task_client.py` 薄客户端（`doctor/submit/inspect/events/guide/approve-model/revise-model/review-results/resume/cancel/artifacts/repair-*`）+ 后端 `Idempotency-Key/GET /tasks/{id}/events/artifacts` 与 `guidance_id` 回执（`accepted/consumed`）。
+- **批 C**：`task_budget.json` 累计预算（调用/known token/运行时长）持久化、未知 usage 标 `unknown`、`_finalize` 备份保留+`to_thread` 防阻塞、`cancel` 保留停止证据。
+- **批 D**：`backend/app/resources/modeling_guides/{01-05}.md`（确定性基线/硬约束/统计严谨/Pareto/溯源）按诊断 profile 加载；`paper_review` 六维评审材料包+版本绑定（`manuscript_sha256/frozen_result_id/artifact_set_id`）+ 五类分流。
+- **批 E**：`figure_plan` 路由（data/template/diagram/physical）+ 多面板+追溯校验；`doctor` 容器体检与模板能力表（`huawei→huaweibei` 别名，后端仅 4 profile）。
+- **批 F**：`test_agent_docker_backend.py` 10 项契约验收 + 轻量 LP 烟雾题 + 完整链路哈希核对；`STARTUP.md` 增 Agent 调用手册。
+- 取证：`mathmodel_workspace_0.0.15 (323 MB)`；验证：`task_client doctor` + `docker compose config` + `unittest` 10/10。
 
-- 综合改进方案第 1–6 批全部落地（PR #37/#38/#39）；方案文档
-  `D:\Users\Johnny\downloads\mathmodel-re\consolidated-improvement-plan.md` 已标完成态。
-- 第 7 批（base-box 市场上架）已被 jihe520 死命令封死，除非用户提供自有分发目标并当次授权，视为不执行。
-
-- [2026-08-26] **Phase C/B 收尾完成：Q2 v2（五算子 LNS/MILP）替换版在新目录通过全套导出验收**：
-  1. 任务目录 20260825-phasec-replace-v2：合格池 35（剔除 v2_baseline__ 与超时算子）→ 非支配 23 点；代表膝点 gpu_peak_pressure__anchor_carbon（门禁指定；垂距规则交叉核选相邻候选 eps_latency_25，两候选均落表，差异已记录不静默）；LP 独立复算 cost=1,905,939,325.34/carbon=2,079,325.83 与池值一致，功率残差 5.68e-14；迁移 8,935 次（修复 8,514+LNS 421）；GPU_Demand×overlap 官方口径已写入 audit/evidence/正文。
-  2. frozen_results.json 手工更新 5 个 sources 哈希 + 8 个 ques2 指标值；execution_validation.json 经 record_execution_evidence 受控重绑（validation=PASS）。res.md 十二处 Q2 同步（含表3 新端点 marginal_cost__anchor_cost/latency_reduction__anchor_latency、421/8,935、overlap 口径、膝点交叉核验声明）；res.json 为历史 Writer 恢复草稿（含更旧数值），未篡改该 provenance，仅登记说明。
-  3. task-refresh(profile=huashubei 照抄 task_request) 全绿：execution_validation/preflight/pdf_visual/submission_audit=PASS+TECHNICAL_PASS；candidate_manifest artifact_hashes 5/5 MATCH、submission_file res.pdf 哈希一致；PyMuPDF 抽核 146 页新值全命中、旧值/旧名零残留。表6 宽表条件门禁两轮收敛（167→121→阈值 120 以下），根因为门禁源码 max_line_length>=120。
-  4. 旧目录一致性：文件数 204=204；主控快照 tmp/pre_replace_snapshot_C.txt 哈希 dd4737... 的 recipe 未提供，11 种标准 recipe 均未复现——按熔断停止猜测；我方文档化 recipe（排序 relpath+"sha256␣␣"+LF 连接）复算哈希 85a01385780ab0a45707...，供主控用其原 recipe 比对；本会话全部写入仅限新目录。
-  5. 已知边界：附录代码清单仍为冻结 v1 q2_energy_aware_solver.py，v2 产物的生成管线脚本位于 recovered/phase_a1（q2_lns_a1b_*.py）未入附录清单——provenance 归属待主控定夺；Q4 冻结数值基于旧代表调度，4.4.1 已更新指针名称，Q4 是否需随新调度重跑由主控决策。
-
-- [2026-08-26] **代码块样式 + v2 终稿收尾**：① 导出链路代码块统一"白底+浅灰边框+左行号"
-  （export_profiles.py / tex_project_exporter.py×4 / gmcmthesis.cls，含删除上游原有底纹）；
-  ② **最终交付 = work_dir/20260825-phasec-replace-v2/**：res.pdf 146 页（新值全命中）+
-  submission_body.pdf 重切 22 页（internal/build_submission_body.py，clip 止于[10]，
-  新值命中/零 S1_cost_P2）；旧目录 20260823-040225 已被 v2 取代仅作存档；
-  ③ 原版四件交付物备份在 tmp/backup_res_pdf_precodestyle_20260826/（SHA256SUMS_before.txt）。
-
-- [2026-08-26] **终稿复核轮（引用/AI 声明/排版三整改）**：① 参考文献净化：摘除 [9]/[10] AI 工具条目，
-  8 条文献经 Crossref/doi.org/OpenLibrary/SJTU 原文页逐一核实为真实（[4]=ICAC'14 GreenWorks）；
-  ② AI 使用声明独立成节置于参考文献之后（结论章旧声明+附录C 迁移合并）：
-  ensure_huashubei_ai_disclosure 重写（幂等出口+围栏声明头自愈前置）、_check_ai_disclosure 新契约、
-  normalize_chinese_references 与 references/reference_format 两处分区改"任意级标题截止"
-  （修粘连 bug：声明节曾被吸成末条目续行）；③ 表3 长英文标识符列重叠修复（中文标签前置+全名入表注）；
-  ④ 回归 134/104 tests OK；收尾清单新增引用可查证/AI 声明独立/阅读器目检三项；
-  最终 res.pdf 146 页 + submission_body 22 页（clip 止于表7 y=240.2），四门禁全绿。
-
-- [2026-08-26] **评审整改轮（代表点双轨 + v2 证据链入附录）**：① 4.2.2 改双轨语义——argmax 垂距规则
-  降级为"独立参考膝点"（选中 eps_latency_25，0.314151），代表方案=phase 门禁指定（anchor_carbon，
-  0.309322）；正文"代表膝点"13 处改名"代表方案"，frozen 标签同步 6 处，evidence JSON rule 改交叉核验
-  语义并补 candidate_table_sha256（原为 null）；② q2_independent_check.py 重写为 v2 双轨校验
-  （9 检查全绿；修 3 项既有失败：null 哈希 / scope_note 无"局部" / 跨工件 1e-7 浮点差→相对容差 5e-10）；
-  ③ v2 solver 入证据链：executed_code_sources 白名单 +q2_lns_a1b_multiobjective.py
-  +q2_lns_energy_system.py（=v2_baseline overlap 口径 q34_solver 的字节一致副本；去 sys.path 引导改
-  同目录导入以过自包含门禁），附录自动重建为 B.1–B.9；④ 结论 `**` 字面残留清除。
-  终版 res.pdf **235 页**（B.5/B.6=v2 实现，代码页增 88 页属预期），submission_body 22 页
-  （p9"见附录B.5"为合法交叉引用），四门禁全绿。
-
-- [2026-08-28] **Writer `search_papers` 坏参数续传崩溃已修**：真实任务
-  `20260828-080924-3dd8912d8b76f6ff928175f0e2a9e7bb` 在 RepeatQues 阶段因原生
-  `tool_call.arguments` 非法 JSON 于 Scholar 调用前抛错；`writer_agent.py` 现改为写历史前严格校验并
-  canonicalize、同轮合法 pseudo-XML 仅恢复一次、不可恢复时返回配对 `invalid_arguments` 且不发空查询，
-  同时恢复 Coder/Modeler 熔断上限 3/2。回归：定向 140 tests OK；全量 888 tests OK（skipped=2）；
-  `ruff check .` 通过；Docker 挂载源码 76 tests + Ruff + `/docs` 健康检查通过。该任务仍为 failed，
-  真实 provider resume 与论文全门禁尚未执行，禁止把手工 A 产物
-  当正式候选；恢复脚本已保全至 gitignored `scratch/writer-b-recovery-20260828/`。
+- [09-03 LNS升级实测→不采纳] v2 LNS全链本机跑通（MILP 22s/次、单算子7候选0违反），但缝合验证
+  判死：LNS自口径改进−0.4%，跨当前 lp_core+份额口径 1833.7M > 贪心λ点 1440.1M（anchor vs share
+  口径差27%不可通约）。强行缝合=新造假链。决策：保留88-90全绿交付态，LNS产物留v2目录不进主链；
+  快照未动；"聚合近似"扣分如实保留在论文7.2。
+- [09-03 LNS终局] milp options"threads"致Not Set（已修）；share口径负优化−0.07%+GPU违反2→242，
+  双重证伪终结。
+- [09-03 优化轮] Q1基线对照（朴素72.86 vs GBR 54.99，+24.53%，notebook补Q1 cell）；6.1.1重写
+  真实OAT+表6弹性；表号1-8重排、空6.2删、6.3并7.2、关键词标准词。终态74页正文30全绿。
+- [2026-09-03] LP fdd491（完整 ID 见归档）已 completed / TECHNICAL_PASS；default 预检条件项、审计 WARN 仍需复核。外审发现正文数值/图文/排版问题，保留现稿待受控返修。7 cell 新内核重跑、3 表 MATCH；详 docs/memory/2026-09.md。
+- [2026-09-03] 未提交修复：default 条件放行限定显式 profile，失败 sensitivity 不向 Writer 传数值/图；paper_review 三版本必填且写前校验，缺失产物判 stale。52 项定向单测、ruff、Compose config 通过。

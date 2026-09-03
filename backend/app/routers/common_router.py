@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 from pathlib import Path
 from datetime import datetime
 
@@ -124,6 +125,54 @@ def _feature_guardrail_warnings() -> list[dict[str, str]]:
     return warnings
 
 
+def _get_deployment_info() -> dict:
+    """返回 Agent 可读的部署信息（不含凭据）。"""
+    info: dict = {
+        "source_mounted": False,
+        "git_commit": None,
+        "git_dirty": None,
+        "capability_version": "2026-09-03-roadmap-A",
+    }
+    # 源码是否通过 volume 挂载（开发模式）
+    try:
+        # backend/app 挂载时，宿主机 .git 往往不在容器内；通过检查 /app/app 是否为挂载点近似判断
+        info["source_mounted"] = os.path.ismount("/app/app") or os.path.exists("/app/app/.git") or os.path.exists("/app/.git")
+        if not info["source_mounted"]:
+            # 宿主机开发挂载时，WORK_DIR 通常也是挂载
+            info["source_mounted"] = os.path.ismount("/app/project/work_dir")
+    except Exception:
+        pass
+    # git 信息（尽量不依赖 git 二进制，优先读环境变量）
+    env_commit = os.getenv("GIT_COMMIT") or os.getenv("MMA_GIT_COMMIT")
+    if env_commit:
+        info["git_commit"] = env_commit[:40]
+        # dirty 由外部注入 MMA_GIT_DIRTY 显式标记，否则未知
+        dirty_env = os.getenv("MMA_GIT_DIRTY")
+        if dirty_env is not None:
+            info["git_dirty"] = dirty_env.lower() in ("1", "true", "dirty")
+        return info
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL, timeout=2
+        ).decode().strip()
+        info["git_commit"] = commit
+        try:
+            porcelain = subprocess.check_output(
+                ["git", "status", "--porcelain"], stderr=subprocess.DEVNULL, timeout=2
+            ).decode().strip()
+            info["git_dirty"] = bool(porcelain)
+        except Exception:
+            info["git_dirty"] = None
+    except Exception:
+        # 容器内无 git 或非 git 目录，保留 None 避免误报可复现
+        pass
+    # 镜像标识（若构建时注入）
+    image_tag = os.getenv("MMA_IMAGE_TAG") or os.getenv("IMAGE_TAG")
+    if image_tag:
+        info["image_tag"] = image_tag
+    return info
+
+
 @router.get("/")
 async def root():
     return {"message": "Hello World"}
@@ -138,6 +187,7 @@ async def config():
         "max_chat_turns": settings.MAX_CHAT_TURNS,
         "max_retries": settings.MAX_RETRIES,
         "CORS_ALLOW_ORIGINS": settings.CORS_ALLOW_ORIGINS,
+        "deployment": _get_deployment_info(),
     }
 
 
@@ -176,6 +226,7 @@ async def get_service_status():
         },
         "redis": {"status": "unknown", "message": "Redis connection status unknown"},
         "code_execution": get_code_execution_status(),
+        "deployment": _get_deployment_info(),
     }
 
     # 检查Redis连接状态
@@ -328,3 +379,164 @@ async def list_tasks():
     # 按创建时间倒序排列
     tasks.sort(key=lambda x: x["created_at"], reverse=True)
     return tasks
+
+
+@router.get("/tasks/{task_id}")
+async def get_single_task(task_id: str):
+    """Roadmap B-2: 单任务状态（不扫描全部历史目录）。"""
+    from app.services.agent_operations import get_single_task_status
+
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        return get_single_task_status(safe_task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/tasks/{task_id}/events")
+async def get_task_events(task_id: str, after: str | None = None, limit: int = 50):
+    """Roadmap B-2: 消息游标（稳定序号，仅增量）。"""
+    from app.services.agent_operations import get_task_events as _get_events
+
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        return _get_events(safe_task_id, after=after, limit=limit)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/tasks/{task_id}/artifacts")
+async def get_task_artifacts(task_id: str):
+    """Roadmap B-2: 产物清单（复用 manifest + 哈希）。"""
+    from app.services.agent_operations import get_task_artifacts as _get_artifacts
+
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        return _get_artifacts(safe_task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/tasks/{task_id}/review/packet")
+async def get_review_packet(task_id: str):
+    """Roadmap D: 组装六维评审材料包（外层 Agent 审阅用）。"""
+    from app.services.paper_review import assemble_review_packet
+
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        return assemble_review_packet(safe_task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/tasks/{task_id}/review")
+async def get_review(task_id: str):
+    """Roadmap D: 读取已保存的六维评审（含过期判定）。"""
+    from app.services.paper_review import load_review
+
+    safe_task_id = _require_safe_task_id(task_id)
+    data = load_review(safe_task_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="未找到评审")
+    return data
+
+
+@router.post("/tasks/{task_id}/review")
+async def post_review(task_id: str, payload: dict):
+    """Roadmap D: 保存外层 Agent 的六维评审（结构化校验+版本绑定）。"""
+    from app.services.paper_review import save_review
+
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        # Ensure work_dir exists
+        from app.utils.common_utils import get_work_dir
+
+        get_work_dir(safe_task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try:
+        save_review(safe_task_id, payload)
+        return {"task_id": safe_task_id, "status": "saved", "review": payload}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/doctor")
+async def get_doctor():
+    """Roadmap E: 容器能力体检（与宿主机 doctor 分离）。"""
+    from app.services.doctor import container_doctor, template_capabilities
+
+    return {"container": container_doctor(), "templates": template_capabilities()}
+
+
+@router.get("/templates/capabilities")
+async def get_template_capabilities():
+    """Roadmap E: 模板能力表（后端 profile vs skill 模板）。"""
+    from app.services.doctor import template_capabilities
+
+    return template_capabilities()
+
+
+@router.post("/tasks/{task_id}/figure-plan")
+async def post_figure_plan(task_id: str, payload: dict):
+    """Roadmap E: 创建/更新配图计划（路由+追溯）。"""
+    from app.services.figure_plan import create_figure_plan
+
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        from app.utils.common_utils import get_work_dir
+
+        get_work_dir(safe_task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    figures = payload.get("figures")
+    if not isinstance(figures, list):
+        raise HTTPException(status_code=422, detail="figures 必须为数组")
+    try:
+        plan = create_figure_plan(safe_task_id, figures)
+        return plan
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/tasks/{task_id}/figure-plan")
+async def get_figure_plan(task_id: str):
+    """Roadmap E: 读取配图计划。"""
+    from app.services.figure_plan import load_figure_plan
+
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        from app.utils.common_utils import get_work_dir
+
+        get_work_dir(safe_task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    plan = load_figure_plan(safe_task_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="未找到 figure plan")
+    return plan
+
+
+@router.get("/tasks/{task_id}/figure-plan/validate")
+async def validate_figure_plan(task_id: str):
+    """Roadmap E: 校验配图产物与数据追溯。"""
+    from app.services.figure_plan import validate_figure_artifacts
+
+    safe_task_id = _require_safe_task_id(task_id)
+    try:
+        from app.utils.common_utils import get_work_dir
+
+        get_work_dir(safe_task_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return validate_figure_artifacts(safe_task_id)

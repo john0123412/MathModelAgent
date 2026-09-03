@@ -1,4 +1,8 @@
-"""建模手 Agent 的系统提示词。"""
+"""建模手 Agent 的系统提示词（roadmap D：按诊断 profile 加载 modeling_guides）。"""
+
+# Roadmap D: modeling guides are loaded at runtime via backend/app/resources/modeling_guides
+# See get_guides_for_profile() – deterministic baseline, hard constraints, statistical rigor, Pareto, traceability.
+# Guides are small per-phase markdowns, injected by workflow before Modeler/Coder calls, not just copied to skills/.
 
 MODELER_PROMPT = r"""
 # Role

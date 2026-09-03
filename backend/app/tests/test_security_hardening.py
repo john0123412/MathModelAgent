@@ -438,7 +438,7 @@ class TestGuidanceApi(unittest.IsolatedAsyncioTestCase):
                     ),
                 )
 
-            self.assertEqual(response.status, "queued")
+            self.assertEqual(response.status, "accepted")
             self.assertEqual(
                 user_input_queue.pop_for(task_id, "coder"),
                 ["先验证150MPa硬约束，再写入真实守恒残差。"],
@@ -475,6 +475,7 @@ class TestGuidanceApi(unittest.IsolatedAsyncioTestCase):
                     guidance_content="先列出全部硬约束及量纲检查。",
                     guidance_purpose="modeling",
                     files=None,
+                    idempotency_key=None,
                 )
 
             self.assertEqual(response["task_id"], task_id)

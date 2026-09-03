@@ -149,6 +149,12 @@ PDF 只允许字体、字号、行距、`geometry`、A4 和最小内容边距；
 > 正式字体、主交付文件和完整源码附录均通过时才为 `TECHNICAL_PASS`。该状态仍不替代数学、引用、
 > PDF 人工翻阅及平台规则的人工复核，报告会始终标注 `PENDING_HUMAN_REVIEW`。
 
+最终技术验收仅对显式 `export_profile=default` 接受预检 `CONDITIONAL_PASS`、提交审计
+`WARN/CONDITIONAL_PASS`，并在检查项保留原状态与 `warning` 严重性。缺失或未知 profile、
+`huashubei`、`cumcm2025/2026` 保持原先的严格 PASS 要求。所有 profile 的硬 `FAIL`、报告缺失、
+执行验证、冻结来源、PDF 视觉、字体、主产物哈希和完整源码附录门禁均未放宽。
+该例外仅表示通用任务可交付，不能把条件项视为已完成人工复核。
+
 > **TeX Live 本机复核边界**：已安装 TeX Live 的 Windows 主机可在执行验证、冻结和正文预检均通过后，
 > 用 `export_cli pdf --local --update-status` 或导出的 `latex_project/` 进行正式字体 PDF 复核。
 > TeX 编译只验证排版和字体，不能把 `execution_validation_report.json = FAIL` 的任务变为可验收论文。
@@ -252,6 +258,13 @@ PDF/sidecar 自动编译会显式禁用 XeLaTeX shell escape；模型或 Markdow
   20MB 文件大小、摘要首页、无目录、正文 20 页以内（当前用户指定的内部基线）、物理边缘越界和 CUMCM
   2.5cm 内容边距风险（允许少量字形 bbox 容差），并阻断 `承诺书`、`编号专用页`、
   `参赛队号` 等匿名电子稿不应出现的身份/封面字段，但仍不替代人工翻阅 PDF。
+- **`huashubei` profile 的部署放宽（2026-08 起，仅该 profile 生效）**：PDF 视觉检查的
+  内容边距阈值降为 0.6cm，右边距额外提供 20pt 容差（允许公式/图略超右版心）；摘要后
+  正文页数上限放宽为 35 页；关键词允许出现在摘要页之后的页面，不强制首页；预检
+  `claim_trace` 在缺失追溯声明不超过 20 条时不阻断（超过仍 fail）。`cumcm2025`/
+  `cumcm2026` 与 `default` 维持原基线：内容边距 2.5cm（default 2.0cm）、正文 20 页以内、
+  关键词须在摘要首页、claim_trace 存在缺失或弱措辞即 fail。`export_cli task-refresh`
+  在预检无硬失败（PASS 或 CONDITIONAL_PASS）时继续重建交付物，硬门禁 FAIL 仍拒绝。
 - raw TeX 已在主 PDF 与 LaTeX sidecar 导出中关闭，正文不要依赖 `\begin{table}`、`\begin{align}`
   等 raw LaTeX 环境；标准 Markdown 表格与 `$...$`、`\(...\)` 数学公式仍可用。
 - `paper_preflight_report.json` 只说明格式门禁和基本证据链通过，不证明数学模型和论文论证正确。

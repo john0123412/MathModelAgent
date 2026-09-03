@@ -47,7 +47,7 @@ services:
     environment:
       - ENV=DEV # 为后端显式设置 ENV
       - REDIS_URL=redis://redis:6379/0 # 覆盖 .env.dev 中的 127.0.0.1，容器内用服务名连 Redis
-      - SERVER_HOST=http://localhost:5173/api # Docker 前端通过 Vite /api 代理访问后端，下载链接也走同一入口
+      - SERVER_HOST=${SERVER_HOST:-http://127.0.0.1:8000} # 纯后端基址；前端代理场景由宿主机 .env 显式设为 http://localhost:5173/api 兼容旧链路
       - MAX_RETRIES=20 # 单子任务内重试熔断上限，对齐 setting.py 与 AGENT_MEMORY.md
     volumes:
       - ./backend/app:/app/app # 开发模式挂载源码，修改即时生效
@@ -60,6 +60,7 @@ services:
     tty: true      # 分配一个伪终端
 
   frontend:
+    profiles: ["frontend"]
     build:
       context: ./frontend
       dockerfile: Dockerfile

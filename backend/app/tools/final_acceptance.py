@@ -71,15 +71,25 @@ def _check(check_id: str, passed: bool, message: str, **evidence: Any) -> dict[s
     }
 
 
-def _status_check(work_dir: str, filename: str, expected: str) -> dict[str, Any]:
+def _status_check(
+    work_dir: str, filename: str, expected: str | tuple[str, ...]
+) -> dict[str, Any]:
     report = _read_json(os.path.join(work_dir, filename))
-    passed = report is not None and report.get("status") == expected
-    return _check(
+    accepted = (expected,) if isinstance(expected, str) else expected
+    actual = report.get("status") if report else None
+    passed = actual in accepted
+    conditional = passed and actual != "PASS"
+    check = _check(
         filename.removesuffix(".json"),
         passed,
-        f"{filename} = {expected}。" if passed else f"{filename} 必须为 {expected}。",
-        actual=report.get("status") if report else None,
+        (f"{filename} = {actual}；条件项仍需复核。" if conditional else f"{filename} = {actual}。")
+        if passed else f"{filename} 必须为 {' / '.join(accepted)}，实际为 {actual}。",
+        actual=actual,
+        accepted_statuses=list(accepted),
     )
+    if conditional:
+        check["severity"] = "warning"
+    return check
 
 
 def _sha256_file(path: str) -> str | None:
@@ -286,9 +296,19 @@ def audit_final_acceptance(work_dir: str) -> dict[str, Any]:
         )
     )
     checks.append(_status_check(work_dir, "execution_validation_report.json", "PASS"))
-    checks.append(_status_check(work_dir, "paper_preflight_report.json", "PASS"))
+    # Only the explicit generic profile accepts reviewable conditions. Missing,
+    # unknown and competition profiles retain their existing strict policy.
+    export_status = _read_json(os.path.join(work_dir, "export_status.json")) or {}
+    is_default = export_status.get("export_profile") == "default"
+    checks.append(_status_check(
+        work_dir, "paper_preflight_report.json",
+        ("PASS", "CONDITIONAL_PASS") if is_default else "PASS",
+    ))
     checks.append(_status_check(work_dir, "pdf_visual_check.json", "PASS"))
-    checks.append(_status_check(work_dir, "submission_audit_report.json", "PASS"))
+    checks.append(_status_check(
+        work_dir, "submission_audit_report.json",
+        ("PASS", "WARN", "CONDITIONAL_PASS") if is_default else "PASS",
+    ))
     checks.append(_check_editorial_quality_gate(work_dir))
     checks.append(_check_artifact_freshness(work_dir))
 

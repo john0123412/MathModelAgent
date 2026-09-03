@@ -113,6 +113,43 @@ def _prepare_technical_fixture(work_dir: str) -> None:
 
 
 class FinalAcceptanceTest(unittest.TestCase):
+    def test_only_explicit_default_accepts_conditions_and_keeps_warnings(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            _prepare_technical_fixture(work_dir)
+            for profile in ("default", "cumcm2025", "cumcm2026", "huashubei", "unknown", ""):
+                with self.subTest(profile=profile):
+                    export = _read_json(work_dir, "export_status.json")
+                    export["export_profile"] = profile
+                    _write_json(work_dir, "export_status.json", export)
+                    _write_json(work_dir, "paper_preflight_report.json", {"status": "CONDITIONAL_PASS"})
+                    _write_json(work_dir, "submission_audit_report.json", {"status": "WARN"})
+                    report = audit_final_acceptance(work_dir)
+                    checks = {item["id"]: item for item in report["checks"]}
+                    for key in ("paper_preflight_report", "submission_audit_report"):
+                        self.assertEqual(checks[key]["passed"], profile == "default")
+                        if profile == "default":
+                            self.assertEqual(checks[key]["severity"], "warning")
+                    self.assertEqual(report["human_review"]["status"], "PENDING_HUMAN_REVIEW")
+
+    def test_default_never_accepts_hard_failure_or_missing_reports(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            _prepare_technical_fixture(work_dir)
+            export = _read_json(work_dir, "export_status.json")
+            export["export_profile"] = "default"
+            _write_json(work_dir, "export_status.json", export)
+            for name in ("paper_preflight_report.json", "submission_audit_report.json"):
+                for status in ("FAIL", "unknown", None):
+                    with self.subTest(name=name, status=status):
+                        if status is None:
+                            os.remove(os.path.join(work_dir, name))
+                        else:
+                            _write_json(work_dir, name, {"status": status})
+                        report = audit_final_acceptance(work_dir)
+                        check = next(c for c in report["checks"] if c["id"] == name[:-5])
+                        self.assertFalse(check["passed"])
+                        self.assertNotIn("已通过", check["message"])
+                        self.assertEqual(report["technical_status"], "TECHNICAL_FAIL")
+
     def test_all_strict_checks_pass_but_human_review_remains_pending(self):
         with tempfile.TemporaryDirectory() as work_dir:
             _prepare_technical_fixture(work_dir)

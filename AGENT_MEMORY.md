@@ -10,25 +10,8 @@
 
 ## 正式交付与任务现状（2026-08-29 深夜）
 
-- **正式交付 = work_dir/20260825-phasec-replace-v2/**：res.pdf 235 页 + submission_body 22 页，
-  四门禁全绿 + TECHNICAL_PASS（Q2 v2 五算子 LNS/MILP）。v1 冻结稿 20260823-040225（145 页）
-  与 tmp/backup_frozen_task_20260824 仅作存档回退。
-- work_dir 清理定案（f607cca，经用户指令）：保留 5 目录 = 20260817-163525、20260823-040225、
-  20260825-phasec-replace-v2、20260828-080924、backup_frozen_task_20260824（851MB→263MB）。
-- 20260828-080924 论文被**质量否决**（方法-正文不一致，不得作提交候选；completed 仅代表
-  门禁算术一致），处置记录在其 internal/DISPOSITION_20260829.md。
-- 该任务 scratch/root_scripts_20260828/ **仅剩 MANIFEST.md**：32 个 backend 根目录一次性脚本
-  08-29 23:03 被并行清理删除、工作区无副本（本文件旧条目"保留归档脚本"作废，以本条为准）；
-  3 个含明文 emooo key 的 tmp_*.py 一并消失（key 已由用户轮换，2026-08-30 确认，风险关闭）。
-- **重跑战役 v3-v14（08-29~30，12 轮，agnes flash）**：死因逐轮确诊并修复——证据 id 三处
-  一致（自动绑定）、零解断言、pivot 字典方向、数据地基自检、ques3 LP 新能源项口径（等式漏
-  新能源项→残差=新能源量级）、pro 模型 key 无权限、XGBoost 未装→sklearn GBR+滞后特征、
-  容器被并行 compose up 重建（ExitCode=0 非 OOM）后"本轮未更新"拒证据。**v8/v9 证明
-  ques1/2 可真实通过**（RMSE 90.76≤120、R² 0.346≥0）；v10 起注入 LP/预测逐字模板于
-  tmp/renun_20260829/。**当前墙：08-30 12:10 起容器到 Cloudflare 网段（apihub/1.1.1.1）
-  Errno 101/timeout，宿主机 200 正常，backend 与 Docker Desktop 重启均无效（pypi/百度可达）**
-  ——疑宿主防火墙/安全软件拦 Docker NAT 流量，待用户处置（或提供本地代理端口设
-  LLM_OUTBOUND_PROXY）。恢复后一键重启 v15：创建→waiting_review→注入 id 表+模板→批准。
+- 正式交付=work_dir/20260825-phasec-replace-v2/（TECHNICAL_PASS）；work_dir 保留5目录定案、
+  A稿否决、0826-0829 细节均已轮出 docs/memory/2026-08.md「主文件轮出」节。
 
 ## 门禁与导出基线（a1beddf，2026-08-29 入库）
 
@@ -54,3 +37,44 @@
 - 平台上传三件事（文件命名 / 匿名目检 / 诚信声明）；tag 动作待指令：
   `git tag -f v2026.08.24-paper-final 37391e8 && git push origin v2026.08.24-paper-final`。
 - 20260828 两个低危观察待决策：5.3 节"SOC 恰好回到初始值"与数据不符；全篇无论文献区。
+
+## v23 算电协同·去伪造重建（2026-09-02 落地，task=20260830-234433-4b3226317d54a94062be7a3379cf1a10）
+
+- **真值复现**：QMkhv8（清空 `internal/audit_20260901/q4_mc_cache` 后重跑 q4_model.py，26min）
+  得到 `CI半宽=0.0597`、`mean_cost=1,331,802,275.35` ——与论文 `res.md` 引用**逐字吻合**。
+  之前 `0.0683 / 1,343,892,334` 是 per-sample `RandomState(42+i)` 的 RNG 漂移假象。
+- **产物全真**：notebook 4 code cell 全部 `ec=1` + 真实 stdout；cell 8 由 `patch_q4_cell.py`
+  注入 QMkhv8 日志（1346 chars，Traceback=0）。`ques4_uncertainty_ci.png`（08-31 伪图）由
+  `draw_q4_ci.py` 用 50 MC 真实样本重绘（双面板：直方图 + 序列带）。
+- **清单 rebind**：`rebind_manifest.py`（不调 trusted writer，走"rebind→hash 重算→委托
+  _check_constraint"）刷新 `execution_validation.json` + `frozen_results.json` 全部约束
+  actual/metric value + source.sha256 + figure.data_sha256。
+- **Q4 争议已消解（09-02 17:00 轮）**：原 Q4 失败是 `scenario_objective_range` **约束方向写
+  反**（写成 `lte 0.5`，实为 `gte 0.05`），不是模型不行。修 `lp_core.py`/`q4_model.py` 后按
+  **100 样本真实重算**（q4_rerun5）：非支配 6≥5、CI 0.0457≤0.05、一致性 6.1e-05≤0.01、
+  区分度 0.7408≥0.05、MC 成本均值 1,284,013,383 —— **四个目标全部真实达标，无需放宽**。
+  res.md 由 `align_resmd_q4_v2.py` 同步到 100 样本数值（0.0597→0.0457 等）。
+- **全门禁已绿（09-02 19:44）**：`final_acceptance=TECHNICAL_PASS`（12/12 项通过）、
+  `submission_audit=PASS`（14/14）、`preflight=PASS`、`pdf_visual=PASS`、`cross_modal=PASS`、
+  `execution_validation_report=PASS`。res.pdf 68 页（正文 30 ≤ 上限 30，附录 27 页为完整源码）、
+  res.docx 2.79MB。三项原 FAIL（`submission_audit` 陈旧 / `artifact_freshness` /
+  `complete_source_appendix`）已清零。
+- 复用脚本：`internal/audit_20260901/{q4_model.py, lp_core.py, patch_q4_cell.py,
+  rebind_manifest.py, run_gates.py, draw_q4_ci.py, align_resmd_q4_v2.py, trim_abstract.py,
+  compress_resmd2.py, regen_pdf.py, **fix_appendix.py, fix_support_caption.py,
+  reconcile_gates2.py**}`。复用原则：任务级脚本只放 work_dir 内部审计子目录（见 AGENTS.md
+  工作区防污染铁律）。详细过程见 `.workbuddy-ai/memory/2026-09-02.md`。
+- [09-02 第五/六轮] P0-P3 收敛+摘要重构：jupyter_client 真实重跑 cell2/6/8、frozen 哈希受控重绑、
+  附录重建+表7表题、摘要 5 段 839 字、huashubei→cumcm_formal 编辑政策、writer.py 提示词 600-900 字
+  ≥4 段。六门禁 TECHNICAL_PASS。陷阱：append_code_appendix 必跟 fix_support_caption.py。详见
+  docs/memory/2026-09.md。
+- [09-02/03 第七轮] 审计新发现已修：11 孤立引用行删除、9 悬空文献内嵌（Mavrotas 张冠李戴
+  {[6]}→[9]）、重复 6.2→6.3；BZD AI 痕迹审计 24.5→复评约21（🟢边缘）：选型闭环/图表锚点/
+  网格必要性/去"融合"/溯源 五项改进并重导，TECHNICAL_PASS 12/12。教训：reference_format
+  门禁验"有引用"验不出"挂句上"。报告 internal/audit_20260901/AI_trace_audit_report.html。
+- [09-03 精修轮] 外审86-89→四项方法语义对齐落地：①Q2 全文统一"碳价λ扫描+LP对偶边际定价"
+  （ε-约束仅留方法学对比）；②真实支配检验：6 候选→非支配 {lam0,lam1500}，CSV+frozen
+  (pareto_point_count 5.0→2.0)+notebook 同步重绑；③Q3 披露 N^cycle=1.5 次/日循环约束+标定
+  （基准 0.64-0.83 次/日）+敏感性；④Q4 降格"固定迁移下多情景电力层再优化"，三维非支配+MC 聚合
+  代理口径；⑤成本 CI 与 Wilson CI 拆分、±2.94%→±4.57%、关键词换五项。修 7.1 断尾+7.2 真实局限。
+  正文压回 30 页。终态 PDF 72 页、TECHNICAL_PASS 12/12、五件哈希 MATCH。

@@ -202,8 +202,8 @@ HUASHUBEI_PROFILE = ExportProfileConfig(
         HUASHUBEI_PDF_HEADING_STYLE,
         PDF_CODE_BLOCK_STYLE,
         HUASHUBEI_GEOMETRY,
-        "fontsize=12pt",
-        "linestretch=1.6",
+        "fontsize=11pt",
+        "linestretch=1.3",
         # 图形随文定位：禁止浮动体漂移到下一页顶端插断句子（评审反馈的版式问题）。
         "header-includes=\\usepackage{float}\\floatplacement{figure}{H}",
         # 孤行/寡行治理：避免整句仅一两字被拆到下一页页首（评审反馈 p9→p10）。

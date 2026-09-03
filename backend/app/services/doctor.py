@@ -7,14 +7,11 @@ No live provider probing on every call; connectivity is explicit.
 
 from __future__ import annotations
 
-import os
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from app.config.setting import settings
-from app.utils.log_util import logger
 
 
 def _check(cmd: list[str], timeout: float = 3.0) -> dict[str, Any]:

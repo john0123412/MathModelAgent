@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any
 
 from app.utils.common_utils import get_work_dir
-from app.utils.log_util import logger
 
 FIGURE_PLAN_FILENAME = "figure_plan.json"
 
@@ -96,25 +95,38 @@ def load_figure_plan(task_id: str) -> dict[str, Any] | None:
 
 
 def validate_figure_artifacts(task_id: str) -> dict[str, Any]:
-    """Check that each planned figure has script and output with traceable data."""
+    """Check that each planned figure has script and output with traceable data. P1 review: empty script/output or fake data_source must fail."""
     work_dir = get_work_dir(task_id)
     plan = load_figure_plan(task_id)
     if plan is None:
         return {"ok": True, "message": "未创建 figure plan，跳过校验"}
     issues: list[str] = []
     for fig in plan.get("figures", []):
-        script = fig.get("script", "")
-        output = fig.get("output", "")
-        if script:
+        fid = fig.get("id", "unknown")
+        ftype = fig.get("type", "")
+        script = (fig.get("script", "") or "").strip()
+        output = (fig.get("output", "") or "").strip()
+        data_source = (fig.get("data_source", "") or "").strip()
+        # All figures must have non-empty script and output for traceability
+        if not script:
+            issues.append(f"{fid}: 脚本不能为空（需为可复现的生成脚本）")
+        else:
             script_path = Path(work_dir) / script
             if not script_path.is_file():
-                issues.append(f"{fig['id']}: 脚本缺失 {script}")
-        if output:
+                issues.append(f"{fid}: 脚本缺失 {script}")
+        if not output:
+            issues.append(f"{fid}: 产物路径不能为空")
+        else:
             out_path = Path(work_dir) / output
             if not out_path.is_file():
-                issues.append(f"{fig['id']}: 产物缺失 {output}")
-            # Data traceability: ensure output's source hash is recorded if data_chart
-            if fig.get("type") == "data_chart" and not fig.get("data_source"):
-                issues.append(f"{fig['id']}: 数据图未绑定真实数据源")
+                issues.append(f"{fid}: 产物缺失 {output}")
+        # Data traceability: data_chart must have real data file, not empty or non-existent
+        if ftype == "data_chart":
+            if not data_source:
+                issues.append(f"{fid}: 数据图未绑定真实数据源")
+            else:
+                ds_path = Path(work_dir) / data_source
+                if not ds_path.is_file():
+                    issues.append(f"{fid}: 数据源不存在 {data_source}（需为任务内真实数据文件）")
 
     return {"ok": len(issues) == 0, "issues": issues, "figure_count": len(plan.get("figures", []))}

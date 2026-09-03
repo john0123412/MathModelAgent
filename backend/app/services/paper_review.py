@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -162,14 +161,14 @@ def _is_stale(task_id: str, review: dict[str, Any]) -> bool:
         stored = review.get(key)
         if not stored:
             continue
-        # Compare with current file hash
+        # Compare with current file hash; deletion (cur is None) is also stale (P1 review)
         if key == "manuscript_sha256":
             cur = _file_sha256(work_dir / "res.md")
-            if cur and cur != stored:
+            if cur != stored:
                 return True
         elif key == "frozen_result_id":
             cur = _file_sha256(work_dir / "frozen_results.json")
-            if cur and cur != stored:
+            if cur != stored:
                 return True
         elif key == "artifact_set_id":
             try:

@@ -40,7 +40,7 @@ HIGH_CONF_EMAIL_RE = re.compile(
     r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
 )
 HIGH_CONF_PHONE_RE = re.compile(
-    r"\b(?:1[3-9]\d{9}|\+?86[- ]?1[3-9]\d{9})\b|(?:电话|手机|Tel|Mobile|Contact)[:：\s]*\+?\d[\d\s-]{6,}"
+    r"(?<!\d)(?:1[3-9]\d{9}|\+?86[- ]?1[3-9]\d{9})(?!\d)|(?:电话|手机|Tel|Mobile|Contact)[:：\s]*\+?\d[\d\s-]{6,}"
 )
 HIGH_CONF_ID_RE = re.compile(
     r"(?<![a-zA-Z0-9])(?:学号|身份证(?:号)?|报名号|参赛编号|队号|参赛队号|准考证号|Student\s*ID)[:：\s]*([0-9a-zA-Z]{4,})"

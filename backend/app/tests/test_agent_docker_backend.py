@@ -1,17 +1,12 @@
 """Roadmap F: Agent Docker backend contracts (no provider required)."""
 
-import asyncio
-import hashlib
 import json
 import os
 import tempfile
 import unittest
 from unittest import mock
 
-from fastapi import HTTPException
-
-from app.routers import files_router, common_router
-from app.services import agent_operations, idempotency, task_budget, figure_plan
+from app.services import agent_operations, task_budget, figure_plan
 from app.services.doctor import container_doctor, template_capabilities
 from app.services.paper_review import assemble_review_packet, save_review
 from app.utils import common_utils
@@ -85,8 +80,6 @@ class TestEventsCursor(unittest.TestCase):
             task_id = "20250101-000000-abc123"
             work_dir = os.path.join(tmp, task_id)
             os.makedirs(work_dir, exist_ok=True)
-            # Create messages file
-            logs_dir = os.path.join(tmp, "logs", "messages")  # not used, but for completeness
             # Use actual logs/messages path (relative to cwd)
             os.makedirs("logs/messages", exist_ok=True)
             msg_path = os.path.join("logs/messages", f"{task_id}.json")

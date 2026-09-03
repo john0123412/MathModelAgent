@@ -28,7 +28,6 @@ import hashlib
 import json
 import os
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -170,19 +169,22 @@ def _print_json(obj: Any) -> None:
 # ---------------------------------------------------------------------------
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    """Host connectivity + container capability, no provider probing."""
+    """Host connectivity + container capability, no provider probing. P2: must verify /doctor and deployment version."""
     base = args.base
     out: dict[str, Any] = {"client_version": CLIENT_VERSION, "base": base, "checks": []}
 
-    # 1. Host -> backend connectivity
+    # 1. Host -> backend connectivity via /status
+    status = None
     try:
         status = _http_get(base, "/status", timeout=5.0)
         backend_ok = status.get("backend", {}).get("status") == "running"
         redis_ok = status.get("redis", {}).get("status") == "running"
         deployment = status.get("deployment", {})
+        # P2: deployment must exist and have capability_version, otherwise old backend
+        has_deployment = isinstance(deployment, dict) and deployment.get("capability_version")
         out["checks"].append({"name": "host->backend /status", "ok": backend_ok, "detail": status.get("backend")})
         out["checks"].append({"name": "redis", "ok": redis_ok, "detail": status.get("redis")})
-        out["checks"].append({"name": "deployment", "ok": True, "detail": deployment})
+        out["checks"].append({"name": "deployment", "ok": has_deployment, "detail": deployment, "note": "missing capability_version indicates old backend, not ok" if not has_deployment else ""})
         code_exec = status.get("code_execution", {})
         ce_ok = code_exec.get("status") == "ready"
         out["checks"].append({"name": "code_execution", "ok": ce_ok, "detail": code_exec})
@@ -193,15 +195,48 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         _print_json(out)
         return 1
 
-    # 2. Direct 8000 vs 5173 hint
+    # 2. Container doctor via /doctor (P2: must actually call it, 404 means old version)
+    try:
+        doctor = _http_get(base, "/doctor", timeout=5.0)
+        container = doctor.get("container", {})
+        overall_ok = container.get("overall", {}).get("ok", False)
+        out["checks"].append({"name": "container /doctor", "ok": overall_ok, "detail": container.get("overall")})
+        out["doctor"] = doctor
+        # Check that /doctor exists and reports overall ok; 404 would have raised
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc)
+        is_404 = "404" in msg or "Not Found" in msg
+        out["checks"].append(
+            {
+                "name": "container /doctor",
+                "ok": False,
+                "error": msg,
+                "note": "404 indicates old backend without /doctor, not ok" if is_404 else "",
+            }
+        )
+        out["backend_status"] = status
+
+    # 3. Direct 8000 vs 5173 hint
     out["hint"] = "Use --base http://127.0.0.1:8000 for pure backend; /download_url path works without frontend."
 
-    # 3. Capability version check
+    # 4. Capability version check via /config
     try:
         cfg = _http_get(base, "/config", timeout=5.0)
-        out["config_deployment"] = cfg.get("deployment")
-    except Exception:
-        pass
+        cfg_dep = cfg.get("deployment", {})
+        has_cfg_dep = isinstance(cfg_dep, dict) and cfg_dep.get("capability_version")
+        out["checks"].append({"name": "/config deployment", "ok": has_cfg_dep, "detail": cfg_dep})
+        out["config_deployment"] = cfg_dep
+    except Exception as exc:  # noqa: BLE001
+        out["checks"].append({"name": "/config deployment", "ok": False, "error": str(exc)})
+
+    # 5. OpenAPI check for new task endpoints (should be present in new backend)
+    try:
+        openapi = _http_get(base, "/openapi.json", timeout=5.0)
+        paths = openapi.get("paths", {})
+        has_new = any(p.startswith("/tasks/{task_id}") for p in paths)
+        out["checks"].append({"name": "openapi new task endpoints", "ok": has_new, "detail": f"found {len([p for p in paths if p.startswith('/tasks')])} /tasks paths"})
+    except Exception as exc:  # noqa: BLE001
+        out["checks"].append({"name": "openapi new task endpoints", "ok": False, "error": str(exc)})
 
     out["ok"] = all(c.get("ok") for c in out["checks"] if "ok" in c)
     _print_json(out)
@@ -243,16 +278,19 @@ def cmd_submit(args: argparse.Namespace) -> int:
         print("error: httpx or requests required for multipart submit", file=sys.stderr)
         return 2
 
-    files = {}
+    # Build multipart files under field name "files" (backend expects List[UploadFile] File(...))
+    files_list: list[tuple[str, tuple]] = []
     opened = []
     try:
         for p in file_paths:
             f = open(p, "rb")  # noqa: SIM115
             opened.append(f)
-            # httpx: (filename, fileobj, content_type); requests: (filename, fileobj)
-            files[p.name] = (p.name, f, "application/octet-stream") if httpx is not None else (p.name, f)
+            if httpx is not None:
+                files_list.append(("files", (p.name, f, "application/octet-stream")))
+            else:
+                files_list.append(("files", (p.name, f)))
+        files = files_list  # type: ignore[assignment]
 
-        # httpx and requests handle files differently; unify via httpx path if available
         headers = {"Idempotency-Key": idem_key}
         if httpx is not None:
             with httpx.Client(timeout=300.0, follow_redirects=True) as c:
@@ -270,7 +308,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
                 body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {"raw": r.text}
         else:
             assert requests is not None
-            r = requests.post(f"{base.rstrip('/')}/modeling", data=form, files={k: (v[0], v[1]) for k, v in files.items()}, headers=headers, timeout=300)
+            r = requests.post(f"{base.rstrip('/')}/modeling", data=form, files=files, headers=headers, timeout=300)
             if r.status_code == 409:
                 try:
                     body = r.json()
@@ -393,7 +431,8 @@ def cmd_guide(args: argparse.Namespace) -> int:
     content = args.content or ""
     if not content and args.content_file:
         content = Path(args.content_file).read_text(encoding="utf-8")
-    payload: dict[str, Any] = {"role": role, "content": content}
+    # Backend GuidanceRequest expects `target`, not `role`
+    payload: dict[str, Any] = {"target": role, "content": content}
     if args.guidance_id:
         payload["guidance_id"] = args.guidance_id
     try:
@@ -434,18 +473,32 @@ def cmd_approve_model(args: argparse.Namespace) -> int:
 
 
 def cmd_revise_model(args: argparse.Namespace) -> int:
-    payload = {"feedback": args.feedback} if args.feedback else {}
+    # Backend ReviseModelingRequest expects `comment`, not `feedback`
+    comment = args.feedback or ""
     if args.feedback_file:
-        payload["feedback"] = Path(args.feedback_file).read_text(encoding="utf-8")
+        comment = Path(args.feedback_file).read_text(encoding="utf-8")
+    payload = {"comment": comment} if comment else {}
     return _simple_post(args.base, args.task_id, "revise-modeling", payload)
 
 
 def cmd_review_results(args: argparse.Namespace) -> int:
+    # Backend ExecutionReviewRequest expects `failed_subtasks: list[str]` and `comment` (required)
     payload: dict[str, Any] = {"action": args.action}
-    if args.subtask:
-        payload["subtask"] = args.subtask
     if args.review_id:
         payload["review_id"] = args.review_id
+    # --subtask (single) maps to failed_subtasks list; also accept --failed-subtask repeatable
+    failed: list[str] = []
+    if getattr(args, "failed_subtask", None):
+        failed.extend(args.failed_subtask)
+    if args.subtask:
+        failed.append(args.subtask)
+    if failed:
+        payload["failed_subtasks"] = failed
+    comment = getattr(args, "comment", None) or getattr(args, "review_comment", None) or ""
+    if not comment:
+        # Use subtask-derived default to satisfy required comment, caller should provide explicit --comment
+        comment = f"review {args.action} for {','.join(failed) if failed else 'all'}"
+    payload["comment"] = comment
     return _simple_post(args.base, args.task_id, "execution-review", payload)
 
 
@@ -588,8 +641,10 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("review-results", help="execution-review approve/repair")
     s.add_argument("--task-id", required=True)
     s.add_argument("--action", required=True, choices=["approve", "repair"])
-    s.add_argument("--subtask", help="subtask id for repair")
+    s.add_argument("--subtask", help="subtask id for repair (maps to failed_subtasks)")
+    s.add_argument("--failed-subtask", action="append", help="failed subtask (repeatable, maps to failed_subtasks)")
     s.add_argument("--review-id", help="review_id binding")
+    s.add_argument("--comment", help="review comment (required by backend)")
     s.set_defaults(func=cmd_review_results)
 
     s = sub.add_parser("resume", help="resume interrupted task")

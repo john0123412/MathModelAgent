@@ -13,14 +13,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from app.core.checkpoint import CheckpointManager
 from app.services.task_status import read_task_status
-from app.utils.common_utils import WORK_DIR_ROOT, get_work_dir
+from app.utils.common_utils import get_work_dir
 from app.utils.log_util import logger
 
 # ---------------------------------------------------------------------------

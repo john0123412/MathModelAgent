@@ -349,7 +349,20 @@ class ModelerAgent(Agent):
             user_input_provider=user_input_provider,
             guidance_target="modeler",
         )
-        self.system_prompt = MODELER_PROMPT
+        # Roadmap D: inject modeling guides per diagnostic profile (deterministic baseline, hard constraints, etc.)
+        guides_text = ""
+        try:
+            from app.resources.modeling_guides import get_all_guides_manifest, load_guide
+
+            manifest = get_all_guides_manifest()
+            for g in manifest.get("guides", []):
+                name = g.get("name", "")
+                content = load_guide(name)
+                if content:
+                    guides_text += f"\n\n# 建模规范 [{name}]\n" + content[:1500]
+        except Exception:
+            guides_text = ""
+        self.system_prompt = MODELER_PROMPT + guides_text
 
     async def run(
         self,

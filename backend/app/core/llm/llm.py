@@ -117,20 +117,6 @@ class LLM:
         agent_name: str = "SystemAgent",
         sub_title: str | None = None,
     ) -> StandardResponse:
-        # Roadmap C: budget check before each provider call (cumulative, persisted, resume-inherited)
-        if self.task_id:
-            try:
-                from app.services.task_budget import check_budget_before_call
-                from app.utils.common_utils import get_work_dir as _get_wd
-
-                wd = _get_wd(self.task_id)
-                allowed, reason = check_budget_before_call(wd, self.task_id)
-                if not allowed:
-                    raise RuntimeError(f"任务预算已耗尽，拒绝新调用: {reason}")
-            except RuntimeError:
-                raise
-            except Exception:
-                pass
         if max_retries is not None:
             max_attempts = max_retries
         else:
@@ -146,6 +132,22 @@ class LLM:
 
         attempt = 0
         while True:
+            # Roadmap C: budget check before each provider attempt (including retries) – must be inside loop
+            if self.task_id:
+                try:
+                    from app.services.task_budget import check_budget_before_call
+
+                    # Use work_dir from task_id; budget persists across resume
+                    from app.utils.common_utils import get_work_dir as _get_wd
+
+                    wd = _get_wd(self.task_id)
+                    allowed, reason = check_budget_before_call(wd, self.task_id)
+                    if not allowed:
+                        raise RuntimeError(f"任务预算已耗尽，拒绝新调用: {reason}")
+                except RuntimeError:
+                    raise
+                except Exception:
+                    pass
             try:
                 # DNS validation is intentionally repeated before every remote
                 # call to retain the SSRF/DNS-rebinding protection.  Placing it
@@ -192,6 +194,18 @@ class LLM:
                 await self.send_message(response, agent_name, sub_title)
                 return response
             except Exception as e:
+                # Roadmap C: record every real provider attempt, including failures, as unknown
+                # Config errors are not provider attempts and should not be counted
+                is_config_error = isinstance(e, LLMConfigError) or (isinstance(e, ValueError) and not self._is_retryable_config_error(e))
+                if self.task_id and not is_config_error:
+                    try:
+                        from app.services.task_budget import record_provider_call as _record_budget_fail
+                        from app.utils.common_utils import get_work_dir as _get_wd2
+
+                        wd2 = _get_wd2(self.task_id)
+                        _record_budget_fail(wd2, self.task_id, known_tokens=None, duration_seconds=None)
+                    except Exception:
+                        pass
                 # 配置错误在每次调用前都会被检查；它不是网络瞬态错误，
                 # 也不能落入 Coordinator/Modeler 的 JSON 修复循环。
                 if isinstance(e, LLMConfigError):

@@ -66,10 +66,22 @@ def push(task_id: str, content: str, target: GuidanceTarget = "all", guidance_id
     if target not in _KNOWN_TARGETS:
         return False
     content = normalize_content(content)
-    # Idempotent check: if same guidance_id already stored, do not duplicate queue entry
+    # P1-6: same guidance_id with different content must conflict, not silently accept
     if guidance_id:
         existing = get_guidance_receipt(task_id, guidance_id)
         if existing is not None:
+            existing_hash = existing.get("content_hash")
+            import hashlib as _hl
+
+            cur_hash = _hl.sha256(content.encode("utf-8")).hexdigest()[:16]
+            if existing_hash != cur_hash:
+                # Conflict: same ID, different content
+                return False
+            # Same content, already accepted/consumed, do not duplicate queue entry
+            # But ensure in-memory queue still has it if not yet consumed (restart recovery)
+            if existing.get("status") == "accepted":
+                # Try to ensure queue has it (restart case where memory lost)
+                _ensure_queue_has_guidance(task_id, guidance_id)
             return True
     try:
         remaining_targets = (
@@ -87,10 +99,41 @@ def push(task_id: str, content: str, target: GuidanceTarget = "all", guidance_id
             import hashlib
 
             content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
-            store_guidance_receipt(task_id, guidance_id, target, content_hash, status="accepted")
+            store_guidance_receipt(task_id, guidance_id, target, content, content_hash, remaining_targets, status="accepted")
     except asyncio.QueueFull:
         return False
     return True
+
+
+def _ensure_queue_has_guidance(task_id: str, guidance_id: str) -> None:
+    """Restart recovery: if guidance is accepted but not in memory, re-queue it."""
+    queue = _queues.get(task_id)
+    if queue is not None and not queue.empty():
+        # Check if already in queue
+        for item in list(queue._queue):  # type: ignore[attr-defined]
+            if item.get("guidance_id") == guidance_id:
+                return
+    # Not in memory, load from store and re-queue
+    store = _load_guidance_store(task_id)
+    entry = store.get(guidance_id)
+    if entry and entry.get("status") == "accepted":
+        content = entry.get("content", "")
+        target = entry.get("target", "all")
+        remaining = set(entry.get("remaining_targets", []))
+        if not remaining and target == "all":
+            remaining = set(_WORKFLOW_TARGETS)
+        # Do not re-store, just queue
+        try:
+            get_queue(task_id).put_nowait(
+                {
+                    "content": content,
+                    "target": target,
+                    "remaining_targets": remaining,
+                    "guidance_id": guidance_id,
+                }
+            )
+        except asyncio.QueueFull:
+            pass
 
 
 def pop_all(task_id: str) -> list[str]:
@@ -105,20 +148,50 @@ def pop_all(task_id: str) -> list[str]:
 
 
 def pop_for(task_id: str, target: GuidanceTarget) -> list[str]:
-    """Return only guidance for ``target`` while preserving other roles' advice.
-
-    A broadcast entry remains a single queue item carrying the roles that have
-    not consumed it yet.  This avoids turning one broadcast into three retained
-    entries when the first role reads it, which previously made a near-full
-    queue overflow and silently dropped messages for later roles.
-    """
+    """Return only guidance for ``target`` while preserving other roles' advice."""
+    # P1-6: rehydrate from persistent store if in-memory queue is empty but store has pending
     queue = _queues.get(task_id)
-    if not queue:
-        return []
+    if not queue or queue.empty():
+        # Try to restore pending guidance from store
+        store = _load_guidance_store(task_id)
+        for gid, entry in store.items():
+            if entry.get("status") != "accepted":
+                continue
+            # Check if already in queue
+            already = False
+            if queue:
+                for item in list(queue._queue):  # type: ignore[attr-defined]
+                    if item.get("guidance_id") == gid:
+                        already = True
+                        break
+            if already:
+                continue
+            content = entry.get("content", "")
+            tgt = entry.get("target", "all")
+            remaining = set(entry.get("remaining_targets", []))
+            if not remaining and tgt == "all":
+                remaining = set(_WORKFLOW_TARGETS)
+            if target in remaining or tgt == target or tgt == "all":
+                try:
+                    get_queue(task_id).put_nowait(
+                        {
+                            "content": content,
+                            "target": tgt,
+                            "remaining_targets": remaining,
+                            "guidance_id": gid,
+                        }
+                    )
+                except asyncio.QueueFull:
+                    pass
+        queue = _queues.get(task_id)
+        if not queue:
+            return []
 
     matched: list[str] = []
     retained: list[QueuedGuidance] = []
     consumed_ids: list[str] = []
+    # Track broadcast partial consumption to update store
+    broadcast_updates: dict[str, set[str]] = {}
     while not queue.empty():
         item = queue.get_nowait()
         item_target = item["target"]
@@ -130,17 +203,15 @@ def pop_for(task_id: str, target: GuidanceTarget) -> list[str]:
             remaining = set(item.get("remaining_targets", _WORKFLOW_TARGETS))
             if target in remaining:
                 matched.append(item["content"])
-                if item.get("guidance_id"):
-                    # For broadcast, mark consumed only when last target consumes it?
-                    # Roadmap says distinguish accepted vs consumed per role; we mark when this role consumes.
-                    # Keep entry until all roles consumed, but mark this guidance as partially consumed.
-                    pass
                 remaining.remove(target)
+                # Track partial consumption for store
+                if item.get("guidance_id"):
+                    gid = item["guidance_id"]  # type: ignore[assignment]
+                    broadcast_updates[gid] = remaining
             if remaining:
                 item["remaining_targets"] = remaining
                 retained.append(item)
             else:
-                # All roles consumed, mark broadcast guidance as consumed
                 if item.get("guidance_id"):
                     consumed_ids.append(item["guidance_id"])  # type: ignore[arg-type]
         else:
@@ -148,7 +219,20 @@ def pop_for(task_id: str, target: GuidanceTarget) -> list[str]:
 
     for item in retained:
         queue.put_nowait(item)
-    # Mark guidance receipts as consumed
+    # Update store for broadcast partial consumption
+    for gid, remaining in broadcast_updates.items():
+        try:
+            store = _load_guidance_store(task_id)
+            entry = store.get(gid)
+            if entry:
+                entry["remaining_targets"] = sorted(remaining)
+                # If still has remaining, keep status accepted, else mark consumed via mark_guidance_consumed
+                if not remaining:
+                    entry["status"] = "consumed"
+                    entry["consumed_at"] = __import__("datetime").datetime.now().isoformat()
+                _save_guidance_store(task_id, store)
+        except Exception:
+            pass
     for gid in consumed_ids:
         try:
             mark_guidance_consumed(task_id, gid)
@@ -207,18 +291,26 @@ def store_guidance_receipt(
     task_id: str,
     guidance_id: str,
     target: str,
+    content: str,
     content_hash: str,
+    remaining_targets: set[str] | None = None,
     status: str = "accepted",
 ) -> None:
-    """Persist guidance receipt for restart safety (roadmap B-2)."""
+    """Persist guidance receipt for restart safety (roadmap B-2, P1-6)."""
     if not guidance_id:
         return
     store = _load_guidance_store(task_id)
     if guidance_id in store:
+        existing = store[guidance_id]
+        # Same ID, different content -> keep original, caller will have returned False
+        if existing.get("content_hash") != content_hash:
+            return
         return
     store[guidance_id] = {
         "target": target,
+        "content": content,
         "content_hash": content_hash,
+        "remaining_targets": sorted(remaining_targets) if remaining_targets else [],
         "status": status,
         "created_at": __import__("datetime").datetime.now().isoformat(),
     }

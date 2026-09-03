@@ -73,8 +73,13 @@ def build_request_hash(
     export_profile: str,
     file_hashes: list[str],
     guidance_hash: str | None = None,
+    require_model_review: bool = False,
+    guidance_target: str | None = None,
+    guidance_purpose: str | None = None,
 ) -> str:
-    return _normalize_request_hash(ques_all, comp_template, format_output, export_profile, file_hashes, guidance_hash)
+    return _normalize_request_hash(
+        ques_all, comp_template, format_output, export_profile, file_hashes, guidance_hash, require_model_review, guidance_target, guidance_purpose
+    )
 
 
 def _normalize_request_hash(
@@ -84,6 +89,9 @@ def _normalize_request_hash(
     export_profile: str,
     file_hashes: list[str],
     guidance_hash: str | None = None,
+    require_model_review: bool = False,
+    guidance_target: str | None = None,
+    guidance_purpose: str | None = None,
 ) -> str:
     parts = [
         (ques_all or "").strip(),
@@ -91,6 +99,9 @@ def _normalize_request_hash(
         format_output or "",
         export_profile or "",
         guidance_hash or "",
+        "require_model_review=" + str(bool(require_model_review)),
+        "guidance_target=" + (guidance_target or ""),
+        "guidance_purpose=" + (guidance_purpose or ""),
     ]
     for h in sorted(file_hashes):
         parts.append(h)

@@ -4,8 +4,14 @@
 - “正文声明 ε-约束/LNS/MILP，代码实为加权标量化/别的算法”（v23、A 稿）
 - “验收数字未经计算直接写死进结果 CSV”
 - “Markdown 源级检查对 PDF 渲染缺字形/`$ ` 开界完全无感”
+
+09-05 追加三类（v23 收尾复盘）：
+- “图6.1”章节式引用被 `图\s*(\d+)` 截成图 6，顶替真图引用且风格混用不报
+- 表注编号删表/复制表后不连续，无任何检查
+- 发链后 res.md/notebook/CSV 回改，旧报告哈希核对永远被动等待重跑（一晚六次链脱钩）
 """
 
+import json
 import os
 import tempfile
 import unittest
@@ -14,9 +20,12 @@ from app.tools.cross_modal_validator import (
     find_literal_result_writes,
     validate_code_text_parity,
 )
+from app.tools.final_acceptance import _check_artifact_freshness, _sha256_file
 from app.tools.paper_postprocessor import (
     _check_algorithm_evidence,
+    _check_figure_references,
     _check_math_dollar_spacing,
+    _check_tables,
 )
 from app.tools.pdf_visual_checker import _check_missing_glyphs
 
@@ -164,6 +173,162 @@ class MissingGlyphScanTest(unittest.TestCase):
 
     def test_clean_text_passes(self):
         self.assertTrue(_check_missing_glyphs(["正常", "$x^2$"])["passed"])
+
+
+class FigureReferenceSectionStyleTest(unittest.TestCase):
+    """章节式图引用（“图6.1”）不得顶替扁平图号，风格混用必须报出。"""
+
+    def test_section_style_reference_is_not_counted_as_flat_number(self):
+        # v23 事故形态："图6.1" 被旧正则截成图 6，真图 1 的缺失引用被顶替。
+        md = "![图1 结果](fig1.png)\n\n结果如图6.1所示。\n"
+        check = _check_figure_references(md)
+        self.assertFalse(check["passed"])
+        self.assertEqual(check["missing_references"][0]["figure_number"], 1)
+        self.assertEqual(check["section_style_references"][0]["reference"], "图6.1")
+        self.assertNotIn(6, check["referenced_numbers"])
+
+    def test_flat_references_pass(self):
+        md = (
+            "![图1 结果](fig1.png)\n\n"
+            "结果如图1所示。\n\n"
+            "![图2 收敛](fig2.png)\n\n"
+            "收敛过程见图2。\n"
+        )
+        check = _check_figure_references(md)
+        self.assertTrue(check["passed"])
+        self.assertEqual(check["section_style_references"], [])
+
+    def test_section_style_only_body_reports_style_issue(self):
+        md = (
+            "![图1 结果](fig1.png)\n\n![图2 收敛](fig2.png)\n\n"
+            "结果如图6.1所示。\n\n收敛见图6.2。\n"
+        )
+        check = _check_figure_references(md)
+        self.assertFalse(check["passed"])
+        self.assertEqual(
+            {item["reference"] for item in check["section_style_references"]},
+            {"图6.1", "图6.2"},
+        )
+
+
+class TableCaptionSequenceTest(unittest.TestCase):
+    """表注编号从 1 起连续；章节式表注与扁平编号混用必须报出。"""
+
+    @staticmethod
+    def _table(caption: str) -> str:
+        return (
+            f"{caption}\n\n"
+            "| A | B |\n"
+            "| --- | --- |\n"
+            "| 1 | 2 |\n\n"
+        )
+
+    def test_consecutive_numbers_pass(self):
+        md = self._table("表1 静态结果") + self._table("表2 动态结果")
+        check = _check_tables(md)
+        self.assertTrue(check["passed"])
+        self.assertEqual(check["caption_sequence_issues"], [])
+
+    def test_gap_and_duplicate_are_flagged(self):
+        # [1,3,3]：第 2 个位置既跳号又重号，按位置比较至少报出一次。
+        md = (
+            self._table("表1 静态结果")
+            + self._table("表3 动态结果")
+            + self._table("表3 复算")
+        )
+        check = _check_tables(md)
+        self.assertFalse(check["passed"])
+        self.assertEqual(
+            [i["table_position"] for i in check["caption_sequence_issues"]],
+            [2],
+        )
+
+    def test_section_style_caption_is_flagged(self):
+        md = self._table("表4-1 分情景结果")
+        check = _check_tables(md)
+        self.assertFalse(check["passed"])
+        self.assertEqual(len(check["section_style_captions"]), 1)
+        self.assertEqual(check["caption_sequence_issues"], [])
+
+
+class ArtifactFreshnessMtimeSentinelTest(unittest.TestCase):
+    """发链后源文件回改（md/notebook/CSV）必须让旧报告脱钩——mtime 哨兵。"""
+
+    @staticmethod
+    def _make_batch(work_dir: str) -> float:
+        base = 1_700_000_000.0
+
+        def write(name: str, content: str, at: float) -> str:
+            path = os.path.join(work_dir, name)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(content)
+            os.utime(path, (at, at))
+            return path
+
+        write("res.md", "# 论文\n", base)
+        write("res.json", "{}", base + 1)
+        write("frozen_results.json", "{}", base + 2)
+        write("notebook.ipynb", "{}", base + 3)
+        write("ques1_metrics.csv", "a,b\n1,2\n", base + 4)
+        write("res.pdf", "pdf-bytes", base + 5)
+        write("res.docx", "docx-bytes", base + 6)
+        hashes = {
+            name: _sha256_file(os.path.join(work_dir, name))
+            for name in ("res.md", "res.json", "res.docx", "res.pdf", "frozen_results.json")
+        }
+
+        def write_json(name: str, payload: dict, at: float) -> None:
+            path = write(name, "{}", at)
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+            os.utime(path, (at, at))
+
+        write_json(
+            "export_status.json",
+            {
+                "pdf": {
+                    "success": True,
+                    "source_sha256": hashes["res.md"],
+                    "output_sha256": hashes["res.pdf"],
+                }
+            },
+            base + 7,
+        )
+        write_json(
+            "docx_export_status.json",
+            {
+                "success": True,
+                "source_sha256": hashes["res.md"],
+                "output_sha256": hashes["res.docx"],
+            },
+            base + 8,
+        )
+        write_json(
+            "candidate_manifest.json",
+            {"artifact_set_id": "test", "artifact_hashes": hashes},
+            base + 9,
+        )
+        return base
+
+    def test_fresh_batch_passes(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            self._make_batch(work_dir)
+            check = _check_artifact_freshness(work_dir)
+            self.assertTrue(check["passed"], check["evidence"]["mismatches"])
+
+    def test_source_touched_after_export_is_flagged(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            base = self._make_batch(work_dir)
+            future = base + 10_000
+            for name in ("res.md", "notebook.ipynb", "ques1_metrics.csv"):
+                os.utime(os.path.join(work_dir, name), (future, future))
+            check = _check_artifact_freshness(work_dir)
+            self.assertFalse(check["passed"])
+            flagged = {
+                mismatch.split(" 的修改时间")[0]
+                for mismatch in check["evidence"]["mismatches"]
+            }
+            self.assertEqual(flagged, {"res.md", "notebook.ipynb", "ques1_metrics.csv"})
 
 
 if __name__ == "__main__":

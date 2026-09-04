@@ -391,6 +391,104 @@ def extract_markdown_claimed_data_files(markdown_text: str) -> set[str]:
     return found
 
 
+LITERAL_RESULT_NAME_KEYWORDS = (
+    "certificate",
+    "optimal",
+    "frontier",
+    "results",
+    "critical_point",
+    "acceptance",
+    "metrics",
+)
+
+
+def _first_str_literal(arg: ast.AST) -> str | None:
+    """提取参数中最可能的文件名字面量（兼容 os.path.join 包装）。"""
+    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+        return arg.value
+    if isinstance(arg, ast.BinOp) and isinstance(arg.op, ast.Div):
+        return _first_str_literal(arg.right)
+    if isinstance(arg, ast.Call):
+        for sub in reversed(arg.args):
+            s = _first_str_literal(sub)
+            if s and "." in s:
+                return s
+    return None
+
+
+def _is_literal_data(node: ast.AST) -> bool:
+    """数据参数是否全部由字面量构成（不含任何变量、调用或运算）。"""
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, (int, float, str, bool))
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        return isinstance(node.operand, ast.Constant) and isinstance(
+            node.operand.value, (int, float)
+        )
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return bool(node.elts) and all(_is_literal_data(el) for el in node.elts)
+    if isinstance(node, ast.Dict):
+        return bool(node.values) and all(
+            (key is None or isinstance(key, ast.Constant)) and _is_literal_data(val)
+            for key, val in zip(node.keys, node.values)
+        )
+    return False
+
+
+def find_literal_result_writes(code: str) -> list[dict[str, Any]]:
+    """找出以纯字面量数据写入结果/验收 CSV 的调用（跳过计算的写死路线）。
+
+    ``pd.DataFrame([[1.2, 3.4]], ...).to_csv("ques1_results.csv")`` 这类调用
+    的全部数值都直接写死在源码里，不经过任何计算——正是 v23/A 稿
+    “验收数字未经计算直接入表”的伪造向量。解析失败或数据含变量则不判定。
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+    assigns: dict[str, ast.AST] = {}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            assigns[node.targets[0].id] = node.value
+    hits: list[dict[str, Any]] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr not in CodeOutputAstVisitor.SINK_METHODS:
+            continue
+        filename = None
+        for arg in list(node.args) + [kw.value for kw in node.keywords]:
+            candidate = _first_str_literal(arg)
+            if candidate and candidate.lower().endswith(".csv"):
+                filename = candidate
+                break
+        if not filename:
+            continue
+        base = os.path.basename(filename).lower()
+        if not any(kw in base for kw in LITERAL_RESULT_NAME_KEYWORDS):
+            continue
+        receiver: ast.AST | None = node.func.value
+        if isinstance(receiver, ast.Name):
+            receiver = assigns.get(receiver.id)
+        if not (isinstance(receiver, ast.Call)):
+            continue
+        ctor = receiver.func
+        ctor_name = getattr(ctor, "attr", None) or getattr(ctor, "id", None)
+        if ctor_name != "DataFrame":
+            continue
+        data_node = receiver.args[0] if receiver.args else next(
+            (kw.value for kw in receiver.keywords if kw.arg == "data"), None
+        )
+        if data_node is not None and _is_literal_data(data_node):
+            hits.append(
+                {"filename": os.path.basename(filename), "lineno": getattr(node, "lineno", 0)}
+            )
+    return hits
+
+
 def validate_code_text_parity(
     markdown_text: str,
     code_sources: list[dict[str, Any]] | str,
@@ -493,7 +591,17 @@ def validate_code_text_parity(
             # 若磁盘上存在该文件但代码未见生成调用，记录警告
             missing_critical.append(f)
 
-    passed = len(missing_critical) == 0
+    # 写死检测跨全部代码片段执行（notebook/py/附录围栏），按 (文件,行号) 去重。
+    literal_writes: list[dict[str, Any]] = []
+    seen_literal: set[tuple[str, int]] = set()
+    for code in code_pieces:
+        for hit in find_literal_result_writes(code):
+            key = (hit["filename"], hit["lineno"])
+            if key not in seen_literal:
+                seen_literal.add(key)
+                literal_writes.append(hit)
+
+    passed = len(missing_critical) == 0 and not literal_writes
     status = "PASS" if passed else "WARN"
 
     return {
@@ -503,6 +611,7 @@ def validate_code_text_parity(
         "critical_claimed_files": sorted(list(critical_claimed)),
         "code_generated_files": sorted(list(generated_files)),
         "missing_critical_generators": sorted(missing_critical),
+        "literal_result_writes": literal_writes,
         "output_calls_count": len(all_output_calls),
     }
 

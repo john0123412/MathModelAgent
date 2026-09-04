@@ -112,6 +112,24 @@ DOI_RE = re.compile(r"\b10\.\d{4,9}/[^\s<>\"']+", re.IGNORECASE)
 URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 STRONG_WORDING_RE = re.compile(r"证明|唯一|显著优于|最可靠|精确预测")
 OPTIMALITY_CLAIM_RE = re.compile(r"最优(?:解|方案|控制|参数)?|最佳(?:解|方案)?|Pareto(?:最优)?|帕累托(?:最优)?")
+METHOD_CLAIM_ALTERNATION = (
+    r"遗传算法|genetic\s+algorithm|Pareto|帕累托|粒子群|particle\s+swarm|PSO"
+    r"|ε[\s\-–—]*约束|epsilon[\s\-]*constraint"
+    r"|\bLNS\b|大邻域(?:搜索)?"
+    r"|\bMILP\b|混合整数(?:线性)?规划|整数规划"
+    r"|NSGA(?:[\s\-]?I{1,3})?\b"
+    r"|模拟退火|退火算法|simulated\s+annealing"
+)
+# ε-约束的证据必须是约束式实现：加权标量化（baseline×eps）同样含 eps 子串，
+# 纯 token 包含会漏判 v23/A 稿那类“声明与代码脱节”，故用比较式上下文匹配。
+_EPSILON_CONSTRAINT_EVIDENCE = (
+    "epsilon_constraint",
+    "eps_constraint",
+    "epsilon-constraint",
+    re.compile(r"(?:epsilon|eps)[_\s\-]*约束"),
+    re.compile(r"(?:addconstr|add_constraint|<=|>=)[^\n]{0,60}\b(?:epsilon|eps)\b"),
+    re.compile(r"\b(?:epsilon|eps)\b[^\n]{0,60}(?:addconstr|add_constraint|<=|>=)"),
+)
 ALGORITHM_CLAIMS = {
     "genetic_algorithm": (
         re.compile(r"遗传算法|genetic\s+algorithm", re.IGNORECASE),
@@ -125,16 +143,36 @@ ALGORITHM_CLAIMS = {
         re.compile(r"粒子群|particle\s+swarm|PSO", re.IGNORECASE),
         ("粒子群", "particle swarm", "pyswarms"),
     ),
+    "epsilon_constraint": (
+        re.compile(r"ε[\s\-–—]*约束|epsilon[\s\-]*constraint", re.IGNORECASE),
+        _EPSILON_CONSTRAINT_EVIDENCE,
+    ),
+    "lns": (
+        re.compile(r"\bLNS\b|大邻域(?:搜索)?"),
+        ("lns", "large neighborhood", "large_neighborhood", "大邻域", "destroy_and_repair"),
+    ),
+    "milp": (
+        re.compile(r"\bMILP\b|混合整数(?:线性)?规划|整数规划"),
+        ("milp", "mixed integer", "integrality", "integer(", "binary(", "gurobi", "pulp", "cbc", "cp_sat", "cp-sat"),
+    ),
+    "nsga": (
+        re.compile(r"NSGA(?:[\s\-]?I{1,3})?\b"),
+        ("nsga", "pymoo"),
+    ),
+    "simulated_annealing": (
+        re.compile(r"模拟退火|退火算法|simulated\s+annealing", re.IGNORECASE),
+        ("anneal", "退火", "cooling_schedule", "cooling rate", "metropolis"),
+    ),
 }
 FUTURE_ALGORITHM_CONTEXT_RE = re.compile(
     r"(?:可|可以|建议|拟|将|未来|后续|进一步|改进).{0,32}"
-    r"(?:遗传算法|genetic\s+algorithm|Pareto|帕累托|粒子群|particle\s+swarm|PSO)",
+    rf"(?:{METHOD_CLAIM_ALTERNATION})",
     re.IGNORECASE,
 )
 NON_IMPLEMENTED_ALGORITHM_CONTEXT_RE = re.compile(
     r"(?:若|如果|假如|假设|如需|若要|当|可(?:考虑|采用|使用)).{0,64}"
-    r"(?:遗传算法|genetic\s+algorithm|Pareto|帕累托|粒子群|particle\s+swarm|PSO)"
-    r"|(?:遗传算法|genetic\s+algorithm|Pareto|帕累托|粒子群|particle\s+swarm|PSO)"
+    rf"(?:{METHOD_CLAIM_ALTERNATION})"
+    rf"|(?:{METHOD_CLAIM_ALTERNATION})"
     r"[^。\n]{0,80}(?:未(?:采用|使用|实现|涉及)|不(?:及|适用|涉及|需)|作为[^。\n]{0,24}(?:对比|替代)|本题[^。\n]{0,24}(?:仅|无需|不)|无需|并不|并非)",
     re.IGNORECASE,
 )
@@ -2661,6 +2699,25 @@ def _check_figure_references(markdown: str) -> dict:
     }
 
 
+def _check_math_dollar_spacing(markdown: str) -> dict:
+    r"""Flag inline math opened as ``$ `` (space after opening delimiter).
+
+    pandoc 的 tex_math_dollars 要求开界 `$` 后紧跟非空格；写成 ``$ \sum``
+    时该片段不会被识别为数学模式，后续中文可能被吞进数学字体而在 PDF
+    渲染出缺字形方块（09-03 返修轮实坑），Markdown 源级检查必须拦截。
+    """
+    visible = _without_fenced_code_blocks(markdown)
+    body, _ = _reference_body_parts(visible)
+    # 先剥离行内 $$..$$ 展示式，避免把 `$$ x $$` 的第二个 $ 误判为开界。
+    stripped = re.sub(r"(?<!\\)\$\$[^$\n]*\$\$", " ", body)
+    issues: list[dict] = []
+    for line_number, line in enumerate(stripped.splitlines(), 1):
+        match = re.search(r"(?<!\\)\$[ \t]+\S", line)
+        if match and "$" in line[match.end() :]:
+            issues.append({"line": line_number, "text": line.strip()[:160]})
+    return {"passed": not issues, "issues": issues[:50]}
+
+
 def _check_continuous_quantity_wording(markdown: str) -> dict:
     """Flag decimal production results that are presented as literal whole pieces.
 
@@ -3783,7 +3840,12 @@ def _check_algorithm_evidence(work_dir: str, markdown: str) -> dict:
             actual_matches.append(match)
         if not actual_matches:
             continue
-        evidence_found = any(token.lower() in code_text for token in evidence_tokens)
+        # 证据 token 允许字符串（小写包含匹配）或已编译正则（如 ε-约束的
+        # 约束式上下文匹配），与 ALGORITHM_CLAIMS 的取值约定一致。
+        evidence_found = any(
+            token.search(code_text) if isinstance(token, re.Pattern) else token.lower() in code_text
+            for token in evidence_tokens
+        )
         claims.append(
             {
                 "algorithm": algorithm,
@@ -4521,6 +4583,9 @@ def build_preflight_report(
         ),
         "continuous_quantity_wording": _with_severity(
             _check_continuous_quantity_wording(markdown), "conditional"
+        ),
+        "math_dollar_spacing": _with_severity(
+            _check_math_dollar_spacing(markdown), "conditional"
         ),
         "extra_problem_labels": _with_severity(extra_problem_labels_check, "conditional"),
         "result_consistency": _with_severity(result_consistency_check, "fail"),

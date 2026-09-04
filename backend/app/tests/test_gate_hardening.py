@@ -126,6 +126,15 @@ class MathDollarSpacingTest(unittest.TestCase):
         md = "$$\n\\sum_i x_i = 100\n$$\n\n价格 $100 与 $200 相比。"
         self.assertTrue(_check_math_dollar_spacing(md)["passed"])
 
+    def test_closing_dollar_before_space_is_not_false_positive(self):
+        # 初版裸正则把闭界 `...$ 中文` 误判为开界，在终版论文上产生 35 处假阳性；
+        # 行内配对状态机修复后，闭界+空格、多个正确行内式共存都必须放行。
+        md = (
+            "负载 $96\\,s/(\\sqrt{n}\\,\\bar{C})$ 口径）。图12 均值 $1\\,284\\,013\\,383$ CNY 吻合。\n"
+            "区域 $r$ 在时隙 $t$ 的 AI GPU 负载等于各任务等效需求。"
+        )
+        self.assertTrue(_check_math_dollar_spacing(md)["passed"])
+
     def test_code_fence_content_is_ignored(self):
         md = "```python\nprint('$ x $')\n```\n"
         self.assertTrue(_check_math_dollar_spacing(md)["passed"])

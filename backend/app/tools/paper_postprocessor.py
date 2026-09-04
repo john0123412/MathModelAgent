@@ -2712,8 +2712,18 @@ def _check_math_dollar_spacing(markdown: str) -> dict:
     stripped = re.sub(r"(?<!\\)\$\$[^$\n]*\$\$", " ", body)
     issues: list[dict] = []
     for line_number, line in enumerate(stripped.splitlines(), 1):
-        match = re.search(r"(?<!\\)\$[ \t]+\S", line)
-        if match and "$" in line[match.end() :]:
+        opening = True
+        bad = False
+        for match in re.finditer(r"\\\$|\$", line):
+            if match.group(0) == "\\$":
+                continue  # 转义美元符不参与配对
+            if opening:
+                after = line[match.end() :]
+                if re.match(r"[ \t]+\S", after) and "$" in after:
+                    bad = True
+                    break
+            opening = not opening
+        if bad:
             issues.append({"line": line_number, "text": line.strip()[:160]})
     return {"passed": not issues, "issues": issues[:50]}
 

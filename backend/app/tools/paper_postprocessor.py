@@ -103,6 +103,11 @@ ORPHAN_DEFINITION_REFERENCE_RE = re.compile(
     r"^\s*:\s+.+(?:DOI|doi|Journal|Proceedings|20\d{2}|19\d{2}|https?://).*$"
 )
 TABLE_CAPTION_RE = re.compile(r"^\s*(?:表|Table)\s*\d+[\s：:、.-]")
+# 章节式编号（"图6.1"/"表4-1"）与图注/表注的扁平编号（图1..N）不能混用：
+# 旧正则 `图\s*(\d+)` 会把 "图6.1" 截成图 6，既顶替真图 6 的缺失引用（假阴性），
+# 也放过了风格混用本身（v23 lead 句 "图6.1" 语义错引未被拦下的事故形态）。
+SECTION_STYLE_FIGURE_RE = re.compile(r"图\s*\d+\s*[.．]\s*\d+")
+SECTION_STYLE_TABLE_CAPTION_RE = re.compile(r"^\s*(?:表|Table)\s*\d+\s*[.．-]\s*\d+")
 MARKDOWN_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
 EXTRA_PROBLEM_LABEL_RE = re.compile(r"问题(?P<number>\d+|[一二三四五六七八九十]+)(?P<suffix>[_、\s]?)")
 CLAIM_SENTENCE_RE = re.compile(r"[^。！？.!?\n]*(?:最优|利润|提高|增加|降低|结果表明|敏感性|影子价格|准确率|误差)[^。！？.!?\n]*[。！？.!?]?")
@@ -2679,8 +2684,17 @@ def _check_figure_references(markdown: str) -> dict:
     body = visible[: appendix_match.start()] if appendix_match else visible
     figures = list(IMAGE_MARKDOWN_RE.finditer(body))
     prose = IMAGE_MARKDOWN_RE.sub("", body)
+    # "图6.1" 一类的章节式引用不计入扁平图号（负向前瞻排除），单独成 issue。
+    section_style_references = [
+        {
+            "reference": match.group(0).strip(),
+            "line": prose.count("\n", 0, match.start()) + 1,
+        }
+        for match in SECTION_STYLE_FIGURE_RE.finditer(prose)
+    ]
     referenced_numbers = {
-        int(match.group(1)) for match in re.finditer(r"图\s*(\d+)", prose)
+        int(match.group(1))
+        for match in re.finditer(r"图\s*(\d+)(?!\s*[.．]\s*\d)", prose)
     }
     missing = [
         {
@@ -2692,10 +2706,11 @@ def _check_figure_references(markdown: str) -> dict:
         if index not in referenced_numbers
     ]
     return {
-        "passed": not missing,
+        "passed": not missing and not section_style_references,
         "figure_count": len(figures),
         "referenced_numbers": sorted(referenced_numbers),
         "missing_references": missing,
+        "section_style_references": section_style_references,
     }
 
 
@@ -2767,6 +2782,8 @@ def _check_continuous_quantity_wording(markdown: str) -> dict:
 def _check_tables(markdown: str) -> dict:
     wide_tables: list[dict] = []
     uncaptioned_tables: list[dict] = []
+    section_style_captions: list[dict] = []
+    caption_numbers: list[tuple[int, int]] = []
     lines = markdown.splitlines()
     table_start_lines: list[int] = []
     in_fence = False
@@ -2798,6 +2815,19 @@ def _check_tables(markdown: str) -> dict:
                         "line": index + 1,
                     }
                 )
+            else:
+                if SECTION_STYLE_TABLE_CAPTION_RE.match(previous_nonblank):
+                    section_style_captions.append(
+                        {
+                            "table_index": len(table_start_lines),
+                            "line": index,
+                            "caption": previous_nonblank[:120],
+                        }
+                    )
+                else:
+                    number_match = re.match(r"^\s*(?:表|Table)\s*(\d+)", previous_nonblank)
+                    if number_match:
+                        caption_numbers.append((int(number_match.group(1)), index + 1))
             while index < len(lines) and _is_markdown_table_line(lines[index]):
                 index += 1
             previous_nonblank = ""
@@ -2805,6 +2835,21 @@ def _check_tables(markdown: str) -> dict:
         if line.strip():
             previous_nonblank = line.strip()
         index += 1
+
+    # 扁平编号的表注必须从 1 起连续（1..N）：缺号/跳号/重号都说明删表或
+    # 复制表后没有重排编号。出现章节式编号（"表4-1"）时不做连续性比较，
+    # 风格混用本身作为 issue 报出。
+    caption_sequence_issues: list[dict] = []
+    if not section_style_captions:
+        for position, (number, line) in enumerate(caption_numbers, 1):
+            if number != position:
+                caption_sequence_issues.append(
+                    {
+                        "table_position": position,
+                        "caption_number": number,
+                        "line": line,
+                    }
+                )
 
     for index, table in enumerate(_find_markdown_tables(markdown), 1):
         header = table[0]
@@ -2819,9 +2864,16 @@ def _check_tables(markdown: str) -> dict:
                 }
             )
     return {
-        "passed": not wide_tables and not uncaptioned_tables,
+        "passed": (
+            not wide_tables
+            and not uncaptioned_tables
+            and not caption_sequence_issues
+            and not section_style_captions
+        ),
         "wide_tables": wide_tables,
         "uncaptioned_tables": uncaptioned_tables,
+        "caption_sequence_issues": caption_sequence_issues,
+        "section_style_captions": section_style_captions,
     }
 
 

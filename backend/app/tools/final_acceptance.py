@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import glob
 import hashlib
 import json
 import os
@@ -105,6 +106,13 @@ def _sha256_file(path: str) -> str | None:
     return digest.hexdigest()
 
 
+def _mtime(path: str) -> float | None:
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
+
+
 def _check_artifact_freshness(work_dir: str) -> dict[str, Any]:
     current = {
         name: _sha256_file(os.path.join(work_dir, name))
@@ -134,6 +142,35 @@ def _check_artifact_freshness(work_dir: str) -> dict[str, Any]:
     for name, digest in current.items():
         if digest is not None and manifest_hashes.get(name) != digest:
             mismatches.append(f"candidate_manifest 中 {name} 哈希不匹配")
+
+    # mtime 哨兵：上面的哈希绑定只在报告重生成时核对，若 res.md/notebook/结果
+    # CSV 在发链后又回改，盘上的报告仍是旧批次的 PASS（09-04 一晚六次链脱钩
+    # 均属此模式）。源文件 mtime 晚于导出链基准（res.pdf / res.docx / manifest
+    # 三者中最早者）即判定脱钩；CSV 与 notebook 不进任何哈希记录，只能靠
+    # mtime 发现。2 秒容差只吸收同批次内的时钟浮点。
+    gate_times = [
+        t
+        for t in (
+            _mtime(os.path.join(work_dir, name))
+            for name in ("res.pdf", "res.docx", "candidate_manifest.json")
+        )
+        if t is not None
+    ]
+    source_names = [
+        "res.md",
+        "res.json",
+        "frozen_results.json",
+        "notebook.ipynb",
+        *sorted(os.path.basename(p) for p in glob.glob(os.path.join(work_dir, "*.csv"))),
+    ]
+    if gate_times:
+        gate_time = min(gate_times)
+        for name in source_names:
+            source_time = _mtime(os.path.join(work_dir, name))
+            if source_time is not None and source_time > gate_time + 2.0:
+                mismatches.append(
+                    f"{name} 的修改时间晚于导出产物（发链后源文件又被编辑，本报告是旧批次）"
+                )
 
     return _check(
         "artifact_freshness",

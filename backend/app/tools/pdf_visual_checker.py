@@ -251,6 +251,42 @@ def _check_forbidden_submission_terms(page_texts: list[str]) -> dict:
     return {"passed": not occurrences, "occurrences": occurrences}
 
 
+_MISSING_GLYPH_MARKERS = ("\ufffd", "\u25a1", "\x00")
+
+
+def _check_missing_glyphs(page_texts: list[str]) -> dict:
+    """拦截 PDF 渲染后出现的缺字形/乱码占位字符。
+
+    开界 ``$ `` 把后续中文吞进数学字体时，PDF 文本层会留下 U+FFFD/
+    U+25A1/NUL 等占位；Markdown 源级检查看不到渲染这一步，必须在
+    文本层门禁。
+    """
+    offenders: list[dict] = []
+    for index, text in enumerate(page_texts, 1):
+        counts = {marker: text.count(marker) for marker in _MISSING_GLYPH_MARKERS}
+        counts = {marker: n for marker, n in counts.items() if n}
+        if not counts:
+            continue
+        offenders.append(
+            {
+                "page": index,
+                "counts": {marker.encode("unicode_escape").decode(): n for marker, n in counts.items()},
+                "samples": [_missing_glyph_sample(text, marker) for marker in counts],
+            }
+        )
+    return {"passed": not offenders, "offenders": offenders}
+
+
+def _missing_glyph_sample(text: str, marker: str) -> str:
+    """取缺字形字符前后一小段文本作为证据，供人工快速定位。"""
+    at = text.find(marker)
+    if at < 0:
+        return ""
+    start = max(0, at - 40)
+    end = min(len(text), at + len(marker) + 40)
+    return text[start:end].replace("\n", " ")
+
+
 def _check_body_page_limit(
     page_texts: list[str], *, max_body_pages: int = MAX_CUMCM_BODY_PAGES
 ) -> dict:
@@ -660,6 +696,7 @@ def check_pdf_visual(
             "tolerance_pt": CUMCM_CONTENT_MARGIN_TOLERANCE_PT,
             "issues": content_margin_issues,
         },
+        "missing_glyphs": _check_missing_glyphs(page_texts),
     }
     report.update(
         {

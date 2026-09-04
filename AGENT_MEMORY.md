@@ -72,5 +72,5 @@
   双重证伪终结。
 - [09-03 优化轮] Q1基线对照（朴素72.86 vs GBR 54.99，+24.53%，notebook补Q1 cell）；6.1.1重写
   真实OAT+表6弹性；表号1-8重排、空6.2删、6.3并7.2、关键词标准词。终态74页正文30全绿。
-- [2026-09-03] LP fdd491（完整 ID 见归档）已 completed / TECHNICAL_PASS；default 预检条件项、审计 WARN 仍需复核。外审发现正文数值/图文/排版问题，保留现稿待受控返修。7 cell 新内核重跑、3 表 MATCH；详 docs/memory/2026-09.md。
-- [2026-09-04] PR #40 已合并 main（merge 68cb89d）：批 A-F+P1/P2+P2 边界（default 条件放行限定显式 profile、失败 sensitivity 不向 Writer 传数值/图、paper_review 三版本写前校验）+finalize 失败清理半成品 manifest+旧断言同步批 A 契约；CI 全量 905 项转绿（此前分支 CI 一直失败）。
+- [2026-09-04] LP fdd491 completed/TECHNICAL_PASS 但六维评审 NEEDS_REVISION（数值错/自检清单泄露/LaTeX 断行，详归档 09-03 节），待受控返修；PR #40 已合并 main（68cb89d），CI 905 项转绿。
+- [2026-09-04] 门禁加固 PR #41：ALGORITHM_CLAIMS 扩 ε-约束/LNS/MILP/NSGA/退火（ε-约束需约束式证据，加权标量化不算）、结果/验收 CSV 字面量写死检测、preflight `$ ` 开界 lint、PDF 缺字形扫描、缓存键 SHA-256 规则；全量 921 项 OK。

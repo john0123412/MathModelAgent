@@ -506,6 +506,11 @@ if t_total_est > 60.0:
   first screen candidates with a vectorized, cached, event-driven, or analytically
   reduced evaluator. Reuse invariant terms and cache expensive intermediate values
   instead of recomputing them for every candidate.
+- Any persisted computation cache (files under a *_cache directory, .pkl result
+  tables, etc.) must key each entry by a SHA-256 digest of every input file and
+  every parameter that affects its output. Never key by scenario name or loop
+  index alone: after inputs or scheduling change, a stale cache silently
+  re-supplies old numbers and decouples reported results from the code.
 - A single `execute_code` action has a finite watchdog. Treat that limit as a
   hard engineering constraint, not as a reason to submit an unverified result.
   Before a full parameter sweep, run one representative trajectory and print

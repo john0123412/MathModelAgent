@@ -53,24 +53,17 @@
   12/12、五件哈希MATCH。陷阱：append_code_appendix 必跟 fix_support_caption.py。
   详文 docs/memory/2026-09.md。
 
-## Agent 调用 Docker 后端路线图（2026-09-03，PR #40）
 
-- **目标**：外层 Agent 稳定调用本机 Docker 后端（`docker compose up` 仅 backend+redis，前端 `--profile frontend` 可选），0.0.15 规则进入实际执行链而非仅 `skills/`。
-- **批 A**：`writer 600-900字4段 / 11pt1.3 / 30页+摘要单页` 收敛至 profile；手机号漏检等通用修复；`docker-compose.yml` 去 `5173/api` 耦合、`frontend` 加 profile、`common_router` 增 `deployment`、`task_client` 基址切 `8000`。
-- **批 B**：`task_client.py` 薄客户端（`doctor/submit/inspect/events/guide/approve-model/revise-model/review-results/resume/cancel/artifacts/repair-*`）+ 后端 `Idempotency-Key/GET /tasks/{id}/events/artifacts` 与 `guidance_id` 回执（`accepted/consumed`）。
-- **批 C**：`task_budget.json` 累计预算（调用/known token/运行时长）持久化、未知 usage 标 `unknown`、`_finalize` 备份保留+`to_thread` 防阻塞、`cancel` 保留停止证据。
-- **批 D**：`backend/app/resources/modeling_guides/{01-05}.md`（确定性基线/硬约束/统计严谨/Pareto/溯源）按诊断 profile 加载；`paper_review` 六维评审材料包+版本绑定（`manuscript_sha256/frozen_result_id/artifact_set_id`）+ 五类分流。
-- **批 E**：`figure_plan` 路由（data/template/diagram/physical）+ 多面板+追溯校验；`doctor` 容器体检与模板能力表（`huawei→huaweibei` 别名，后端仅 4 profile）。
-- **批 F**：`test_agent_docker_backend.py` 10 项契约验收 + 轻量 LP 烟雾题 + 完整链路哈希核对；`STARTUP.md` 增 Agent 调用手册。
-- 取证：`mathmodel_workspace_0.0.15 (323 MB)`；验证：`task_client doctor` + `docker compose config` + `unittest` 10/10。
-
-- [09-03 LNS升级实测→不采纳] v2 LNS全链本机跑通（MILP 22s/次、单算子7候选0违反），但缝合验证
-  判死：LNS自口径改进−0.4%，跨当前 lp_core+份额口径 1833.7M > 贪心λ点 1440.1M（anchor vs share
-  口径差27%不可通约）。强行缝合=新造假链。决策：保留88-90全绿交付态，LNS产物留v2目录不进主链；
-  快照未动；"聚合近似"扣分如实保留在论文7.2。
-- [09-03 LNS终局] milp options"threads"致Not Set（已修）；share口径负优化−0.07%+GPU违反2→242，
-  双重证伪终结。
-- [09-03 优化轮] Q1基线对照（朴素72.86 vs GBR 54.99，+24.53%，notebook补Q1 cell）；6.1.1重写
-  真实OAT+表6弹性；表号1-8重排、空6.2删、6.3并7.2、关键词标准词。终态74页正文30全绿。
+- [09-03 LNS升级→不采纳] v2 LNS本机跑通（MILP 22s/次；threads致Not Set已修）但双重证伪：
+  v2口径−0.4%被27%口径差吞没、share口径负优化−0.07%。产物留v2目录不进主链。
+- [09-03 优化轮] Q1基线对照入正文；6.1.1真实OAT+表6弹性；表号1-8重排、空6.2删、6.3并7.2、
+  关键词标准词。
+- [09-03 评审二/三轮(90→91-92分)] 表3→非支配2.0、删旧审计文、压力模板×7、虚MILP×3、凸性收紧、
+  Wilson误称×2、前沿用词与最优性措辞统一；18组网格真跑(最优100/5/0.1)，终测→54.7213/R²0.5084，
+  协议cell入附录，frozen重绑；17条lead句并入图注。
+- [09-03 评审四轮(定档92)] 图号语义修复（双编号/错号/旧章节号×6）；Q3目标去碳排放、Q1调度LP过度
+  声明×3改贪心，调度器cell经验证补入附录闭合证据链。终态79页全绿，可冻结。
+- [09-03/04 符号渲染专题] 表头BOM列错位、`$ \sum`开界空格吞中文、pandoc listings literate对λ/≤
+  不生效→代码符号ASCII化(notebook与audit同步)、正文裸√∈tCO₂清理。终验缺字形0、12/12。
 - [2026-09-04] LP fdd491 completed/TECHNICAL_PASS 但六维评审 NEEDS_REVISION（数值错/自检清单泄露/LaTeX 断行，详归档 09-03 节），待受控返修；PR #40 已合并 main（68cb89d），CI 905 项转绿。
 - [2026-09-04] 门禁加固 PR #41：ALGORITHM_CLAIMS 扩 ε-约束/LNS/MILP/NSGA/退火（ε-约束需约束式证据，加权标量化不算）、结果/验收 CSV 字面量写死检测、preflight `$ ` 开界 lint、PDF 缺字形扫描、缓存键 SHA-256 规则；全量 921 项 OK。

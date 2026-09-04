@@ -140,9 +140,18 @@ class MissingGlyphScanTest(unittest.TestCase):
         self.assertEqual(check["offenders"][0]["page"], 2)
 
     def test_replacement_char_and_nul_are_caught(self):
-        check = _check_missing_glyphs(["� 乱码", "nul\x00here", "干净"])
+        check = _check_missing_glyphs(["\ufffd 乱码", "nul\x00here", "干净"])
         pages = [o["page"] for o in check["offenders"]]
         self.assertEqual(pages, [1, 2])
+
+    def test_uffff_missing_glyph_is_caught(self):
+        # v23 事故：listings 缺 λ 字形时 MuPDF 文本层输出 U+FFFF，
+        # 初版扫描集漏掉该字符本身，此测试锁死补口。
+        sample = "log(f' [\uffff={lam_c}] 约束违反组"
+        check = _check_missing_glyphs(["正常", sample])
+        self.assertFalse(check["passed"])
+        self.assertEqual(check["offenders"][0]["page"], 2)
+        self.assertIn("\\uffff", check["offenders"][0]["counts"])
 
     def test_clean_text_passes(self):
         self.assertTrue(_check_missing_glyphs(["正常", "$x^2$"])["passed"])

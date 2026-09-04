@@ -251,15 +251,16 @@ def _check_forbidden_submission_terms(page_texts: list[str]) -> dict:
     return {"passed": not occurrences, "occurrences": occurrences}
 
 
-_MISSING_GLYPH_MARKERS = ("\ufffd", "\u25a1", "\x00")
+_MISSING_GLYPH_MARKERS = ("\ufffd", "\u25a1", "\x00", "\uffff", "\ufffe")
 
 
 def _check_missing_glyphs(page_texts: list[str]) -> dict:
     """拦截 PDF 渲染后出现的缺字形/乱码占位字符。
 
-    开界 ``$ `` 把后续中文吞进数学字体时，PDF 文本层会留下 U+FFFD/
-    U+25A1/NUL 等占位；Markdown 源级检查看不到渲染这一步，必须在
-    文本层门禁。
+    开界 ``$ `` 把后续中文吞进数学字体、或 listings 缺字形（如 λ/≤）时，
+    PDF 文本层会留下 U+FFFD/U+25A1/NUL/U+FFFF 等占位；MuPDF 对无映射字形
+    恰恰输出 U+FFFF，故它必须在扫描集内。Markdown 源级检查看不到渲染这一
+    步，必须在文本层门禁。
     """
     offenders: list[dict] = []
     for index, text in enumerate(page_texts, 1):

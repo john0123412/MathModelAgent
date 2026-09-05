@@ -488,7 +488,12 @@ class ModelerAgent(Agent):
                     issues.append("JSON 无法解析")
 
             attempt += 1
-            logger.warning("ModelPlan 校验失败 (第{}次): {}", attempt, "; ".join(issues))
+            logger.warning(
+                "ModelPlan 校验失败 (第{}次): {} | 原文片段: {}",
+                attempt,
+                "; ".join(issues),
+                (json_str or "")[:220].replace("\n", "␤"),
+            )
             if attempt >= MAX_JSON_REPAIR_ATTEMPTS:
                 raise ValueError(
                     "ModelerAgent 连续返回不合格的 ModelPlan: " + "; ".join(issues)

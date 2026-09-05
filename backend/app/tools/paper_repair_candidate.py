@@ -22,6 +22,7 @@ from app.core.checkpoint import CheckpointManager
 from app.models.user_output import UserOutput
 from app.schemas.A2A import WriterResponse
 from app.tools.paper_postprocessor import prepare_paper_markdown
+from app.tools.paper_revision import bump_paper_revision
 from app.tools.export_template_override import (
     TemplateOverrideError,
     get_editorial_policy_override,
@@ -284,6 +285,7 @@ def run_paper_repair_candidate(task_id: str, candidate_path: str) -> dict[str, A
             raise
         raise PaperRepairCandidateError("论文候选落盘失败，已恢复原论文文件") from exc
 
+    bump_paper_revision(root, origin="paper_repair")
     manifest_path = root / "paper_repair_candidate_manifest.json"
     _write_atomic(
         manifest_path,
@@ -391,6 +393,7 @@ def run_editorial_repair_candidate(task_id: str, candidate_path: str) -> dict[st
             _write_atomic(manifest_path, original_manifest)
         raise PaperRepairCandidateError("编辑质量候选落盘失败，已恢复原论文文件") from exc
 
+    bump_paper_revision(root, origin="editorial_repair")
     return {
         "status": "editorial_candidate_applied",
         "task_id": task_id,
@@ -498,6 +501,7 @@ def run_format_compliance_candidate(task_id: str, candidate_path: str) -> dict[s
             _write_atomic(manifest_path, original_manifest)
         raise PaperRepairCandidateError("格式合规候选落盘失败，已恢复原论文文件") from exc
 
+    bump_paper_revision(root, origin="format_compliance")
     return {
         "status": "format_compliance_candidate_applied",
         "task_id": task_id,

@@ -18,6 +18,7 @@ import re
 from typing import Any
 
 from app.tools.paper_postprocessor import _listings_safe_code, collect_code_sources
+from app.tools.paper_revision import read_paper_revision, verify_paper_revision
 from app.tools.result_integrity import validate_result_freeze
 from app.tools.submission_audit import audit_submission
 
@@ -180,6 +181,46 @@ def _check_artifact_freshness(work_dir: str) -> dict[str, Any]:
         else "导出产物或候选清单与当前源文件不是同一批次。",
         mismatches=mismatches,
         artifact_set_id=manifest.get("artifact_set_id"),
+    )
+
+
+def _check_paper_revision(work_dir: str) -> dict[str, Any]:
+    """Content-revision binding: res.json/res.md/frozen must come from one save.
+
+    A missing ledger means the chain predates the unified save entry (old
+    batch): a warning, not a hard failure.  A present ledger whose hashes no
+    longer match the files on disk, or whose revision differs from the one
+    recorded in the candidate manifest, is a hard failure: the delivered set
+    is not the registered content version.
+    """
+    record = read_paper_revision(work_dir)
+    verification = verify_paper_revision(work_dir)
+    mismatches = list(verification["issues"])
+    manifest = _read_json(os.path.join(work_dir, "candidate_manifest.json")) or {}
+    manifest_revision = (manifest.get("paper_revision") or {}).get("revision")
+    if record is not None and manifest and manifest_revision != record.get("revision"):
+        mismatches.append(
+            f"候选清单登记的修订号 {manifest_revision!r} 与当前台账 "
+            f"{record.get('revision')!r} 不一致（发链后内容又被保存，清单是旧批次）。"
+        )
+    if record is None:
+        check = _check(
+            "paper_revision",
+            True,
+            "缺少 paper_revision.json：旧链无内容台账，建议经统一保存入口重发。",
+            mismatches=mismatches,
+            revision=None,
+        )
+        check["severity"] = "warning"
+        return check
+    return _check(
+        "paper_revision",
+        not mismatches,
+        "内容修订号与 res.json/res.md/冻结结果及候选清单一致。"
+        if not mismatches
+        else "内容修订号与盘上产物或候选清单不一致。",
+        mismatches=mismatches,
+        revision=record.get("revision"),
     )
 
 
@@ -348,6 +389,7 @@ def audit_final_acceptance(work_dir: str) -> dict[str, Any]:
     ))
     checks.append(_check_editorial_quality_gate(work_dir))
     checks.append(_check_artifact_freshness(work_dir))
+    checks.append(_check_paper_revision(work_dir))
 
     freeze = validate_result_freeze(work_dir)
     checks.append(

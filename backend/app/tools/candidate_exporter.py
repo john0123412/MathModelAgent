@@ -12,8 +12,9 @@ from app.tools.export_template_override import (
     TemplateOverrideError,
     load_export_template_override,
 )
+from app.tools.paper_revision import read_paper_revision, verify_paper_revision
 
-SCHEMA_VERSION = "1.2"
+SCHEMA_VERSION = "1.3"
 SOURCE_NAME = "MathModelAgent"
 SUPPORT_MANIFEST = "support_materials_manifest.json"
 SUPPORT_ARCHIVE = "support_materials.zip"
@@ -323,6 +324,21 @@ def write_support_materials_manifest(work_dir: str) -> str:
     return os.path.join(work_dir, SUPPORT_MANIFEST)
 
 
+def _paper_revision_audit(work_dir: str) -> dict:
+    """Bind the candidate set to the recorded content revision (batch 2)."""
+    record = read_paper_revision(work_dir)
+    verification = verify_paper_revision(work_dir)
+    return {
+        "revision": record.get("revision") if record else None,
+        "origin": record.get("origin") if record else None,
+        "res_json_sha256": record.get("res_json_sha256") if record else None,
+        "res_md_sha256": record.get("res_md_sha256") if record else None,
+        "frozen_sha256": record.get("frozen_sha256") if record else None,
+        "consistent": verification["ok"],
+        "issues": verification["issues"],
+    }
+
+
 def write_candidate_manifest(
     work_dir: str, task_id: str, *, submission_file: str = "res.pdf"
 ) -> str:
@@ -356,6 +372,7 @@ def write_candidate_manifest(
         "artifact_set_id": artifact_set_id,
         "artifact_hashes": artifact_hashes,
         "template_override": template_override,
+        "paper_revision": _paper_revision_audit(work_dir),
         # Exactly one primary file is exported for external submission.  Keep
         # this explicit even when the file is absent so an auditor can reject
         # an incomplete candidate instead of guessing from directory contents.
@@ -368,6 +385,7 @@ def write_candidate_manifest(
         "files": {
             "res_md": _existing_or_none(work_dir, "res.md"),
             "res_json": _existing_or_none(work_dir, "res.json"),
+            "paper_revision": _existing_or_none(work_dir, "paper_revision.json"),
             "res_docx": _existing_or_none(work_dir, "res.docx"),
             "res_pdf": _existing_or_none(work_dir, "res.pdf"),
             "modeler_plan_md": _existing_or_none(work_dir, "modeler_plan.md"),

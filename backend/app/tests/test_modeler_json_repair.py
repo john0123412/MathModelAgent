@@ -165,5 +165,85 @@ class ModelerJsonRepairTest(unittest.TestCase):
         ModelPlan.model_validate(patched)
 
 
+class ModelPlanTextFieldCoercionTest(unittest.TestCase):
+    """OpenRouter minimax-m3 实测：纯文本字段常被写成列表/对象。
+
+    能无损字符串化的形态放行（列表成行、对象 JSON 化），缺失仍照常报错。
+    """
+
+    def test_list_and_dict_text_fields_are_coerced(self):
+        plan = ModelPlan.model_validate(
+            {
+                "schema_version": "mathmodel.model-plan.v1",
+                "eda": ["先做量纲检查", "再验证可行域凸性"],
+                "subtasks": {
+                    "ques1": {
+                        "inputs": ["题设数据"],
+                        "method": "线性规划单纯形法加顶点枚举交叉验证求解",
+                        "constraints": ["2*x_A + x_B <= 100"],
+                        "expected_artifacts": [
+                            {
+                                "path": "ques1_results.csv",
+                                "kind": "result_table",
+                                "description": "最优解与目标值结果表",
+                            }
+                        ],
+                        "acceptance_metrics": [
+                            {
+                                "key": "objective_value",
+                                "label": "最优目标值",
+                                "comparator": "ge",
+                                "target": 0,
+                                "unit": "元",
+                                "description": "由结果表目标值列直接读取并复算。",
+                            }
+                        ],
+                        "visualization": {"type": "line", "elements": ["影子价格斜率"]},
+                        "diagnostic_profile": "optimization",
+                    }
+                },
+                "sensitivity_analysis": {"note": "对偶价格双轨验证"},
+            }
+        )
+        self.assertEqual(plan.eda, "先做量纲检查\n再验证可行域凸性")
+        self.assertIsInstance(plan.subtasks["ques1"].visualization, str)
+        self.assertIn("影子价格斜率", plan.subtasks["ques1"].visualization)
+        self.assertIsInstance(plan.sensitivity_analysis, str)
+
+    def test_missing_text_fields_still_rejected(self):
+        with self.assertRaises(Exception):
+            ModelPlan.model_validate(
+                {
+                    "schema_version": "mathmodel.model-plan.v1",
+                    "subtasks": {
+                        "ques1": {
+                            "inputs": ["题设数据"],
+                            "method": "线性规划单纯形法加顶点枚举交叉验证求解",
+                            "constraints": ["2*x_A + x_B <= 100"],
+                            "expected_artifacts": [
+                                {
+                                    "path": "ques1_results.csv",
+                                    "kind": "result_table",
+                                    "description": "最优解与目标值结果表",
+                                }
+                            ],
+                            "acceptance_metrics": [
+                                {
+                                    "key": "objective_value",
+                                    "label": "最优目标值",
+                                    "comparator": "ge",
+                                    "target": 0,
+                                    "unit": "元",
+                                    "description": "由结果表目标值列直接读取并复算。",
+                                }
+                            ],
+                            "visualization": "绘制可行域与最优解位置图",
+                        }
+                    },
+                    "sensitivity_analysis": "对偶价格双轨验证说明",
+                }
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,11 +1,12 @@
 """Agent 间通信数据模型定义。"""
 
 import decimal
+import json
 import math
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from app.schemas.problem_contract import ProblemContract
 
 
@@ -91,6 +92,25 @@ class AcceptanceMetric(BaseModel):
         return self
 
 
+def _coerce_text_field(value: object) -> object:
+    """LLM 兼容 coercion：模型常把纯文本字段写成列表/对象。
+
+    能无损字符串化就放行（列表逐项成行、对象 JSON 化），None 原样交回让
+    必填校验照常报缺；min_length 等后续约束仍然生效。
+    """
+    if isinstance(value, str) or value is None:
+        return value
+    if isinstance(value, list):
+        parts = [
+            item if isinstance(item, str) else json.dumps(item, ensure_ascii=False)
+            for item in value
+        ]
+        return "\n".join(part for part in parts if part.strip())
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, indent=1)
+    return str(value)
+
+
 class SubtaskPlan(BaseModel):
     """一个 ``quesN`` 的输入—方法—约束—证据计划。"""
 
@@ -102,6 +122,11 @@ class SubtaskPlan(BaseModel):
     expected_artifacts: list[ExpectedArtifact] = Field(min_length=1)
     acceptance_metrics: list[AcceptanceMetric] = Field(min_length=1)
     visualization: str = Field(min_length=3)
+
+    @field_validator("method", "visualization", mode="before")
+    @classmethod
+    def _tolerate_nonstring_text(cls, value: object) -> object:
+        return _coerce_text_field(value)
     diagnostic_profile: Literal[
         "exact",
         "numerical",
@@ -152,6 +177,11 @@ class ModelPlan(BaseModel):
     eda: str = Field(min_length=3)
     subtasks: dict[str, SubtaskPlan] = Field(min_length=1)
     sensitivity_analysis: str = Field(min_length=3)
+
+    @field_validator("eda", "sensitivity_analysis", mode="before")
+    @classmethod
+    def _tolerate_nonstring_text(cls, value: object) -> object:
+        return _coerce_text_field(value)
 
     @model_validator(mode="after")
     def only_allow_formal_question_keys(self) -> "ModelPlan":

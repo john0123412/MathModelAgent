@@ -265,5 +265,84 @@ class ProviderTimeoutTest(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class ThinkingDisableFallbackTest(unittest.IsolatedAsyncioTestCase):
+    """GLM-5.3（tokenrouter 实测）不支持禁思考参数：400 时剥 extra_body 重试一次。"""
+
+    @staticmethod
+    def _bad_request(message: str):
+        import httpx
+        from openai import BadRequestError
+
+        return BadRequestError(
+            message,
+            response=httpx.Response(
+                400, request=httpx.Request("POST", "https://example.test/v1")
+            ),
+            body=None,
+        )
+
+    async def test_thinking_unsupported_retries_without_extra_body(self):
+        provider = OpenAIChatProvider()
+        ok_response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    finish_reason="stop",
+                    message=SimpleNamespace(
+                        content="ok", reasoning_content=None, tool_calls=[]
+                    ),
+                )
+            ],
+            usage=SimpleNamespace(
+                prompt_tokens=1,
+                completion_tokens=1,
+                completion_tokens_details=None,
+            ),
+        )
+
+        with mock.patch(
+            "app.core.llm.providers.openai_chat.AsyncOpenAI"
+        ) as client_cls:
+            client = client_cls.return_value
+            client.chat.completions.create.side_effect = [
+                self._bad_request("GLM-5.3 does not support disabling thinking"),
+                asyncio.sleep(0, result=ok_response),
+            ]
+            response = await provider.call(
+                messages=[{"role": "user", "content": "hi"}],
+                model="z-ai/glm-5.3-free",
+                api_key="k",
+                base_url="https://example.test/v1",
+                thinking=False,
+            )
+
+        self.assertEqual(response.content, "ok")
+        first, second = client.chat.completions.create.call_args_list
+        self.assertEqual(
+            first.kwargs["extra_body"], {"thinking": {"type": "disabled"}}
+        )
+        self.assertNotIn("extra_body", second.kwargs)
+
+    async def test_unrelated_bad_request_is_reraised(self):
+        provider = OpenAIChatProvider()
+
+        with mock.patch(
+            "app.core.llm.providers.openai_chat.AsyncOpenAI"
+        ) as client_cls:
+            client = client_cls.return_value
+            client.chat.completions.create.side_effect = self._bad_request(
+                "invalid api key"
+            )
+            with self.assertRaises(Exception):
+                await provider.call(
+                    messages=[{"role": "user", "content": "hi"}],
+                    model="m",
+                    api_key="k",
+                    base_url="https://example.test/v1",
+                    thinking=False,
+                )
+
+        self.assertEqual(client.chat.completions.create.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

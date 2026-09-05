@@ -1,6 +1,6 @@
 """OpenAI Chat Completions API Provider。"""
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError
 from app.config.setting import settings
 from app.core.llm.providers.base import BaseProvider
 from app.core.llm.types import StandardResponse, ToolCall, Usage
@@ -88,7 +88,17 @@ class OpenAIChatProvider(BaseProvider):
                 if tool_choice:
                     kwargs["tool_choice"] = self._convert_tool_choice(tool_choice, tools)
 
-            response = await client.chat.completions.create(**kwargs)
+            try:
+                response = await client.chat.completions.create(**kwargs)
+            except BadRequestError as exc:
+                # GLM-5.3 等推理模型不支持禁思考参数（实测 tokenrouter 返回
+                # 400 "does not support disabling thinking"）。剥掉 disabled
+                # 意图重试一次：禁思考退化为提示层约束，而非硬失败。
+                if "thinking" not in str(exc).lower() or "extra_body" not in kwargs:
+                    raise
+                logger.warning("模型不支持禁思考参数，剥离 extra_body 重试一次")
+                retry_kwargs = {k: v for k, v in kwargs.items() if k != "extra_body"}
+                response = await client.chat.completions.create(**retry_kwargs)
 
             choice = response.choices[0]
             message = choice.message

@@ -77,3 +77,11 @@
   九步全绿、TECHNICAL_PASS 12/12、缺字形0。评审终定档92.5-93(中心约92.8)并宣布"可以冻结、
   不再深挖审计";5.2.3首句"求解器以状态码1.0正常终止"→"求解流程验收状态码为1.0"(仅此一句,
   重导+九步重收敛12/12),模型/CSV/参数/图/frozen自此冻结不再触碰。
+- [09-05 稳定版本工程 PR #51(main=4ab9d1b,tag v2026.09.05)] 五批次:①质量审批绑定
+  execution_validation 登记(废文件名猜测;PASS/NEEDS_REVIEW/BLOCKED 三态,0源阻断;review_id
+  绑冻结/notebook/契约/方案/规则版本;端点提交重核,BLOCKED 拒批);②paper_revision 台账+统一
+  保存入口+preflight res_json_sync 硬门(v23 12/12真阳性、干净链零误报)+manifest 1.3 绑修订;
+  ③task_state_diagnosis 三值诊断+reconcile 审计修复(操作人+理由,不伪造审批)+completed 需
+  五件产物在盘;④docker-compose.stable.yml 代码入镜像+MMA_GIT_COMMIT 自证+预算损坏隔离
+  .corrupt 不静默清零;⑤三历史案例定性(08-17 漂移不可迁移/08-23 矛盾+deterministic_recovery
+  包装/08-30 res.json 禁作恢复源,详 docs/release/2026-09-historical-cases.md)。980 全量 OK。

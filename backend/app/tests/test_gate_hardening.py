@@ -331,5 +331,69 @@ class ArtifactFreshnessMtimeSentinelTest(unittest.TestCase):
             self.assertEqual(flagged, {"res.md", "notebook.ipynb", "ques1_metrics.csv"})
 
 
+class NotebookSerializerExecEvidenceTest(unittest.TestCase):
+    """09-05 LP 冒烟实锤：序列化器历史上不打计数、stdout 不落 stream，
+    与 PR #50 伪执行门禁的"真内核必打计数/print 必有 stream"假设冲突。
+    修复后管道自身产物必须零误报，手工拼装仍必须被拦。"""
+
+    def test_pipeline_serialized_notebook_passes_pseudo_exec_gate(self):
+        import json
+        from pathlib import Path
+        from app.tools.notebook_serializer import NotebookSerializer
+        from app.tools.execution_validation import _notebook_issues
+
+        with tempfile.TemporaryDirectory() as wd:
+            serializer = NotebookSerializer(work_dir=wd)
+            serializer.add_code_cell_to_notebook('print("hello")\nx = 1\nx')
+            serializer.add_code_cell_output_to_notebook("hello\n")
+            nb = json.loads(Path(wd, "notebook.ipynb").read_text(encoding="utf-8"))
+            code_cells = [c for c in nb["cells"] if c["cell_type"] == "code"]
+            self.assertEqual([c["execution_count"] for c in code_cells], [1])
+            self.assertIn("stream", [o["output_type"] for o in code_cells[0]["outputs"]])
+            by_id = {
+                issue["id"]: issue
+                for issue in _notebook_issues(Path(wd), has_execution_manifest=True)
+            }
+            self.assertIn("pseudo_exec.print_without_stream", by_id)
+            self.assertIn("pseudo_exec.output_without_count", by_id)
+            self.assertTrue(by_id["pseudo_exec.print_without_stream"]["passed"])
+            self.assertTrue(by_id["pseudo_exec.output_without_count"]["passed"])
+
+    def test_hand_assembled_output_without_count_still_blocked(self):
+        import json
+        from pathlib import Path
+        from app.tools.notebook_serializer import NotebookSerializer
+        from app.tools.execution_validation import _notebook_issues
+
+        with tempfile.TemporaryDirectory() as wd:
+            serializer = NotebookSerializer(work_dir=wd)
+            serializer.add_code_cell_to_notebook("print(1)")
+            serializer.add_code_cell_output_to_notebook("1\n")
+            nb = json.loads(Path(wd, "notebook.ipynb").read_text(encoding="utf-8"))
+            nb["cells"].append(
+                {
+                    "cell_type": "code",
+                    "execution_count": None,
+                    "metadata": {},
+                    "source": ["print(2)"],
+                    "outputs": [
+                        {
+                            "output_type": "display_data",
+                            "data": {"text/plain": ["2"]},
+                            "metadata": {},
+                        }
+                    ],
+                }
+            )
+            Path(wd, "notebook.ipynb").write_text(json.dumps(nb), encoding="utf-8")
+            by_id = {
+                issue["id"]: issue
+                for issue in _notebook_issues(Path(wd), has_execution_manifest=True)
+            }
+            self.assertIn("pseudo_exec.output_without_count", by_id)
+            self.assertFalse(by_id["pseudo_exec.output_without_count"]["passed"])
+            self.assertEqual(by_id["pseudo_exec.output_without_count"]["evidence"]["cells"], [1])
+
+
 if __name__ == "__main__":
     unittest.main()

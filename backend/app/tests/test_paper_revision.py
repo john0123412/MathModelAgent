@@ -15,6 +15,7 @@ from app.tools.final_acceptance import _check_paper_revision
 from app.tools.paper_postprocessor import _check_res_json_sync
 from app.tools.paper_revision import (
     bump_paper_revision,
+    restamp_res_md,
     verify_paper_revision,
 )
 
@@ -128,6 +129,42 @@ class ResJsonSyncCheckTest(unittest.TestCase):
             (root / "res.md").write_text(md, encoding="utf-8")
             check = _check_res_json_sync(work_dir, md)
             self.assertTrue(check["passed"])
+
+    def test_word_level_editorial_softening_tolerated(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            root = Path(work_dir)
+            _seed_content(root)
+            # 后处理合法改写：多句章节中个别词软化（完全一致→基本一致类）不应判脱节。
+            long_section = (
+                "本文针对算电协同调度问题建立混合整数规划模型，给出区域负载与功率平衡的约束体系。"
+                "求解流程采用列生成与分支定价结合的策略，保证大规模实例可解。"
+                "实验结果表明最优解在全部资源约束下均满足可行性要求。"
+                "灵敏度分析进一步验证了影子价格与数值差分的一致性关系。"
+            )
+            softened = long_section.replace("验证了影子价格", "基本印证了影子价格").replace(
+                "保证大规模实例可解", "在很大程度上保证实例可解"
+            )
+            sections = json.loads((root / "res.json").read_text(encoding="utf-8"))
+            sections["ques1"]["response_content"] = long_section
+            (root / "res.json").write_text(json.dumps(sections, ensure_ascii=False), encoding="utf-8")
+            md = "# 论文\n\n" + softened + "\n\n" + _SECTION_B + "\n"
+            (root / "res.md").write_text(md, encoding="utf-8")
+            check = _check_res_json_sync(work_dir, md)
+            self.assertTrue(check["passed"], check["desynced_sections"])
+
+    def test_restamp_after_legit_postprocess_rewrite(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            root = Path(work_dir)
+            _seed_content(root)
+            first = bump_paper_revision(work_dir, origin="writer_save")
+            (root / "res.md").write_text(
+                "# 论文\n\n" + _SECTION_A + "\n\n" + _SECTION_B + "（归一化追加）\n",
+                encoding="utf-8",
+            )
+            self.assertFalse(verify_paper_revision(work_dir)["ok"])
+            record = restamp_res_md(work_dir)
+            self.assertEqual(record["revision"], first["revision"])
+            self.assertTrue(verify_paper_revision(work_dir)["ok"])
 
     def test_missing_res_json_skips_without_failing(self):
         with tempfile.TemporaryDirectory() as work_dir:

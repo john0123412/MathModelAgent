@@ -87,6 +87,25 @@ def bump_paper_revision(
     return record
 
 
+def restamp_res_md(work_dir: str | os.PathLike[str]) -> dict[str, Any] | None:
+    """后处理链会合法就地改写 res.md（归一化/措辞软化/引用转换）。
+
+    这类改写不产生新内容世代，只更新台账中的 res_md 哈希（revision 不变），
+    使 verify 不把合法回写误判为手改漂移。无台账时静默跳过（旧链）。
+    """
+    root = Path(work_dir)
+    record = read_paper_revision(root)
+    if record is None:
+        return None
+    record["res_md_sha256"] = _sha256_file(root / "res.md")
+    record["restamped_at"] = datetime.datetime.now().isoformat()
+    path = root / PAPER_REVISION_FILENAME
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+    return record
+
+
 def verify_paper_revision(work_dir: str | os.PathLike[str]) -> dict[str, Any]:
     """Check that res.json/res.md/frozen still match the last recorded save."""
     root = Path(work_dir)

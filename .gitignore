@@ -51,3 +51,6 @@ nul
 # figure-templates 本地运行缓存与产物（预览已沉淀到 assets/previews）
 skills/mathmodel-figure-templates/scripts/.mplconfig/
 skills/mathmodel-figure-templates/scripts/outputs/
+
+# WorkBuddy AI 外部工具本地记忆目录（非仓库内容）
+.workbuddy-ai/

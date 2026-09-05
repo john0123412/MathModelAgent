@@ -38,6 +38,7 @@ from app.utils.common_utils import (
 from app.tools.candidate_exporter import write_candidate_manifest
 from app.tools.submission_audit import write_submission_audit_report
 from app.tools.final_acceptance import write_final_acceptance_report
+from app.tools.execution_quality_review import build_execution_quality_review
 import os
 import re
 import asyncio
@@ -1993,6 +1994,21 @@ async def review_execution_quality(
     comment = user_input_queue.normalize_content(request.comment.strip())
     if not comment:
         raise HTTPException(status_code=422, detail="复核理由或返修意见不能为空")
+
+    # 审批提交时按当前盘上证据重算复核编号：旧报告、旧编号不能批准新结果；
+    # BLOCKED（证据缺失/漂移）一律拒绝 approve，只能返修重建。
+    current_report = build_execution_quality_review(work_dir)
+    current_id = str(current_report.get("review_id", ""))
+    if request.review_id.strip() != current_id or checkpoint.quality_review_id != current_id:
+        raise HTTPException(
+            status_code=409,
+            detail="结果、冻结登记或方案版本已变化，旧审批编号不能批准当前结果；请重新读取最新质量复核报告",
+        )
+    if request.action == "approve" and current_report.get("status") == "BLOCKED":
+        raise HTTPException(
+            status_code=409,
+            detail="质量复核存在阻断项（证据缺失或哈希漂移），不能批准；请使用 action=repair 重建证据",
+        )
 
     requested: list[str] = []
     guidance = ""

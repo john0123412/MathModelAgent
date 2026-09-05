@@ -838,7 +838,7 @@ class MathModelWorkFlow(WorkFlow):
         quality_report = write_execution_quality_review(self.work_dir)
         checkpoint = checkpoint_manager._checkpoint
         requires_manual_review = bool(
-            quality_report.get("status") == "NEEDS_REVIEW"
+            quality_report.get("status") != "PASS"
             or (checkpoint is not None and checkpoint.require_model_review)
         )
         review_id = str(quality_report.get("review_id", ""))
@@ -846,17 +846,24 @@ class MathModelWorkFlow(WorkFlow):
             review_id
         ):
             checkpoint_manager.record_quality_review_pending(quality_report)
-            failed_subtasks = quality_report.get("failed_subtasks") or []
-            target_text = "、".join(map(str, failed_subtasks)) or "全部正式子题"
+            if quality_report.get("status") == "BLOCKED":
+                blocked_subtasks = quality_report.get("blocked_subtasks") or []
+                target_text = "、".join(map(str, blocked_subtasks)) or "证据登记整体"
+                content = (
+                    "质量复核被阻断：执行证据缺失、无登记来源或哈希漂移，"
+                    f"涉及 {target_text}；不能批准，只能定向返修重建证据。"
+                    "详见 execution_quality_review.md。"
+                )
+            else:
+                failed_subtasks = quality_report.get("failed_subtasks") or []
+                target_text = "、".join(map(str, failed_subtasks)) or "全部正式子题"
+                content = (
+                    "冻结结果等待 Codex/人工质量复核，论文写作尚未开始。"
+                    f"重点复核：{target_text}；请查看 execution_quality_review.md。"
+                )
             await redis_manager.publish_message(
                 self.task_id,
-                SystemMessage(
-                    content=(
-                        "冻结结果等待 Codex/人工质量复核，论文写作尚未开始。"
-                        f"重点复核：{target_text}；请查看 execution_quality_review.md。"
-                    ),
-                    type="warning",
-                ),
+                SystemMessage(content=content, type="warning"),
             )
             return "waiting_quality_review"
 

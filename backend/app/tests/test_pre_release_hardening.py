@@ -715,6 +715,11 @@ class TestDispatchReservation(unittest.IsolatedAsyncioTestCase):
             with (
                 mock.patch.object(modeling_router, "get_work_dir", return_value=work_dir),
                 mock.patch.object(task_status_service, "get_work_dir", return_value=work_dir),
+                mock.patch.object(
+                    modeling_router,
+                    "build_execution_quality_review",
+                    return_value={"review_id": "review-1", "status": "NEEDS_REVIEW"},
+                ),
                 mock.patch.object(modeling_router.redis_manager, "set", new=mock.AsyncMock()),
                 mock.patch.object(
                     modeling_router.redis_manager,
@@ -772,6 +777,56 @@ class TestDispatchReservation(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNotNone(entry)
                 modeling_router._release_active_task("dispatch-endpoint", entry[1])
         self.assertNotIn("dispatch-endpoint", modeling_router._active_tasks)
+
+    async def test_execution_review_revalidates_current_report_on_submit(self):
+        """批次1：审批提交时按盘上当前证据重算复核编号。
+
+        - 编号与当前重算结果不一致 → 409（旧审批不能批准新结果）。
+        - 编号一致但当前状态 BLOCKED → approve 被 409 拒绝。
+        """
+        with tempfile.TemporaryDirectory() as work_dir:
+            self._write_review_checkpoint(work_dir, quality=True)
+            with open(os.path.join(work_dir, "task_status.json"), "w", encoding="utf-8") as handle:
+                json.dump({"status": "waiting_quality_review"}, handle)
+            with (
+                mock.patch.object(modeling_router, "get_work_dir", return_value=work_dir),
+                mock.patch.object(task_status_service, "get_work_dir", return_value=work_dir),
+            ):
+                with mock.patch.object(
+                    modeling_router,
+                    "build_execution_quality_review",
+                    return_value={"review_id": "current-2", "status": "PASS"},
+                ):
+                    with self.assertRaises(HTTPException) as stale:
+                        await modeling_router.review_execution_quality(
+                            "dispatch-endpoint",
+                            BackgroundTasks(),
+                            modeling_router.ExecutionReviewRequest(
+                                action="approve",
+                                review_id="review-1",
+                                failed_subtasks=[],
+                                comment="同意放行",
+                            ),
+                        )
+                    self.assertEqual(stale.exception.status_code, 409)
+                with mock.patch.object(
+                    modeling_router,
+                    "build_execution_quality_review",
+                    return_value={"review_id": "review-1", "status": "BLOCKED"},
+                ):
+                    with self.assertRaises(HTTPException) as blocked:
+                        await modeling_router.review_execution_quality(
+                            "dispatch-endpoint",
+                            BackgroundTasks(),
+                            modeling_router.ExecutionReviewRequest(
+                                action="approve",
+                                review_id="review-1",
+                                failed_subtasks=[],
+                                comment="同意放行",
+                            ),
+                        )
+                    self.assertEqual(blocked.exception.status_code, 409)
+                    self.assertIn("不能批准", blocked.exception.detail)
 
     async def test_resume_redis_failure_releases_reservation(self):
         with tempfile.TemporaryDirectory() as work_dir:

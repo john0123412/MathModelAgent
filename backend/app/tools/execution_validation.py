@@ -2166,6 +2166,92 @@ def _code_safety_issues(root: Path) -> list[dict[str, Any]]:
 
     return issues
 
+def _cell_prints_to_stdout(source: str) -> bool:
+    """判定单元源码是否含模块级 print 调用（伪执行门禁专用）。
+
+    先剔除 IPython magic/shell 行再走 AST；只看模块直接层级（含 if/for/while/
+    推导式）的 print 调用。def/class 体内的 print 只在被调用时才产生输出，
+    不能作为“本单元应有 stdout”的依据，故不计入。解析失败按 False 处理，
+    宁缺勿误报。
+    """
+    lines = []
+    for line in source.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("%", "!")):
+            continue
+        lines.append(line)
+    try:
+        tree = ast.parse("\n".join(lines))
+    except SyntaxError:
+        return False
+
+    def scan(node: ast.AST) -> bool:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name) and child.func.id == "print":
+                return True
+            if scan(child):
+                return True
+        return False
+
+    return scan(tree)
+
+
+def _pseudo_execution_issues(notebook: Any, code_cells: list) -> list[dict[str, Any]]:
+    """伪执行检测：拦手工拼装的 notebook 输出（v23 事故签名：83 个"输出"却 0 stdout）。
+
+    真信号（校准于 v23/0823/0825 三个真实 notebook，零误报）：
+    - 含模块级 print 且已执行的单元没有任何 stream 输出——手工拼装者只会贴
+      display_data/execute_result，写不出 stdout；
+    - 有输出但 execution_count 为 None——真内核执行必打计数；
+    - kernelspec 与 language_info 同时缺失——ipykernel 导出至少写其一。
+    注意：execution_count 的连续性/唯一性不能作为信号——真实 notebook 多次
+    局部重跑会产生重复与跳号（v23 实测计数 2,98,99,1,4,97,2）。
+    """
+    issues: list[dict[str, Any]] = []
+    print_without_stream: list[int] = []
+    output_without_count: list[int] = []
+    index = -1
+    for cell in notebook.cells:
+        index += 1
+        if cell.get("cell_type") != "code":
+            continue
+        outputs = cell.get("outputs", []) or []
+        executed = cell.get("execution_count") is not None
+        if outputs and not executed:
+            output_without_count.append(index)
+        if executed and outputs and not any(
+            output.get("output_type") == "stream" for output in outputs
+        ):
+            source = cell.get("source", "") or ""
+            if "redirect_stdout" in source:
+                continue  # 主动捕获 stdout 的合法形态豁免
+            if _cell_prints_to_stdout(source):
+                print_without_stream.append(index)
+    issues.append(
+        _issue(
+            "pseudo_exec.print_without_stream",
+            not print_without_stream,
+            "含模块级 print 的已执行单元均有 stream 输出。"
+            if not print_without_stream
+            else f"单元 {print_without_stream} 有 print 却无 stream 输出——手工拼装输出的伪执行形态。",
+            {"cells": print_without_stream},
+        )
+    )
+    issues.append(
+        _issue(
+            "pseudo_exec.output_without_count",
+            not output_without_count,
+            "所有带输出的单元均有执行计数。"
+            if not output_without_count
+            else f"单元 {output_without_count} 有输出但 execution_count 为空——真内核必打计数。",
+            {"cells": output_without_count},
+        )
+    )
+    return issues
+
+
 def _notebook_issues(work_dir: Path, *, has_execution_manifest: bool) -> list[dict[str, Any]]:
     notebook_path = work_dir / "notebook.ipynb"
     if not notebook_path.is_file():
@@ -2182,7 +2268,7 @@ def _notebook_issues(work_dir: Path, *, has_execution_manifest: bool) -> list[di
         and any(output.get("output_type") == "error" for output in cell.get("outputs", []))
     ]
     errors_are_reconciled = bool(error_cells) and has_execution_manifest
-    return [
+    issues = [
         _issue(
             "notebook_execution",
             bool(code_cells),
@@ -2203,6 +2289,9 @@ def _notebook_issues(work_dir: Path, *, has_execution_manifest: bool) -> list[di
             },
         ),
     ]
+    if code_cells:
+        issues.extend(_pseudo_execution_issues(notebook, code_cells))
+    return issues
 
 
 def _manifest_issues(

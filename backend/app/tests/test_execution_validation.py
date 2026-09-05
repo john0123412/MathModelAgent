@@ -21,6 +21,7 @@ from app.tools.execution_validation import (
     write_frozen_results_from_execution_validation,
     write_execution_validation_report,
     _code_safety_issues,
+    _notebook_issues,
 )
 
 
@@ -32,6 +33,9 @@ def _sha256(path: str) -> str:
 def _write_notebook(work_dir: str, *, error: bool = False) -> None:
     cell = nbf.new_code_cell("value = 100")
     if error:
+        # 真内核执行（含报错）必打 execution_count；不带计数的输出正是
+        # pseudo_exec.output_without_count 要拦的手工拼装形态。
+        cell["execution_count"] = 1
         cell["outputs"] = [
             nbf.new_output(
                 output_type="error",
@@ -2215,6 +2219,80 @@ class TestFloatToleranceProtocol(unittest.TestCase):
             self.assertEqual(c_entry["metric_kind"], "integer")
             self.assertEqual(c_entry["precision"], 0)
             self.assertAlmostEqual(c_entry["abs_tol"], 1e-6, places=7)
+
+
+class PseudoExecutionDetectionTest(unittest.TestCase):
+    """P0-2：拦手工拼装输出的伪执行（v23 事故签名：83 个"输出"却 0 stdout）。"""
+
+    def _nb_issue(self, cells, *, nb_metadata=None):
+        with tempfile.TemporaryDirectory() as work_dir:
+            notebook = nbf.new_notebook(cells=cells)
+            if nb_metadata:
+                notebook.metadata.update(nb_metadata)
+            with open(os.path.join(work_dir, "notebook.ipynb"), "w", encoding="utf-8") as handle:
+                nbformat.write(notebook, handle)
+            issues = _notebook_issues(Path(work_dir), has_execution_manifest=True)
+            return {i["id"]: i["passed"] for i in issues}
+
+    def _stream(self, text="1\n"):
+        return nbf.new_output("stream", name="stdout", text=text)
+
+    def _display(self):
+        return nbf.new_output("display_data", data={"image/png": "ZmFrZQ=="}, metadata={})
+
+    def test_print_cells_without_stream_are_flagged(self):
+        cell = nbf.new_code_cell("print('done')\nvalue = 100")
+        cell["execution_count"] = 1
+        cell["outputs"] = [self._display()]
+        result = self._nb_issue([cell])
+        self.assertFalse(result["pseudo_exec.print_without_stream"])
+
+    def test_executed_print_with_stream_passes(self):
+        cell = nbf.new_code_cell("print('done')\nvalue = 100")
+        cell["execution_count"] = 1
+        cell["outputs"] = [self._stream()]
+        result = self._nb_issue([cell])
+        self.assertTrue(result["pseudo_exec.print_without_stream"])
+
+    def test_print_only_inside_def_is_exempt(self):
+        cell = nbf.new_code_cell("def helper():\n    print('only when called')")
+        cell["execution_count"] = 1
+        cell["outputs"] = [self._display()]
+        result = self._nb_issue([cell])
+        self.assertTrue(result["pseudo_exec.print_without_stream"])
+
+    def test_redirect_stdout_cells_are_exempt(self):
+        src = "import contextlib, io\nbuf = io.StringIO()\nwith contextlib.redirect_stdout(buf):\n    print('captured')"
+        cell = nbf.new_code_cell(src)
+        cell["execution_count"] = 1
+        cell["outputs"] = [self._display()]
+        result = self._nb_issue([cell])
+        self.assertTrue(result["pseudo_exec.print_without_stream"])
+
+    def test_magic_lines_do_not_trigger_print_requirement(self):
+        cell = nbf.new_code_cell("%matplotlib inline\n!ls\nfig.save('x.png')")
+        cell["execution_count"] = 1
+        cell["outputs"] = [self._display()]
+        result = self._nb_issue([cell])
+        self.assertTrue(result["pseudo_exec.print_without_stream"])
+
+    def test_outputs_without_execution_count_are_flagged(self):
+        cell = nbf.new_code_cell("value = 100")
+        cell["outputs"] = [self._display()]  # 手工拼装：贴了输出却没计数
+        result = self._nb_issue([cell])
+        self.assertFalse(result["pseudo_exec.output_without_count"])
+
+    def test_real_multi_rerun_counts_pass_despite_gaps(self):
+        # v23 实测校准：局部重跑导致计数重复/跳号/非单调，均不得报。
+        cells = []
+        for i, count in enumerate([2, 98, 99, 1, 4, 97, 2]):
+            cell = nbf.new_code_cell(f"print('step {i}')")
+            cell["execution_count"] = count
+            cell["outputs"] = [self._stream()]
+            cells.append(cell)
+        result = self._nb_issue(cells)
+        self.assertTrue(result["pseudo_exec.print_without_stream"])
+        self.assertTrue(result["pseudo_exec.output_without_count"])
 
 
 if __name__ == "__main__":

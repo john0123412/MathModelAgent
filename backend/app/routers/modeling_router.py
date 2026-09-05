@@ -415,6 +415,28 @@ async def _apply_final_acceptance_status(task_id: str, report: dict) -> bool:
         )
         return False
 
+    # 纵深防御：completed 必须同时满足技术验收通过和主产物集在盘齐全。
+    try:
+        acceptance_work_dir = get_work_dir(task_id)
+    except FileNotFoundError:
+        acceptance_work_dir = None
+    if acceptance_work_dir is not None:
+        from app.tools.task_state_diagnosis import MAIN_ARTIFACTS
+
+        missing_artifacts = [
+            name
+            for name in MAIN_ARTIFACTS
+            if not os.path.isfile(os.path.join(acceptance_work_dir, name))
+        ]
+        if missing_artifacts:
+            message = f"技术验收通过但主产物缺失：{missing_artifacts}，不能登记完成。"
+            write_task_status(task_id, "failed", message)
+            await _safe_publish_message(
+                task_id,
+                SystemMessage(content=message, type="error"),
+            )
+            return False
+
     write_task_status(task_id, "completed", "任务处理完成")
     await _safe_publish_message(
         task_id,
@@ -2126,6 +2148,21 @@ async def resume_task(
     # let the normal resume path perform export only, rather than bypassing the
     # router or waking any provider because ``task_status`` still says completed.
     if prior_state == "completed" and not export_only_paper_repair:
+        from app.tools.task_state_diagnosis import INFLIGHT_STATES
+
+        if checkpoint is not None and (
+            (checkpoint.workflow_state or "") in INFLIGHT_STATES
+            or (checkpoint.quality_review_status or "") in {"pending", "repair_requested"}
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"任务状态矛盾（completed + {checkpoint.workflow_state}/"
+                    f"{checkpoint.quality_review_status}），不能盲目续传；"
+                    "请先运行 python -m app.tools.task_state_diagnosis --work-dir <dir> 核对，"
+                    "再用带操作人与理由的 --reconcile 显式修复。"
+                ),
+            )
         raise HTTPException(status_code=409, detail="任务已完成，无需续传")
     if prior_state == "waiting_review":
         raise HTTPException(status_code=409, detail="任务等待建模方案确认，请使用 approve-modeling")

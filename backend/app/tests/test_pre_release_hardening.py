@@ -874,6 +874,11 @@ class TestDispatchReservation(unittest.IsolatedAsyncioTestCase):
 class TestNotificationStateOrdering(unittest.IsolatedAsyncioTestCase):
     async def test_technical_pass_publish_failure_stays_completed(self):
         with tempfile.TemporaryDirectory() as work_dir:
+            # 批次3：completed 现要求主产物集在盘齐全，测试需先造出交付态。
+            for _name in (
+                "res.md", "res.json", "res.docx", "res.pdf", "frozen_results.json",
+            ):
+                Path(os.path.join(work_dir, _name)).write_text("{}", encoding="utf-8")
             with (
                 mock.patch.object(modeling_router, "get_work_dir", return_value=work_dir),
                 mock.patch.object(task_status_service, "get_work_dir", return_value=work_dir),

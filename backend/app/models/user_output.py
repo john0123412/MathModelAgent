@@ -5,6 +5,7 @@ import re
 from app.utils.data_recorder import DataRecorder
 from app.schemas.A2A import WriterResponse
 from app.tools.export_profiles import normalize_export_profile
+from app.tools.paper_revision import bump_paper_revision
 import json
 import uuid
 
@@ -286,10 +287,11 @@ class UserOutput:
 
 
     def save_result(self):
-        """将结果保存为 res.json 和 res.md 文件。"""
+        """将结果保存为 res.json 和 res.md 文件，并登记内容修订号。"""
         with open(os.path.join(self.work_dir, "res.json"), "w", encoding="utf-8") as f:
             json.dump(self.res, f, ensure_ascii=False, indent=4)
 
         res_path = os.path.join(self.work_dir, "res.md")
         with open(res_path, "w", encoding="utf-8") as f:
             f.write(self.get_result_to_save())
+        bump_paper_revision(self.work_dir, origin="writer_save")

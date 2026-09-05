@@ -1,0 +1,106 @@
+# docker-compose.stable.yml — 稳定部署配置（批次4，2026-09-05）
+#
+# 与开发用的 docker-compose.yml 的区别：
+#   1. 后端代码打进镜像（无 ./backend/app 源码挂载）——运行版本 = 镜像版本，
+#      /config 的 deployment.git_commit 可自证；
+#   2. 构建时注入 MMA_GIT_COMMIT / MMA_BUILD_ID；
+#   3. 任务数据与字体仍然持久化。
+#
+# 用法（在项目根目录）：
+#   $env:MMA_GIT_COMMIT = git rev-parse HEAD   # PowerShell：git rev-parse HEAD | Set-Variable ...
+#   docker compose -f docker-compose.stable.yml build --build-arg GIT_COMMIT=$env:MMA_GIT_COMMIT --build-arg BUILD_ID=$(Get-Date -Format yyyyMMddHHmmss)
+#   docker compose -f docker-compose.stable.yml --profile frontend up -d
+#
+# 回退（发布前先保留上一稳定镜像）：
+#   docker tag mathmodelagent-backend:latest mathmodelagent-backend:stable-prev   # 发布前执行
+#   docker tag mathmodelagent-backend:stable-prev mathmodelagent-backend:latest   # 回退时执行
+#   docker compose -f docker-compose.stable.yml up -d --force-recreate backend
+
+services:
+  redis:
+    image: redis:alpine
+    container_name: mathmodelagent_john_redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    volumes:
+      - redis_data:/data
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        GIT_COMMIT: ${MMA_GIT_COMMIT:-unknown}
+        BUILD_ID: ${MMA_BUILD_ID:-unknown}
+    image: mathmodelagent-backend:latest
+    container_name: mathmodelagent_john_backend
+    init: true
+    restart: unless-stopped
+    dns:
+      - 223.5.5.5
+      - 119.29.29.29
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "from urllib.request import urlopen; raise SystemExit(0 if urlopen('http://127.0.0.1:8000/docs', timeout=2).status == 200 else 1)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+    env_file:
+      - ./backend/.env.dev
+    environment:
+      - ENV=DEV
+      - REDIS_URL=redis://redis:6379/0
+      - SERVER_HOST=${SERVER_HOST:-http://127.0.0.1:8000}
+      - MAX_RETRIES=20
+    volumes:
+      # 注意：这里没有 ./backend/app 挂载——代码以镜像为准。
+      - ./backend/project/work_dir:/app/project/work_dir
+      - "${MMA_OFFICIAL_FONTS_DIR:-./backend/fonts}:/usr/local/share/fonts/mma-extra:ro"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  frontend:
+    profiles: ["frontend"]
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mathmodelagent_john_frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5173:5173"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:5173/').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    env_file:
+      - ./frontend/.env.docker
+    volumes:
+      - /app/node_modules
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  redis_data:

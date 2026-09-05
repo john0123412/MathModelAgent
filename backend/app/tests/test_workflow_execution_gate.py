@@ -1,5 +1,7 @@
 """Regression tests for the code-validation-freeze-writer ordering."""
 
+import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +17,46 @@ from app.schemas.A2A import (
 )
 from app.schemas.problem_contract import ContractRequirement, ProblemContract
 from app.schemas.request import Problem
+
+
+def _seed_registered_evidence(directory: Path, subtask_ids: tuple[str, ...]) -> None:
+    """Write the manifest + result CSVs a real pipeline run would register.
+
+    The batch-1 quality reviewer reads sources from ``execution_validation.json``
+    instead of guessing filenames; tests that patch the validator must seed this
+    evidence, otherwise the reviewer correctly blocks on missing registration.
+    """
+    subtasks = []
+    for subtask_id in subtask_ids:
+        csv_name = f"{subtask_id}_results.csv"
+        path = Path(directory, csv_name)
+        path.write_text("指标,实际值,是否达标\n利润,3600,是\n", encoding="utf-8")
+        sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        subtasks.append(
+            {
+                "id": subtask_id,
+                "executed": True,
+                "feasible": True,
+                "constraints": [{"source": {"path": csv_name, "sha256": sha256}}],
+                "metrics": [],
+                "figures": [],
+                "recorded_by": "test",
+            }
+        )
+    Path(directory, "execution_validation.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "test",
+                "subtasks": subtasks,
+                "metrics": [],
+                "status": "pass",
+                "generated_by": "test",
+                "updated_at": "2026-09-05T00:00:00",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
 
 class _Flows:
@@ -207,6 +249,7 @@ class WorkflowExecutionGateTest(unittest.IsolatedAsyncioTestCase):
             workflow.work_dir = str(work_dir)
 
             def freeze(directory):
+                _seed_registered_evidence(Path(directory), ("ques1", "ques2"))
                 Path(directory, "frozen_results.json").write_text("{}", encoding="utf-8")
 
             review = {
@@ -414,6 +457,7 @@ class WorkflowExecutionGateTest(unittest.IsolatedAsyncioTestCase):
 
             def freeze(directory):
                 events.append(("freeze",))
+                _seed_registered_evidence(Path(directory), ("ques1", "ques2"))
                 Path(directory, "frozen_results.json").write_text("{}", encoding="utf-8")
                 return Path(directory, "frozen_results.json")
 
@@ -508,6 +552,7 @@ class WorkflowExecutionGateTest(unittest.IsolatedAsyncioTestCase):
             workflow.work_dir = str(work_dir)
 
             def freeze(directory):
+                _seed_registered_evidence(Path(directory), ("ques1", "ques2"))
                 Path(directory, "frozen_results.json").write_text("{}", encoding="utf-8")
 
             failed_report = {
@@ -578,6 +623,7 @@ class WorkflowExecutionGateTest(unittest.IsolatedAsyncioTestCase):
             workflow.work_dir = str(work_dir)
 
             def freeze(directory):
+                _seed_registered_evidence(Path(directory), ("ques1", "ques2"))
                 Path(directory, "frozen_results.json").write_text("{}", encoding="utf-8")
 
             with (

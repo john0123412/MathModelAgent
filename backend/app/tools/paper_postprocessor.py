@@ -2908,6 +2908,90 @@ def _section_kind(title: str) -> str:
     return "other"
 
 
+def _normalize_sync_text(text: str) -> str:
+    """Strip footnote/uuid markers and all whitespace for cross-artifact compare."""
+    text = re.sub(r"\[\^[^\]]+\]", "", text)
+    text = re.sub(r"\[[0-9a-fA-F-]{36}\]", "", text)
+    return re.sub(r"\s+", "", text)
+
+
+def _check_res_json_sync(work_dir: str, markdown: str) -> dict:
+    """res.json is the section-level source of truth for res.md.
+
+    A controlled save keeps both in lockstep; hand-editing only one side (the
+    v23 incident: Markdown rewritten while res.json still described the old
+    method) must be caught before export, not silently re-flipped on the next
+    reassembly.
+    """
+    res_json_path = os.path.join(work_dir, "res.json")
+    if not os.path.exists(res_json_path):
+        return {
+            "passed": True,
+            "skipped": True,
+            "desynced_sections": [],
+            "note": "res.json 不存在，跳过分节同步检查。",
+        }
+    try:
+        with open(res_json_path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {
+            "passed": False,
+            "skipped": False,
+            "desynced_sections": [],
+            "note": "res.json 无法解析，分节同步检查不成立。",
+        }
+    if not isinstance(data, dict):
+        return {
+            "passed": False,
+            "skipped": False,
+            "desynced_sections": [],
+            "note": "res.json 顶层不是对象，无法按分节核对。",
+        }
+    sections = {
+        key: value["response_content"]
+        for key, value in data.items()
+        if isinstance(value, dict) and isinstance(value.get("response_content"), str)
+    }
+    if not sections:
+        return {
+            "passed": True,
+            "skipped": True,
+            "desynced_sections": [],
+            "note": "res.json 没有可核对的分节文本，跳过。",
+        }
+    md_norm = _normalize_sync_text(markdown)
+    desynced: list[str] = []
+    for key in sorted(sections):
+        body = _normalize_sync_text(sections[key])
+        if len(body) < 50:
+            continue
+        if body in md_norm:
+            continue
+        sentences = [
+            item
+            for item in re.split(r"[。；！\n]", sections[key])
+            if len(_normalize_sync_text(item)) >= 25
+        ]
+        if sentences:
+            hits = sum(1 for item in sentences if _normalize_sync_text(item) in md_norm)
+            if hits / len(sentences) >= 0.9:
+                continue
+        desynced.append(key)
+    return {
+        "passed": not desynced,
+        "skipped": False,
+        "desynced_sections": desynced,
+        "note": (
+            "res.md 与 res.json 分节内容不一致（单侧被手改），正式重导会把旧内容带回正文；"
+            "必须通过统一保存入口同步重存后再生成导出。"
+            f" 失同步分节：{desynced}。"
+            if desynced
+            else "res.json 各分节均与 res.md 保持同步。"
+        ),
+    }
+
+
 def _check_export_profile(export_profile: str | None) -> dict:
     profile = str(export_profile or EXPECTED_EXPORT_PROFILE)
     expected = EXPECTED_EXPORT_PROFILE
@@ -4651,6 +4735,7 @@ def build_preflight_report(
         ),
         "extra_problem_labels": _with_severity(extra_problem_labels_check, "conditional"),
         "result_consistency": _with_severity(result_consistency_check, "fail"),
+        "res_json_sync": _with_severity(_check_res_json_sync(work_dir, markdown), "fail"),
         "freeze_integrity": _with_severity(freeze_integrity_check, "fail"),
         "algorithm_evidence": _with_severity(algorithm_evidence_check, "fail"),
         "infeasible_optimality": _with_severity(infeasible_optimality_check, "fail"),

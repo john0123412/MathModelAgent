@@ -11,6 +11,10 @@ FROM python:3.12-slim AS builder
 # texlive-lang-chinese 提供的开源等效字体（无法"补装"官方中文字体）。
 ARG INSTALL_MS_FONTS=false
 ARG UV_VERSION=0.11.14
+# 构建时注入代码版本，供 /config 的 deployment.git_commit 自证运行版本。
+# 稳定部署（docker-compose.stable.yml）取消源码挂载后，镜像内代码即运行代码。
+ARG GIT_COMMIT=unknown
+ARG BUILD_ID=unknown
 
 # 安装中文字体（确保 matplotlib 图表中文正常显示）
 # 以及 pandoc + LaTeX 工具链（md -> docx/pdf 转换、xelatex 编译 LaTeX sidecar/gmcmthesis 模板）
@@ -96,6 +100,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # 再复制项目代码
 COPY . .
+
+# 版本自证：common_router._get_deployment_info 优先读 MMA_GIT_COMMIT。
+ENV MMA_GIT_COMMIT=${GIT_COMMIT}
+ENV MMA_BUILD_ID=${BUILD_ID}
 
 # 运行时刷新可选挂载字体目录的 fontconfig 缓存。这样 Windows 用户可以把
 # C:\Windows\Fonts 只读挂进容器，让 Docker PDF 优先命中 Times New

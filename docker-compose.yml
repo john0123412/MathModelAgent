@@ -19,6 +19,9 @@ services:
     build:
       context: ./backend # Dockerfile 的上下文路径
       dockerfile: Dockerfile # Dockerfile 文件名
+      args:
+        GIT_COMMIT: ${MMA_GIT_COMMIT:-unknown} # 镜像构建时的代码版本；开发挂载下运行代码以盘上为准，source_mounted=true 会同时披露
+        BUILD_ID: ${MMA_BUILD_ID:-unknown}
     container_name: mathmodelagent_backend
     init: true
     restart: unless-stopped

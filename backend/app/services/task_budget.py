@@ -38,8 +38,20 @@ def _now_iso() -> str:
     return datetime.datetime.now().isoformat()
 
 
+def _quarantine_corrupt(p: Path) -> str | None:
+    """Preserve a corrupt/mismatched ledger as evidence instead of overwriting it."""
+    stamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    target = p.with_name(f"{p.name}.corrupt-{stamp}")
+    try:
+        os.replace(p, target)
+        return target.name
+    except OSError:
+        return None
+
+
 def _load_or_init(work_dir: str, task_id: str) -> dict[str, Any]:
     p = _budget_path(work_dir)
+    reset_note: str | None = None
     if p.is_file():
         try:
             with open(p, encoding="utf-8") as f:
@@ -50,8 +62,14 @@ def _load_or_init(work_dir: str, task_id: str) -> dict[str, Any]:
                 data.setdefault("usage", {"provider_calls": 0, "known_tokens": 0, "unknown_calls": 0, "runtime_seconds": 0})
                 data.setdefault("created_at", _now_iso())
                 return data
+            reset_note = "预算账本 task_id 与当前任务不匹配"
         except Exception as exc:  # noqa: BLE001
-            logger.warning(f"读取预算失败，将重建: {type(exc).__name__}")
+            reset_note = f"预算账本损坏（{type(exc).__name__}）"
+        archived = _quarantine_corrupt(p)
+        logger.error(
+            f"{reset_note}：原文件已隔离为 {archived or '（隔离失败，即将被覆盖）'}；"
+            "新账本从零计数并带 reset_from_corrupt 标记，已用预算不得被视为零。"
+        )
     # Init new
     data: dict[str, Any] = {
         "task_id": task_id,
@@ -62,6 +80,8 @@ def _load_or_init(work_dir: str, task_id: str) -> dict[str, Any]:
         "history": [],
         "unknown_usage_events": 0,
     }
+    if reset_note:
+        data["reset_from_corrupt"] = {"reason": reset_note, "at": _now_iso()}
     _save_atomic(p, data)
     return data
 
@@ -162,4 +182,5 @@ def get_budget_summary(work_dir: str, task_id: str) -> dict[str, Any]:
         "usage": data.get("usage", {}),
         "updated_at": data.get("updated_at"),
         "unknown_usage_events": data.get("unknown_usage_events", 0),
+        "reset_from_corrupt": data.get("reset_from_corrupt"),
     }

@@ -21,6 +21,7 @@ from app.tools.candidate_exporter import (
     collect_bounded_support_material_paths,
     support_material_category,
 )
+from app.tools.paper_revision import restamp_res_md
 from app.tools.semantic_layout_review import (
     normalize_markdown_semantics,
     review_markdown,
@@ -2975,7 +2976,10 @@ def _check_res_json_sync(work_dir: str, markdown: str) -> dict:
         ]
         if sentences:
             hits = sum(1 for item in sentences if _normalize_sync_text(item) in md_norm)
-            if hits / len(sentences) >= 0.9:
+            # 阈值 0.5：后处理链会合法改写措辞（claim 软化"完全一致→基本一致"、
+            # 行内 {引用} 转 [n] 等），逐句精确包含不成立；但整节被替换（v23 类
+            # 事故：ε-约束旧文 vs 标量化新文）的句级重叠趋近 0，仍会被拦。
+            if hits / len(sentences) >= 0.5:
                 continue
         desynced.append(key)
     return {
@@ -5328,6 +5332,8 @@ def prepare_paper_markdown(
         f.write(markdown)
     with open(md_path, "rb") as f:
         written_source_sha256 = hashlib.sha256(f.read()).hexdigest()
+    # 合法就地改写后同步台账哈希（revision 不变），避免 verify 把回写误判为手改漂移
+    restamp_res_md(work_dir)
 
     outline = build_paper_outline(markdown)
     figure_usage = build_figure_usage(work_dir, markdown)

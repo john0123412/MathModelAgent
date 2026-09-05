@@ -147,6 +147,25 @@ Invoke-WebRequest http://127.0.0.1:5173/api/docs -UseBasicParsing |
   Select-Object -ExpandProperty StatusCode
 ```
 
+### 稳定部署模式（代码入镜像，2026-09-05 批次4）
+
+日常开发用主 `docker-compose.yml`（源码挂载，改代码即生效，但运行版本无法自证）。发布/参赛
+值守用 `docker-compose.stable.yml`：后端代码打进镜像、取消 `./backend/app` 挂载，任务数据与
+字体仍持久化，`/config` 的 `deployment.git_commit` 可核对运行版本。
+
+```powershell
+cd D:\workspace\MathModelAgent
+# 发布前先保留上一稳定镜像（回退锚点）
+docker tag mathmodelagent-backend:latest mathmodelagent-backend:stable-prev
+$env:MMA_GIT_COMMIT = (git rev-parse HEAD)
+docker compose -f docker-compose.stable.yml build --build-arg GIT_COMMIT=$env:MMA_GIT_COMMIT --build-arg BUILD_ID=(Get-Date -Format yyyyMMddHHmmss)
+docker compose -f docker-compose.stable.yml --profile frontend up -d
+curl.exe http://127.0.0.1:8000/config   # deployment.git_commit 应等于 $env:MMA_GIT_COMMIT
+# 回退：
+docker tag mathmodelagent-backend:stable-prev mathmodelagent-backend:latest
+docker compose -f docker-compose.stable.yml up -d --force-recreate backend
+```
+
 ### Agent 调用 Docker 后端（无前端，路线图 2026-09-03）
 
 纯后端模式是外层执行 Agent 的正式入口，前端为可选（`--profile frontend`）：

@@ -594,3 +594,19 @@ LibreOffice / `soffice`。如必须走 DOCX 转 PDF，需要额外安装 LibreOf
      `quesN_constraint_check.csv` 的左端、比较符、右端和状态也必须一致。后端会重新计算这些表，拒绝把不满足条件的数值标成通过，且以表中未截断数值绑定受控执行证据。
      分压力/时段等场景的 `原指标键_场景` 明细会按 ModelPlan 比较方向汇总为最坏场景，不能用平均值掩盖某一失败工况。
    - `execution_validation.json` 中 `feasible=false` 仅保留失败审计现场，不能据此导出候选论文；必须修复计算或证据来源后重新通过验证。
+
+## 内容修订号与审批绑定（2026-09-05 稳定版本工程，PR #51）
+
+- `paper_revision.json`：每次受控保存（Writer save_result、paper/editorial/format 三类返修
+  候选、手工 `python -m app.tools.paper_revision --work-dir <dir> --origin manual_save`）
+  登记 res.json/res.md/frozen 三哈希与来源；手改任一侧后 `verify` 即报漂移。
+- preflight 新增 `res_json_sync` 硬门禁：res.md 与 res.json 分节内容脱节（单侧手改）直接
+  FAIL，禁止导出；干净机器链（含全部归一化重写）零误报。
+- `candidate_manifest.json` schema 1.3：新增 `paper_revision` 块（修订号/三哈希/一致性）；
+  final_acceptance 新增 `paper_revision` 检查——台账漂移或清单修订号与台账不一致为 error，
+  旧链缺台账为 warning。
+- 质量审批（execution_quality_review）不再按文件名猜来源：绑定 execution_validation.json
+  逐子题登记；0 来源=BLOCKED 不能批准；review_id 绑定冻结登记/notebook/题面契约/方案/规则
+  版本；审批提交时按盘上证据重算编号，旧编号批准新结果会被 409 拒绝。
+- 正式重导一律以当前修订号内容为准；历史任务（如 20260830 v23）的 res.json 若与 res.md
+  脱节，禁止作为恢复或重导出内容源，详见 docs/release/2026-09-historical-cases.md。

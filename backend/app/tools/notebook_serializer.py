@@ -59,6 +59,25 @@ class NotebookSerializer:
         self.nb["cells"].append(code_cell)
         self.write_to_notebook()
 
+    def _stamp_execution(self):
+        """真内核执行过的单元必须有 execution_count：手工拼装贴不出来。
+
+        PR #50 的伪执行门禁假设"执行过必有计数"，但本序列化器历史上从不
+        写计数，导致管道自身产物被系统性误判。凡序列化器附加过输出的单元
+        都是真实执行过的，这里补打递增计数。
+        """
+        cells = self.nb["cells"]
+        if not cells or cells[-1].get("cell_type") != "code":
+            return
+        if cells[-1].get("execution_count") is None:
+            used = [
+                c.get("execution_count")
+                for c in cells
+                if c.get("cell_type") == "code"
+                and isinstance(c.get("execution_count"), int)
+            ]
+            cells[-1]["execution_count"] = max(used, default=0) + 1
+
     def add_code_cell_output_to_notebook(self, output):
         """添加代码单元格输出
 
@@ -72,6 +91,13 @@ class NotebookSerializer:
                 self.segmentation_output_content[self.current_segmentation] = ""
             self.segmentation_output_content[self.current_segmentation] += html_content
 
+        self._stamp_execution()
+        # stdout 原文以 stream 形式保留（真内核行为），display_data 继续承载
+        # 渲染用 HTML；伪执行门禁的 print_without_stream 依赖 stream 存在。
+        stream_output = nbf.new_output(
+            output_type="stream", name="stdout", text=output
+        )
+        self.nb["cells"][-1]["outputs"].append(stream_output)
         cell_output = nbf.new_output(
             output_type="display_data", data={"text/html": html_content}
         )
@@ -79,6 +105,7 @@ class NotebookSerializer:
         self.write_to_notebook()
 
     def add_code_cell_error_to_notebook(self, error):
+        self._stamp_execution()
         nbf_error_output = nbf.new_output(
             output_type="error",
             ename="Error",
@@ -111,6 +138,7 @@ class NotebookSerializer:
         ]
 
     def add_image_to_notebook(self, image, mime_type):
+        self._stamp_execution()
         image_output = nbf.new_output(
             output_type="display_data", data={mime_type: image}
         )

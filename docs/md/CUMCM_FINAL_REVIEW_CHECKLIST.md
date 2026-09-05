@@ -333,3 +333,16 @@ uv run python -m app.tools.export_cli task-refresh `
 - [ ] `reproducibility_manifest.json` 已生成；其运行环境和入口仅记录本轮证据，`replay_status=not_independently_reexecuted` 时不得声称已独立复跑。
 - [ ] 非 `not_applicable` 的诊断 profile 有源码实际产出的对应收敛、残差、可行性、拟合或仿真复现实证；不能只在论文中宣称“已验证”。
 - [ ] 已人工复核 `similarity_ai_risk` 提示；它是本地草稿风险筛查，不是正式查重、AI 检测或抄袭结论。
+
+### 内容版本与审批绑定（2026-09-05 稳定版本工程新增）
+
+- [ ] `paper_revision.json` 存在且 `python -m app.tools.paper_revision --work-dir <dir> --verify`
+  通过；res.md 的任何人工修改都必须经统一保存入口同步重存（res.json 一并更新），禁止单侧手改。
+- [ ] `paper_preflight_report.json -> res_json_sync` 为 PASS；历史任务（res.json 与终版正文脱节，
+  如 20260830 v23）不得以 res.json 为内容源做恢复或重导出。
+- [ ] `execution_quality_review.json` 的 `sources` 非空且 `status` 不是 BLOCKED；审批的 review_id
+  与 checkpoint 记录一致。0 来源或源漂移的旧审批一律视为不可迁移，需重新显式批准。
+- [ ] `final_acceptance_report.json -> paper_revision` 无 error；`candidate_manifest.json` 的
+  `paper_revision.revision` 与台账一致。
+- [ ] 任务状态经 `python -m app.tools.task_state_diagnosis --work-dir <dir>` 诊断非 CONTRADICTION；
+  矛盾态必须用带操作人和理由的 `--reconcile` 显式修复，禁止手改 JSON 或补写审批。

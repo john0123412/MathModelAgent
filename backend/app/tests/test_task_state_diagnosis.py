@@ -125,6 +125,16 @@ class ReconcileTest(unittest.TestCase):
                     work_dir, action="converge_completed", operator="john", reason="x"
                 )
 
+    def test_converge_refused_with_pending_repair_request(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            # 08-23 形态：repair_requested 未执行——收敛等于吞掉返修，必须拒绝。
+            _seed(work_dir, external="completed", workflow_state="quality_repair",
+                  quality_status="repair_requested")
+            with self.assertRaisesRegex(RuntimeError, "返修"):
+                reconcile_task_state(
+                    work_dir, action="converge_completed", operator="john", reason="x"
+                )
+
     def test_downgrade_to_failed_persists_failed(self):
         with tempfile.TemporaryDirectory() as work_dir:
             _seed(work_dir, external="completed", workflow_state="quality_repair",

@@ -183,6 +183,11 @@ def reconcile_task_state(
             raise RuntimeError(
                 "产物集或技术验收不支撑 completed，不能收敛为完成；请改用 downgrade_to_failed。"
             )
+        if diagnosis["internal"].get("quality_review_status") in {"pending", "repair_requested"}:
+            raise RuntimeError(
+                "质量复核仍有未执行的待审/返修请求，收敛完成等于吞掉返修；"
+                "请先执行返修或显式批准，再考虑收敛。"
+            )
         checkpoint_path = root / "checkpoint.json"
         checkpoint = _read_json(checkpoint_path)
         if checkpoint is None:

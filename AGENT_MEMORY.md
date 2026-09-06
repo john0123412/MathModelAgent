@@ -7,8 +7,10 @@
 
 - [2026-07](docs/memory/2026-07.md) —— 华数杯前史与早期工程修复
 - [2026-08](docs/memory/2026-08.md) —— 更早 235 条 + 2026-08-29 压缩轮出的 08-26~08-29 全部详细条目
+- [2026-09](docs/memory/2026-09.md) —— v23 算电协同 09-02 落地与外评审九轮详文、稳定版本工程
 
 - 8 月交付/导出基线已轮转至 docs/memory/2026-08.md；0825/0828 族复跑须用 huashubei。
+- 一次性计划/诊断文档已收口至 docs/md/archive/（索引见其 README），不代表当前系统行为。
 
 ## 仓库归属与环境要点
 
@@ -30,58 +32,41 @@
 ## v23 算电协同·去伪造重建（task=20260830-234433-4b3226317d54a94062be7a3379cf1a10）
 
 - 09-02 落地：notebook 全真实执行、frozen/manifest 受控重绑、四目标真实达标（非支配 6、
-  CI 0.0457、区分度 0.7408、MC 均值 1,284,013,383）；09-02~09-05 经外评审九轮迭代至可冻结
-  终态（逐轮见下方条目与归档）。
+  CI 0.0457、区分度 0.7408、MC 均值 1,284,013,383）。
 - 复用脚本：`internal/audit_20260901/`（lp_core/q1~q4 model、rerun_cells/rerun_q4_comment、
   fix_appendix+fix_support_caption 必配对、reconcile_gates2、regen_pdf、rebind_manifest、
-  fix_rebind_fallout）。原 v23 节全文与逐轮详文见 docs/memory/2026-09.md。
+  fix_rebind_fallout）。
 
+### 评审九轮结论行（09-03~09-05，逐轮详文见 docs/memory/2026-09.md）
 
-- [09-03 LNS升级→不采纳] v2 LNS本机跑通（MILP 22s/次；threads致Not Set已修）但双重证伪：
-  v2口径−0.4%被27%口径差吞没、share口径负优化−0.07%。产物留v2目录不进主链。
-- [09-03 优化轮] Q1基线对照入正文；6.1.1真实OAT+表6弹性；表号1-8重排、空6.2删、6.3并7.2、
-  关键词标准词。
-- [09-03 评审二/三轮(90→91-92分)] 表3→非支配2.0、删旧审计文、压力模板×7、虚MILP×3、凸性收紧、
-  Wilson误称×2、前沿用词与最优性措辞统一；18组网格真跑(最优100/5/0.1)，终测→54.7213/R²0.5084，
-  协议cell入附录，frozen重绑；17条lead句并入图注。
-- [09-03 评审四轮(定档92)] 图号语义修复（双编号/错号/旧章节号×6）；Q3目标去碳排放、Q1调度LP过度
-  声明×3改贪心，调度器cell经验证补入附录闭合证据链。终态79页全绿，可冻结。
-- [09-03/04 符号渲染专题] 表头BOM列错位、`$ \sum`开界空格吞中文、pandoc listings literate对λ/≤
-  不生效→代码符号ASCII化(notebook与audit同步)、正文裸√∈tCO₂清理。终验缺字形0、12/12。
-- [2026-09-04] LP fdd491 completed/TECHNICAL_PASS 但六维评审 NEEDS_REVISION（数值错/自检清单泄露/LaTeX 断行，详归档 09-03 节），待受控返修；PR #40 已合并 main（68cb89d），CI 905 项转绿。
-- [2026-09-04] 门禁加固 PR #41：ALGORITHM_CLAIMS 扩 ε-约束/LNS/MILP/NSGA/退火（ε-约束需约束式证据，加权标量化不算）、结果/验收 CSV 字面量写死检测、preflight `$ ` 开界 lint、PDF 缺字形扫描、缓存键 SHA-256 规则；全量 921 项 OK。#43 补口加 U+FFFF/U+FFFE。#45 修 $ 开界闭界假阳性（行内配对状态机）。#48 三查：章节式图引用不顶替扁平图号、表号连续性、mtime 链新鲜度哨兵（源晚于导出链即 FAIL）。#50 P0-2 伪执行检测：print-无-stream、output-无-count（校准教训：真实局部重跑的 notebook 计数本就跳号重复，连续性/唯一性不可用作信号）。09-05 全部署（容器 a1fb564），当晚六次链脱钩全部由哨兵归因。
-- [09-04 Q1调度器v3] 评审实锤v1未执行容量/时窗约束→EDF+分数重叠占用+纯电费+独立复算，538/538、三项违反全0。事故：替换边界串多处出现误删121行、恢复带回旧口径、二次scrub 7处修净——替换前校验边界唯一性、恢复后全量旧短语扫描。互斥MILP独立核验：总成本+0.79%、吞吐不变、2.37亿→约2.27亿不翻方向(5.3.2+CSV+notebook第7格)。终态85页正文30全绿(含PR41-45新门禁)，达冻结条件；16:52链曾与终版md脱钩且旧PDF含4个NUL缺字形，由新missing_glyphs门逮住、regen路线重发收口。详归档。
+- 轨迹 89→91-92→92→92.5 定档"可以冻结、不再深挖审计"；LNS v2 双重证伪不采纳（产物留 v2
+  目录不进主链）。终态：86页正文30、九步全绿、TECHNICAL_PASS 12/12、缺字形0、五件哈希
+  MATCH、bc_dev=0（lam500 对齐后同迁移同 LP 严格一致）。
+- 关键修正：Q1 调度器 v3（EDF+分数重叠占用+纯电费，538/538、违反全0）；λ=500 改"中等碳价
+  参考方案（控制变量）"四层同步；γ~U(0.8,1.2) 补入摘要与 6.1.2；5.4.1 删 M 迁移变量改三维
+  非支配+固定λ500；"Pareto 前沿"→"非支配情景结果集"；MC CI 改"均值估计不确定性"口径；
+  符号全 ASCII 化（表头BOM、`$ `开界、listings λ/≤、附录注释均曾翻车）。
 
-- [09-04 评审五轮(91→92-93)] 四项闭环:①λ=500改"中等碳价参考方案(控制变量)"并明示非Pareto推荐
-  (正文/q2/q4注释/notebook四层);②γ~U(0.8,1.2)补入摘要与6.1.2(MC实为三参数);③montecarlo_ci_width
-  标签改"成本均值95%正态近似CI相对半宽"(CSV+frozen+附录)、Wilson图xerr上侧误差修复重出图;
-  ④Q3"原始非凸→LP"残留句清除。q4缓存重跑339s,仅2文件变化(标签+图),其余字节一致。新教训:
-  附录注释也禁λ等符号(又踩一次,已ASCII化)。终态85页正文30、九步全绿、缺字形0、五件哈希MATCH。
-- [09-04 评审六轮] 5.4.1重写为真实口径(删M迁移决策变量与六目标ε-约束,电力层变量+三维非支配+
-  固定λ500)、Wilson澄清为固定方案任务合规率Bernoulli CI(非100次MC)、Q2"LP松弛配合贪心"句清除、
-  表3/CSV/frozen"求解流程验收状态"四层同步、符号表M注记。终态86页正文30、九步全绿、7项语义过。
-- [09-04 评审七轮(定档92,可冻结)] 三处终清:①MC的CI统计学解释修正(均值估计不确定性≠单情景覆盖
-  区间,"绝大多数场景落在CI内"删除,极差比0.8025另述);②附录过时注释"Q2的lambda是迁移打分权重非
-  碳价"更新为层级差异表述;③Q4"Pareto前沿"→"非支配情景结果集"(12外生情景点非同可行域权衡)。
-  终态86页正文30、九步全绿、缺字形0。假阴性提醒:跨页句子的子串检查会被页码截断,语义验证需逐页
-  或归一化后比对。
-- [09-04 评审八轮(定档92.5,可冻结)] 一致性检查对象lam0→lam500(Q4沿用λ500方案),bc_dev
-  6.05e-5→0.0证实同迁移同LP严格一致;图12(b)均值CI误作样本覆盖带表述修正;新注释λ漏网被
-  missing_glyphs门禁拦下并补扫ASCII化。终态86页正文30全绿。
-- [09-05 评审九轮收口(定档92.5冻结,执行终清)] 两处:①附录Q4旧注释"纯成本口径参照lambda=0"×2
-  改lambda=500参考方案(q4_model+notebook同格631s真实重跑,ques*.csv哈希全不变,bc_dev=0复证);
-  ②5.2.2通用四权重公式删除(保留真实minC+λE)。新坑:rebind后executed_code_sources被walk回填
-  须post-patch收窄回notebook单源(否则fix_appendix把旧LNS脚本嵌进附录,104k→393k);ques2
-  pareto_point_count target对齐代码>=2规则并显式重算feasible;reconcile_gates2须以backend为
-  CWD(WORK_DIR_ROOT相对);notebook变更后须重打包support_materials.zip。终态86页正文30、
-  九步全绿、TECHNICAL_PASS 12/12、缺字形0。评审终定档92.5-93(中心约92.8)并宣布"可以冻结、
-  不再深挖审计";5.2.3首句"求解器以状态码1.0正常终止"→"求解流程验收状态码为1.0"(仅此一句,
-  重导+九步重收敛12/12),模型/CSV/参数/图/frozen自此冻结不再触碰。
-- [09-05 稳定版本工程 PR #51(main=4ab9d1b,tag v2026.09.05)] 五批次:①质量审批绑定
-  execution_validation 登记(废文件名猜测;PASS/NEEDS_REVIEW/BLOCKED 三态,0源阻断;review_id
-  绑冻结/notebook/契约/方案/规则版本;端点提交重核,BLOCKED 拒批);②paper_revision 台账+统一
-  保存入口+preflight res_json_sync 硬门(v23 12/12真阳性、干净链零误报)+manifest 1.3 绑修订;
-  ③task_state_diagnosis 三值诊断+reconcile 审计修复(操作人+理由,不伪造审批)+completed 需
-  五件产物在盘;④docker-compose.stable.yml 代码入镜像+MMA_GIT_COMMIT 自证+预算损坏隔离
-  .corrupt 不静默清零;⑤三历史案例定性(08-17 漂移不可迁移/08-23 矛盾+deterministic_recovery
-  包装/08-30 res.json 禁作恢复源,详 docs/release/2026-09-historical-cases.md)。980 全量 OK。
+## 运维新坑备忘（重绑/复跑必查）
+
+- rebind 后 executed_code_sources 被 walk 回填，须 post-patch 收窄回 notebook 单源（否则
+  fix_appendix 把旧 LNS 脚本嵌进附录，104k→393k）；ques2 pareto_point_count target 对齐
+  代码 >=2 规则并显式重算 feasible。
+- reconcile_gates2 须以 backend 为 CWD（WORK_DIR_ROOT 相对）；notebook 变更后必须重打包
+  support_materials.zip；跨页句子子串检查会被页码截断，语义验证需逐页或归一化后比对。
+- 替换 notebook cell 前校验边界唯一性、恢复后全量旧短语扫描（曾误删121行/带回旧口径/
+  二次 scrub 7处修净）。
+
+## 门禁加固（PR #41-#50）与稳定版本工程（PR #51）
+
+- PR #41-#50：ALGORITHM_CLAIMS 扩 ε-约束/LNS/MILP/NSGA/退火、结果 CSV 字面量写死检测、
+  `$ ` 开界 lint+行内配对状态机、PDF 缺字形扫描、缓存键 SHA-256、章节式图引用不顶替扁平
+  图号、表号连续性、mtime 链新鲜度哨兵（源晚于导出即 FAIL）、伪执行检测（print-无-stream/
+  output-无-count）。09-05 全部署（容器 a1fb564），当晚六次链脱钩全部由哨兵归因。
+- PR #51（main=4ab9d1b，tag v2026.09.05）五批次：质量审批绑定 execution_validation
+  （PASS/NEEDS_REVIEW/BLOCKED 三态，0源阻断）、paper_revision 台账+preflight res_json_sync
+  硬门+manifest 1.3、task_state_diagnosis 三值诊断+reconcile 审计修复、docker-compose.stable.yml
+  代码入镜像+MMA_GIT_COMMIT 自证、三历史案例定性（docs/release/2026-09-historical-cases.md）。
+  980 全量 OK。
+- [09-05/06 后续修复] PR #56 禁思考参数不被支持时剥离 extra_body 重试（GLM-5.3/tokenrouter
+  实测 400）；#57 modeler 校验失败日志附原文片段；#58 资产追溯兼容 quesN 单键+重复章节键豁免。

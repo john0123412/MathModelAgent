@@ -178,8 +178,12 @@ FUTURE_ALGORITHM_CONTEXT_RE = re.compile(
 NON_IMPLEMENTED_ALGORITHM_CONTEXT_RE = re.compile(
     r"(?:若|如果|假如|假设|如需|若要|当|可(?:考虑|采用|使用)).{0,64}"
     rf"(?:{METHOD_CLAIM_ALTERNATION})"
+    # 对比语境："相较于 GA/PSO……单纯形法更优"是选型论证，不是使用声明
+    rf"|(?:相较于|相比|较之|不同于)[^。\n]{{0,80}}(?:{METHOD_CLAIM_ALTERNATION})"
     rf"|(?:{METHOD_CLAIM_ALTERNATION})"
-    r"[^。\n]{0,80}(?:未(?:采用|使用|实现|涉及)|不(?:及|适用|涉及|需)|作为[^。\n]{0,24}(?:对比|替代)|本题[^。\n]{0,24}(?:仅|无需|不)|无需|并不|并非)",
+    r"[^。\n]{0,80}(?:未(?:采用|使用|实现|涉及)|不(?:及|适用|涉及|需)|作为[^。\n]{0,24}(?:对比|替代)|本题[^。\n]{0,24}(?:仅|无需|不)|无需|并不|并非)"
+    # 待办语境："需在 MILP 框架下重新求解/待复算"是改进建议，不是当前实现
+    rf"|(?:需|待)(?:在|重新|进一步|补充|复算)[^。\n]{{0,60}}(?:{METHOD_CLAIM_ALTERNATION})",
     re.IGNORECASE,
 )
 RANDOM_SIMULATION_RE = re.compile(

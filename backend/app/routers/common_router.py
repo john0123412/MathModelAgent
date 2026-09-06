@@ -137,8 +137,10 @@ def _get_deployment_info() -> dict:
     try:
         # backend/app 挂载时，宿主机 .git 往往不在容器内；通过检查 /app/app 是否为挂载点近似判断
         info["source_mounted"] = os.path.ismount("/app/app") or os.path.exists("/app/app/.git") or os.path.exists("/app/.git")
-        if not info["source_mounted"]:
-            # 宿主机开发挂载时，WORK_DIR 通常也是挂载
+        if not info["source_mounted"] and not os.path.exists("/app/.mma-image-baked"):
+            # 宿主机开发挂载时，WORK_DIR 通常也是挂载。稳定部署（代码在镜像里）
+            # 会写 /app/.mma-image-baked 标记：此时 work_dir 挂载不代表源码挂载，
+            # 只有 /app/app 真被挂载（个别调试场景）才报 true。
             info["source_mounted"] = os.path.ismount("/app/project/work_dir")
     except Exception:
         pass

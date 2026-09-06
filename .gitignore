@@ -46,6 +46,7 @@ scripts/*.scratch.*
 tmp_*.py
 scratch/
 tmp/
+.zcode/
 nul
 
 # figure-templates 本地运行缓存与产物（预览已沉淀到 assets/previews）

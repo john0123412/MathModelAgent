@@ -11,6 +11,8 @@
 
 - 8 月交付/导出基线已轮转至 docs/memory/2026-08.md；0825/0828 族复跑须用 huashubei。
 - 一次性计划/诊断文档已收口至 docs/md/archive/（索引见其 README），不代表当前系统行为。
+- 任务接管/引导/execution-review 接口详文独立为 docs/md/任务接管与引导接口.md
+  （STARTUP.md 留短桩）；导出门禁权威口径在 docs/md/PDF模板导出说明.md。
 
 ## 仓库归属与环境要点
 

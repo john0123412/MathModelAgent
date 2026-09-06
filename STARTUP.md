@@ -459,6 +459,23 @@ metric/constraint 的精确数值和 SHA-256 来源统一绑定到该验收表�
 审批时后端会校验 `modeling_decision.json`、`modeler_plan.json` 与 `checkpoint.json` 中的规范化计划
 SHA-256 是否一致。续传若因旧计划与当前约束冲突而重建方案，也会清除旧审批并重新停在
 `waiting_review`；必须审阅并批准新计划，不能沿用旧决策直接进入 Coder。
+该门禁默认关闭（`HUMAN_MODEL_GATE_ENABLED=false`），不影响全自动流程；开启后 Modeler
+完成时会先写出 `modeler_plan.json/md`、`modeling_decision.json/md` 和 `checkpoint.json`。
+命令行确认与退回：
+
+```powershell
+curl.exe -X POST http://127.0.0.1:5173/api/modeling/<task_id>/approve-modeling `
+  -H "Content-Type: application/json" `
+  -d "{\"comment\":\"建模方案确认通过\"}"
+
+# 退回修订必须给出具体、可执行的审查意见，且每个任务最多一次
+curl.exe -X POST http://127.0.0.1:5173/api/modeling/<task_id>/revise-modeling `
+  -H "Content-Type: application/json" `
+  -d '{\"comment\":\"删除无来源的经验阈值；补齐守恒方程、单位与真实约束证据。\"}'
+```
+
+若修订调用失败，`task_status.json` 是任务终态权威来源，`modeling_decision.json` 会记为
+`revision_failed` 并保留审查历史；不得把旧方案批准为通过或绕过门禁。
 
 ### 实时消息干预
 
@@ -635,37 +652,34 @@ docker compose exec backend uv run python -m app.tools.export_cli task-refresh `
 队员逐页核对最新官方包、数学内容、匿名/诚信声明和提交系统要求。
 
 **已知限制**：
+
 - `cumcm2026` 当前复用 2025 年 `gmcmthesis` 模板资源目录和 `format2025_reference.docx`
   的 Word 样式作为修订稿口径实现；2026 正式模板文件发布后，需要重新复核并替换
   LaTeX 模板与 DOCX reference-doc。
-- LaTeX sidecar 编译产物（`latex_project/`）属于候选导出，提交前仍需人工核对（`candidate_manifest.json` 中会标注 `known_risks`）。主交付链路是 `res.md`、`res.docx`、`res.pdf` 和 `res.json`。
-- PDF 视觉检查是低成本后验检查，会覆盖 A4、非空、文本可提取、20MB 文件大小、
-  摘要首页、无目录、正文 20 页以内（当前用户指定的内部基线）、物理边缘越界和 CUMCM 2.5cm 内容边距风险；
-  还会阻断 `承诺书`、`编号专用页`、`参赛队号` 等身份/封面字段；不能替代人工排版
-  验收。正式提交前仍需人工翻看摘要页、公式密集页、宽表、附录源码、参考文献和最后几页。
-- 主 PDF 导出显式关闭 pandoc raw TeX，避免源码中的 LaTeX 模板字符串泄漏成正文命令。正文应优先使用 Markdown 表格和标准 `$...$`、`\(...\)` 数学公式，不要依赖 `\begin{table}`、`\begin{align}` 等 raw LaTeX 环境。
-- 论文附录会自动重建：附录 A 列出支撑材料，附录 B 保留任务目录发现的完整可运行脚本及
-  notebook 代码单元（不含 notebook 运行输出）。每份源码会记录原始 SHA-256；为避免 TeX
-  `lstlisting` 分隔符冲突，极少数危险字符串和装饰性超长分隔线会采用可逆安全编码，原始哈希
-  仍用于核验。`final_acceptance_report.json -> complete_source_appendix` 会同时检查源码覆盖、
-  哈希和正文代码内容，附录 A 文件清单不能替代该检查。源码中的正常 `print(...)` 是可运行代码，
-  不会被当作控制台噪声删除或阻断。
-- `paper_preflight_report.json` 是规则/正则驱动的格式与证据链门禁，不证明模型、求解和论证一定正确；`PASS` 后仍需人工复核数学内容。
-- **数学执行与结果冻结门禁**：新任务会在工作目录写入 `problem_contract.json`，把可识别的题面固定参数和必答要求传给 Modeler/Coder。所有 solution 代码阶段先单独完成并写入 checkpoint；每个正式 `quesN` 必须通过受控 `record_execution_evidence` 写入真实执行、可行性、可计算约束、任务内结果源 SHA-256、指标与图表数据来源，模型不得手写 manifest、哈希或顶层结构。每问都必须有任务目录内的结构化数值源（通常为 `quesN_results.csv`）；manifest 的 `source.path` 必须是精确任务相对路径，数值必须有限，PNG 等图片不能单独作为数值证据。优化题还必须冻结目标值和每个实际最优决策变量（包括灵敏度情景的新决策向量），不能只记录利润差或残差。工作流仅在 `execution_validation_report.json = PASS` 后生成 `frozen_results.json`，此后才启动 Writer；摘要、正文、图题和结论中的计算数值只能使用冻结结果。缺少 manifest、notebook 有未解决执行错误、约束不满足、优化变量缺失或来源哈希变化都会阻止论文写作与任务完成；一次失败只定向回交失败题，保留已通过题的检查点。历史任务目录没有这些文件时，必须按当前版本重跑后才能作为数学验收样本。
-- **主 Agent（Codex / Gemini Antigravity / 对话 Agent）/ 人工执行质量复核门禁**：冻结后会先生成 `execution_quality_review.json/md`。结果表只要明确标记“不达标/失败”或出现 NaN/Inf，任务就停在 `waiting_quality_review`，Writer 不会启动；启用 `require_model_review=true` 时，即使机器筛查为 `PASS` 也会暂停，因为机器筛查不证明假设、量纲、守恒、推导和领域结论正确。审查者先读取题面、ModelPlan、代码、结果 CSV 和复核报告，再调用 `POST /modeling/<task_id>/execution-review`。请求 `{"action":"repair","review_id":"报告中的编号","failed_subtasks":["ques2"],"comment":"具体可执行修正意见"}` 会只让指定子题回到 Coder，并使依赖旧冻结事实的 Writer 文本失效；请求 `{"action":"approve","review_id":"报告中的编号","comment":"逐题复核依据和风险接受理由"}` 才会进入 Writer。审批只绑定当前结果文件哈希，结果变化后必须重审；返修最多一次，普通 `/resume` 不能绕过该状态。直接手改 CSV、manifest、冻结结果或论文数值不属于可信接管流程。
+- LaTeX sidecar 编译产物（`latex_project/`）属于候选导出，提交前仍需人工核对
+  （`candidate_manifest.json` 中会标注 `known_risks`）。主交付链路是 `res.md`、
+  `res.docx`、`res.pdf` 和 `res.json`。
+- 主 PDF 导出显式关闭 pandoc raw TeX，避免源码中的 LaTeX 模板字符串泄漏成正文命令。
+  正文应优先使用 Markdown 表格和标准 `$...$`、`\(...\)` 数学公式，不要依赖
+  `\begin{table}`、`\begin{align}` 等 raw LaTeX 环境。
+- 对无外部数据集的确定性参数题，后处理会清理正文/支撑材料中的 Monte Carlo、蒙特卡洛、
+  随机模拟等探索性随机模拟内容，将样本数据 EDA 用语规范为参数核验，并删除可能触发
+  Pandoc definition-list 误解析的孤立 `: ... DOI ...` 参考行。
 
-- **Writer 预检回修与导出停止条件**：冻结通过并不保证 Writer 没有误写数值。若 `paper_preflight_report.json = FAIL` 的硬错误仅能明确归属到某个 `quesN` 正文或摘要中的 `result_consistency` 等事实冲突，系统会把冲突句和冻结事实只交回该章节 Writer 一次，然后重新预检；已通过章节不会重写。无法可靠定位的来源、附录、版式等失败不会盲目调用模型。一次回修后仍为 `FAIL` 时任务会停止在预检阶段，不生成候选 PDF；请先看报告的 `checks`/`conflicts` 和 checkpoint 中的 `last_paper_preflight_failure`，修正后再续传。`CONDITIONAL_PASS` 不触发自动改写，但仍必须按提交清单人工处理。
+**执行与论文门禁**（数学执行与结果冻结、执行质量复核、Writer 预检回修、受控候选修复、
+确定性版式重排、正式编辑质量门禁）的完整口径见 `docs/md/PDF模板导出说明.md`
+（「受控修复与执行质量复核入口」等节）；审批与接管接口见
+`docs/md/任务接管与引导接口.md`。要点：
 
-- **冻结后受控论文候选修复（仅技术复核/人工接管）**：若冻结结果、当前 Writer 各章节和哈希完整，但 `paper_preflight_report.json = FAIL` 且自动 Writer 回修已停止，不能直接手改 `res.md`。审查者可在任务目录 `internal/` 写入完整章节替换 JSON（`sections` 必须覆盖当前所有 Writer 阶段，另附 `comment`），再在 **backend 容器内**运行 `docker compose exec backend uv run python -m app.tools.paper_repair_candidate_cli <task_id> internal/<candidate>.json`，最后调用普通 `POST /modeling/<task_id>/resume` 触发正式预检与导出。该入口仅接受冻结状态、一次未用的论文修复预算和当前预检 `FAIL`；它先在隔离副本预检，且只能同步更新论文 Markdown/JSON 与对应 Writer hand-off，不调用 provider，也不能修改代码、结果 CSV/XLSX、执行证据或冻结结果。候选应用成功不等于竞赛人工验收，仍须检查重建后的 PDF/DOCX、提交规则和建模口径。
+- 新任务会写入 `problem_contract.json` 固定题面参数；每个正式 `quesN` 必须通过受控
+  `record_execution_evidence` 登记真实执行与来源哈希；`execution_validation_report.json
+  = PASS` 后才生成 `frozen_results.json` 并启动 Writer，论文数值只能使用冻结结果。
+- 结果不达标或 `require_model_review=true` 时，任务停在 `waiting_quality_review`，
+  审批通过才进入 Writer。
+- `paper_preflight_report.json = FAIL` 时系统最多做一次定向 Writer 回修；仍失败则停止
+  在预检阶段，不生成候选 PDF，此时不要用 `export_cli` 强行补导 PDF 冒充可验收产物，
+  先按报告修复证据缺口。
 
-- **正式 CUMCM 编辑质量门禁（内部口径，不是官方页数规定）**：`cumcm2025` 与 `cumcm2026` 的正式导出会自动启用 `cumcm_formal`。预检要求正文（不含摘要、参考文献和附录）至少 5000 个内容字符，并要求每个正式 `quesN` 至少有一幅真正的结果图和一张结果表。所有这些图表必须在任务目录的 `paper_assets_manifest.json` 中绑定 `quesN`、任务内数值 `source_paths` 及当前 SHA-256；来源变更后必须重绘并刷新清单。PDF 视觉检查还以当前用户指定的内部质量阈值检查摘要不少于 450 字符、摘要首页文字覆盖率和正文 10--20 页。报告会明确 `official_rule=false`，不得将上述阈值表述为竞赛官方要求；它们用于阻止“短稿、空白摘要页、重复示意图或无来源表格”被误标为正式范文。
-
-- **已完成论文的受控编辑质量返修**：若任务已在 `paper_preflight_passed` 或 `completed`，但重新执行上述内部编辑质量预检后为 `FAIL`，可在 **backend 容器内**运行 `docker compose exec backend uv run python -m app.tools.paper_repair_candidate_cli <task_id> internal/<candidate>.json --editorial-quality`。它使用独立的一次 `editorial_repair_attempts` 预算，要求冻结结果与完整 Writer hand-off 均仍有效，并先在隔离副本通过同一套严格预检；成功后只更新论文 Markdown/JSON、Writer hand-off 与候选审计，再由普通 `POST /modeling/<task_id>/resume` 做纯导出。该路径不调用 provider，不能更改代码、数值结果、执行证据或冻结结果。
-
-- **已完成论文的确定性版式重排**：若人工 PDF 复核发现可由后处理/渲染器修正的纯版式问题（例如 Markdown 三级标题被排成普通正文），不得直接手改已完成任务的 `res.md`。在冻结结果、完整 Writer hand-off、当前预检 PASS 和主产物哈希均完整时，可在 **backend 容器内**运行 `docker compose exec backend uv run python -m app.tools.paper_repair_candidate_cli <task_id> --presentation-reflow`，再调用普通 `POST /modeling/<task_id>/resume`。它只有一次 `presentation_reflow_attempts` 预算，只重建 Markdown、DOCX、PDF、LaTeX 和审计，不调用 provider、不替换 Writer 正文，也不能改动代码、数值、执行证据或冻结结果。PDF 视觉检查会拒绝正文中的字面 Markdown 标题；提交审计也会检查 DOCX 正文，附录 B 源程序代码中的 `#` 字面量不计入此项。
-
-**门禁失败时不要先补导 PDF**：如果任务状态为 `failed` 且消息为“代码执行/数值可行性门禁未通过”，先打开任务目录的 `execution_validation_report.json`，逐问修复 `errors`、`constraints` 和 `source.path` 指出的证据缺口。此时 Writer 尚未运行，`res.pdf` 缺失是预期保护行为，使用 `export_cli` 强行导出也不能让任务变为可验收。相同任务在同一模型/provider 已连续两次失败时，按恢复规程停止自动重试；由指定决策人切换到已验证的备用 provider 配置后最多续传一次，或先人工确定可复核的低开销算法，再继续。
-- 对无外部数据集的确定性参数题，后处理会清理正文/支撑材料中的 Monte Carlo、蒙特卡洛、随机模拟等探索性随机模拟内容，将样本数据 EDA 用语规范为参数核验，并删除可能触发 Pandoc definition-list 误解析的孤立 `: ... DOI ...` 参考行。
 - **字体**：PDF/LaTeX sidecar 优先使用官方格式规定的 Times New Roman/SimSun 等正式字体；精简版 Docker 镜像默认不含这些 Windows/Office 专有字体，会在编译期自动检测（`fc-match` / fontspec `\IfFontExistsTF`）并回退到免费等效字体，不影响能否编译成功，但正式提交前建议人工核对排版观感是否符合要求。两类字体的 fallback 途径不同：
   - **英文/Latin 字体**（Times New Roman → Liberation Serif、Courier New → Liberation Mono、Arial → Liberation Sans）：可通过构建时开启 `INSTALL_MS_FONTS=true` 装真正的 Microsoft Core Fonts（`ttf-mscorefonts-installer`），从而不必 fallback：
     ```bash
@@ -696,44 +710,6 @@ docker compose exec backend fc-match "Times New Roman"
 `Times New Roman`，后续 Docker PDF 会优先使用这些正式字体；未设置该变量时，
 默认挂载 `backend/fonts`，仍按可用字体自动 fallback。
 
-### 人工建模确认门禁
-
-默认关闭，不影响全自动流程：
-
-```env
-HUMAN_MODEL_GATE_ENABLED=false
-```
-
-开启后，建模手完成后会先写出：
-
-- `modeler_plan.json`
-- `modeler_plan.md`
-- `modeling_decision.json`
-- `modeling_decision.md`
-- `checkpoint.json`
-
-任务状态会变为 `waiting_review`，不会进入 Coder。人工确认建模方案后调用：
-
-```powershell
-curl.exe -X POST http://127.0.0.1:5173/api/modeling/<task_id>/approve-modeling `
-  -H "Content-Type: application/json" `
-  -d "{\"comment\":\"建模方案确认通过\"}"
-```
-
-确认接口会把 `modeling_decision.json` 标记为 `approved`，再复用现有 checkpoint/resume 链路从 Coder 阶段继续执行，不会重跑 Coordinator 或 Modeler。
-
-退回修订必须给出具体、可执行的审查意见，且每个任务最多一次：
-
-```powershell
-curl.exe -X POST http://127.0.0.1:5173/api/modeling/<task_id>/revise-modeling `
-  -H "Content-Type: application/json" `
-  -d '{"comment":"删除无来源的经验阈值；补齐守恒方程、单位与真实约束证据。"}'
-```
-
-若修订调用失败，`task_status.json` 是任务终态权威来源，`modeling_decision.json` 会记为 `revision_failed` 并保留审查历史；不得把旧方案批准为通过或绕过门禁。
-
-LLM 每次远程调用前都会重新进行 Base URL 的公网 DNS/SSRF 校验。若仅出现短暂“主机无法解析”，它会进入该次调用的有界重试并在每次重试重新校验；缺失密钥、非 HTTPS/私网地址等配置错误仍会立即失败。连续失败时先检查 provider 域名在 Docker 容器内的解析与 HTTPS 连通性，不要通过关闭公网地址校验来规避问题。
-
 ### LLM 请求超时
 
 OpenAI-compatible、Responses 和 Anthropic provider 会使用
@@ -741,6 +717,11 @@ OpenAI-compatible、Responses 和 Anthropic provider 会使用
 在建模手/写作手阶段响应时间可能超过 SDK 默认值；项目同时以 `asyncio.wait_for` 强制该上限，
 并关闭 SDK 内部重试，避免隐式重试把单次上限放大。LLM 层默认最多重试 3 次；如连续出现
 `Request timed out`，可在 `backend/.env.dev` 中临时调大该值后重启后端。
+
+LLM 每次远程调用前都会重新进行 Base URL 的公网 DNS/SSRF 校验。若仅出现短暂"主机无法
+解析"，它会进入该次调用的有界重试并在每次重试重新校验；缺失密钥、非 HTTPS/私网地址等
+配置错误仍会立即失败。连续失败时先检查 provider 域名在 Docker 容器内的解析与 HTTPS
+连通性，不要通过关闭公网地址校验来规避问题。
 
 ### 结构化 LaTeX Sidecar
 
@@ -997,13 +978,7 @@ if ($frontendResponse.StatusCode -ne 200 -or $docsResponse.StatusCode -ne 200 -o
 
 适合 Docker 重建后做端到端验收：
 
-```text
-某工厂生产 A、B 两种产品。
-A 需要 2 小时机器时间、1 小时人工时间，利润 40 元；
-B 需要 1 小时机器时间、2 小时人工时间，利润 30 元；
-机器时间最多 100 小时，人工时间最多 80 小时。
-求最优生产方案，并分析机器时间增加 10 小时时利润变化。
-```
+题目使用 `AGENTS.md`「Docker 真实案例验收」一节中的轻量线性规划案例（工厂生产 A、B 两种产品，含机器时间增加 10 小时的灵敏度问题）。
 
 验收标准：
 
@@ -1077,73 +1052,14 @@ curl.exe -X POST http://127.0.0.1:5173/api/modeling/<task_id>/resume `
    - 后端日志显示收到用户输入
    - Agent 行为是否有变化
 
-### 主 Agent（Codex / Gemini Antigravity / 对话 Agent）/ 外部引导手：角色定向指导接口
+### 主 Agent / 外部引导手：角色定向指导与接管接口
 
-运行中的任务可接收**建议性**引导。该接口适合让主 Agent（Codex / Gemini Antigravity / 当前对话 Agent）在查看题目、`modeler_plan.json`、
-执行报告后，分阶段提醒 Docker 内的建模手或编程手核查具体问题；它不是越过门禁的
-系统提示词覆盖接口。注入内容仍会被标记为不可信，题面契约、ModelPlan schema、受控执行
-证据和最终验收继续生效。
-
-建议使用后端端口（Docker 默认 `8000`），并明确指定接收角色：
-
-```powershell
-curl.exe -X POST http://127.0.0.1:8000/modeling/<task_id>/guidance `
-  -H "Content-Type: application/json" `
-  -d '{"target":"coder","purpose":"execution","source":"agent","content":"先逐项验证全部硬约束；只有可行候选才可比较目标值。用真实时序数组计算并落盘守恒残差。"}'
-```
-
-若主 Agent 已在任务创建前完成题面/附件复核，可在创建任务的 multipart 请求中预注入，
-避免首轮建模过快而错过建议：
-
-```powershell
-curl.exe -X POST http://127.0.0.1:8000/modeling `
-  -F "ques_all=<题目.md" `
-  -F "comp_template=CHINA" `
-  -F "format_output=Markdown" `
-  -F "guidance_target=modeler" `
-  -F "guidance_purpose=modeling" `
-  -F "guidance_content=先明确全部硬约束和量纲关系；题面中的约、左右不能改写为任意数值阈值。"
-```
-
-- `target`：`coordinator`、`modeler`、`coder`、`writer` 或 `all`；`all` 会在每个角色下一次模型调用前各投递一次，通常应优先使用精确角色。
-- `purpose`：`modeling`、`execution`、`review`、`recovery`，用于审计和界面提示，不改变权限。
-- `source`：可标为 `agent`、`codex`、`antigravity` 或 `operator`，仅是审计元数据，**不是身份认证**。
-- 每条内容最多 4000 字符，每任务最多排队 20 条；任务完成或取消后不能再注入。若服务对外暴露，应设置 `API_AUTH_TOKEN`，否则该接口与其他本机 API 一样不具备访问令牌保护。
-
-推荐节奏是：主 Agent 先审题→创建任务时预注入 `modeler` 建议→开启建模人工门禁后审阅
-`modeler_plan.json`→批准前或 Coder 运行中向 `coder` 注入“约束、诊断、结果文件”检查项→
-只依据 `execution_validation_report.json`、冻结结果和预检报告判断是否继续。若方案本身错误，
-停止并重新建模；不要用引导文本直接改写既有 CSV、Manifest 或冻结结果。
-
-当需要由当前主 Agent（Codex / Gemini Antigravity / 当前会话 Agent）实际担任引导执行者，而不依赖全局环境变量时，在创建任务时加入：
-
-```powershell
--F "require_model_review=true"
-```
-
-该任务会在 `modeler_plan.json` 写入后停在 `waiting_review`。当前主 Agent 可读取题面契约、
-计划和 `modeling_decision.md`，先向 `coder` 队列写入后续执行检查项，再调用
-`POST /modeling/<task_id>/approve-modeling` 继续。若计划的物理模型、硬约束或验收口径本身不成立，
-不要批准；当前主 Agent 可用一次 `POST /modeling/<task_id>/revise-modeling` 写入具体退回意见，让 Modeler
-重建计划后再次审查。一次修订仍不合格或调用失败时应保留现场并停止，不得通过手工改写计划、伪造结果或绕过门禁。
-此模式只增加可复核暂停，不会把 Agent 或 API 调用者伪装成可信系统指令，也不会放宽两次失败后的恢复授权要求。
-
-如果 Modeler 在创建阶段连续返回不合格计划，而任务已启用 `require_model_review=true`，Coordinator 的拆分结果会保留为检查点。当前主 Agent 可通过 `POST /modeling/<task_id>/codex-modeling` 提交符合 `ModelerToCoder` schema 的结构化 `model_plan`；后端仍会重新执行题面契约校验、保存审计产物，并回到 `waiting_review`。随后仍必须调用 `approve-modeling` 才会进入 Coder。该接口不能用于运行中、未启用人工门禁或非 Modeler 失败的任务，也不能绕过执行验证、冻结和论文门禁。
-
-冻结后的接管使用独立的 `execution-review` 接口，不再依赖运行中 advisory guidance 恰好被模型采纳。主 Agent / 人工应优先选择 `repair` 并给出可验证的方程、量纲、约束或诊断方向；只有复算确认可接受时才 `approve`。这使“审查→定向重算→重新冻结→再次审查”成为正式链路，而不是手工篡改候选产物。
-
-若 provider/Coder 无法完成已经批准的执行质量返修，当前 Codex 或人工操作员可以准备一个确定性 Python 候选和静态 execution evidence，再从 **backend 容器内**调用受控候选 CLI：
-
-```powershell
-docker compose exec -T backend uv run python -m app.tools.repair_candidate_cli `
-  <task_id> ques2 <execution_quality_review.json中的review_id> `
-  operator_candidates/ques2_repair.py operator_candidates/ques2_evidence.json
-```
-
-该入口只接受任务目录内文件，并要求 checkpoint 已处于 `quality_repair/repair_requested`，或处于一次全量验证失败后保留了同一 `review_id`、失败子题与修复计数的 `repairing` 状态；子题必须在授权的 `failed_subtasks` 中，`review_id` 必须与当前结果哈希绑定。候选只能更新当前 `quesN_*` 产物；脚本/证据、附件、checkpoint、execution manifest、冻结结果和任务状态都不能由候选直接改写。执行超时、异常、越界文件、旧证据或证据门禁失败会回滚整个任务目录并留下脱敏拒绝审计；只有后端 `record_execution_evidence` 返回可行才写入成功 hand-off。CLI 在宿主机直接调用会拒绝，且它不会自动冻结、批准质量审查或启动 Writer。推荐闭环仍是：副本复算与教师复核 → 受控候选执行 → workflow 重新做全量 execution validation/freeze → 生成新的质量报告 → 人工按新 `review_id` 审批。
-
-任务目录会追加 `internal_guidance_audit.jsonl`，其中只记录路由、时间、长度和内容哈希，
-不记录引导正文；它不会进入候选论文或支撑材料。不要在引导内容中放置 API Key、令牌或其他凭据。
+运行中任务的**建议性**引导、创建任务时的预注入、Modeler 失败后的外部建模接管
+（`codex-modeling`）、冻结后的执行质量复核（`execution-review`）与受控候选修复
+（`repair_candidate_cli`），完整说明与命令示例见 `docs/md/任务接管与引导接口.md`。
+这些接口不绕过题面契约、ModelPlan schema、受控执行证据和最终验收门禁；注入内容仍被
+标记为不可信。任务目录会追加 `internal_guidance_audit.jsonl`，只记录路由、时间、长度
+和内容哈希；不要在引导内容中放置 API Key、令牌或其他凭据。
 
 ### 测试 C：cumcm2026 高教社杯/国赛导出模板
 
@@ -1225,13 +1141,12 @@ Coder 执行代码前后对受保护系统状态与预算文件（`checkpoint.js
 
 ## 论文收尾 P0-P2 门禁与合规工具（2026-08）
 
-当前论文链路按三层收尾：
-
-- **P0 产物新鲜度与状态一致性**：任务先进入 `finalizing`，基础 DOCX / audit / manifest / final acceptance 任一步异常都会形成真实失败；`task_status.json` 是任务状态权威来源。PDF、DOCX 重导前会删除旧文件，避免旧产物冒充本轮结果。`export_status.json` 与 `docx_export_status.json` 分别记录 Markdown 源哈希、输出哈希和导出结果。`frozen_results.json` 在预检期间保持纯只读，等价性核验实行严格 fail-closed。
-- **P1 结构与全页视觉质量**：预检会拒绝重复参考文献、非法 Markdown 表格、表题紧贴表格等结构问题；接入 `cross_modal_audit.json` 跨模态阻断检查（代码自包含、AST 解析、最优性证书矛盾、LaTeX 损坏）；`pdf_visual_check.json` 默认扫描全部页面，并把 `pdf_sha256`、`pages_checked`、`page_count` 写入报告。提交审计只接受与当前 `res.md` / `res.pdf` 哈希一致且覆盖全部页面的报告。
-- **P2 论文表达与复现闭环**：后处理会为正文中缺少邻近“图1、图2……”引用的图片补入中性图号说明（附录和代码块不改、重复运行不重复插入）；人工仍须确认图号与上下文语义匹配。连续型线性规划若把小数结果直接写成“46.67件”等，会产生 `continuous_quantity_wording` 条件警告，应改写为“连续生产当量”或另建整数规划。PDF/LaTeX 代码附录使用 `\footnotesize` 等宽字体，在保持可读的前提下减少只剩少量代码的尾页。
-
-`candidate_manifest.json` 现使用 schema `1.2`：`submission_file` 明确唯一可上传主文件（默认 `res.pdf`），并记录主产物哈希。受控支撑材料另写入 `support_materials_manifest.json` / `support_materials.zip`，按白名单、单文件/总大小与 SHA-256 打包，默认不属于主论文上传文件。引用来源追踪只校验 DOI/URL 基本格式和本地文件哈希，仍须人工查证原始来源；`similarity_ai_risk` 仅为本地可解释草稿风险提示，不是正式查重、AI 检测或抄袭判定。内部审查目录、失败尝试目录和 `latex_project/figures/` 的 sidecar 复制图片不会进入正式候选图片列表。严格技术验收仍不替代模型、推导、引用和逐页排版的人工复核。
+论文链路按三层收尾：**P0 产物新鲜度与状态一致性**（`task_status.json` 是任务状态权威
+来源，重导前删除旧产物，报告哈希相互绑定）、**P1 结构与全页视觉质量**（预检硬门禁 +
+`pdf_visual_check.json` 全页扫描 + 跨模态阻断检查）、**P2 论文表达与复现闭环**（图号
+引用补齐、连续量表述、代码附录版式）。`candidate_manifest.json`（schema 1.2/1.3）、
+支撑材料清单与引用/相似度追踪的完整口径见 `docs/md/PDF模板导出说明.md` 的
+「P0-P2 新鲜度、全页检查与内容表达规则」与「内容修订号与审批绑定」两节。
 
 ### 辅助工具命令行用法
 
@@ -1252,40 +1167,9 @@ Coder 执行代码前后对受保护系统状态与预算文件（`checkpoint.js
    ```
    分层扫描 PDF、DOCX（含 `custom.xml`、批注与页眉）及候选清单文件名中的作者/学校/联系方式泄露；对损坏文件与时效性过期报告严格 fail-closed。
 
-### 输入文件清单与接管前置检查
+### 输入文件清单与任务接管
 
-#### 输入清单（`input_manifest.json`）
-
-`POST /modeling` 和 `POST /example` 创建任务时，后端会自动为所有上传/复制的数据文件生成 `input_manifest.json`，持久化到 `work_dir/<task_id>/`。清单记录每个输入文件的安全文件名、相对路径、字节大小和 SHA-256 哈希，用于后续接管校验。用户无需手动创建，由后端自动管理。
-
-清单格式：
-```json
-{
-  "schema_version": "mathmodel.input-manifest.v1",
-  "task_id": "<task_id>",
-  "created_at": "2026-08-22T10:00:00",
-  "files": [
-    {"name": "data.csv", "relative_path": "data.csv", "size_bytes": 1234, "sha256": "abcdef..."}
-  ]
-}
-```
-
-#### 任务接管（`POST /modeling/{task_id}/codex-modeling`）
-
-当 Modeler Agent 失败（任务状态为 `failed`）时，可通过此端点提交外部建模方案（如 Codex 生成的方案）。接管需满足以下全部前置条件：
-
-1. **任务状态**：必须为 `failed`（非 `completed`/`frozen`/`running`）；
-2. **Pristine 检查**（`is_task_pristine_for_takeover`）：
-   - 不存在已完成的执行阶段、变量快照、返修记录或质量复核历史；
-   - 工作目录中不存在除 `input_manifest.json` 登记的输入文件和框架管理文件（`task_status.json`、`checkpoint.json`、`modeler_plan.json` 等）之外的任何文件；
-   - `input_manifest.json` 必须存在且格式合法（`schema_version` 匹配、`task_id` 一致、文件路径安全——无绝对路径/`..` 遍历/Windows 保留设备名/ADS 冒号/尾随空格句点），登记文件与磁盘文件大小和 SHA-256 哈希一致；
-3. **人工审核门禁**：任务必须启用 `require_model_review` 或全局 `HUMAN_MODEL_GATE_ENABLED=true`；
-
-任何条件不满足均返回 `409 Conflict`。接管成功后任务进入 `waiting_review` 状态，等待人工审批。
-
-调用示例（PowerShell）：
-```powershell
-curl.exe -X POST "http://127.0.0.1:8000/modeling/<task_id>/codex-modeling" `
-  -H "Content-Type: application/json" `
-  -d '{\"modeler_response\": \"<结构化建模方案文本>\", \"comment\": \"Codex 外部建模接管\"}'
-```
+`POST /modeling` 和 `POST /example` 创建任务时，后端自动为上传/复制的数据文件生成
+`input_manifest.json`（安全文件名、相对路径、字节大小、SHA-256）。Modeler 失败任务的
+外部建模接管接口 `POST /modeling/{task_id}/codex-modeling` 及其 Pristine 前置检查，
+完整说明见 `docs/md/任务接管与引导接口.md`。

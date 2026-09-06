@@ -6,29 +6,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MathModelAgent 是数学建模竞赛自动化系统，通过多 Agent 协作完成建模、代码生成和论文撰写。核心工作流：CoordinatorAgent 分析问题 → ModelerAgent 建模 → CoderAgent 编码执行 → WriterAgent 撰写论文。
 
-## 仓库归属与操作边界（必读）
+## 仓库归属与操作边界
 
-- 本仓库是 **john0123412 的个人使用部署**（fork 自 jihe520/MathModelAgent），仅限个人使用。
-- `origin` = github.com/john0123412/MathModelAgent —— **唯一允许写操作的远程**（push / PR / 分支只对它）。
-- `upstream` = github.com/jihe520/MathModelAgent —— 仅作上游参照。**严禁对其任何仓库（含 base-box）做任何写操作**（用户死命令，永久生效）；只读查询如非必要也不主动发起。
-- 代码与文档中残留的 jihe520 字样（桌面版下载链接、上游生态资源等）仅表示上游出处，不代表本部署的归属或可写目标。
-- 启动 banner、Docker 容器名、README 克隆命令、前端 GitHub 链接均已固化为 john 口径；若发现新的归属性表述指向 jihe520，按本节口径修正。
+- 本仓库是 **john0123412 的个人使用部署**（fork 自 jihe520/MathModelAgent），仅限个人使用；
+  `origin` 唯一可写远程；`upstream` jihe520 **严禁任何写操作**（用户死命令，永久生效）。
+- 完整口径（含 jihe520 残留字样修正规则）见 `AGENTS.md`「仓库归属与操作边界（必读）」。
 
 ## 记忆维护（AGENT_MEMORY.md）
 
-- 主文件是活跃事实清单，**总字符数硬上限 5,000**（Unicode 码点口径，即 UTF-8 读入后的 `len()`；`wc -m` 在 C locale 下是字节数、约为其 1.5 倍，不得作为判定口径）；超限时把最旧条目移入 `docs/memory/2026-MM.md` 归档（该月无归档则创建），滚动轮转。
-- 条目只写"一行结论 + 关键数字/SHA/路径锚点 + 指针"；过程叙事直接写归档。历史细节对归档目录全文 grep。
-- 完整规约见 AGENTS.md「任务收尾与记忆同步」。
+- 主文件总字符数硬上限 **5,000**（Unicode 码点口径）；超限把最旧条目整体移入
+  `docs/memory/2026-MM.md` 归档轮转；条目只写"一行结论 + 关键锚点 + 指针"。
+- 完整规约见 `AGENTS.md`「任务收尾与记忆同步」。
 
 ## Commands
 
 ### 重要限制：Windows 本机前端 Node 命令
 
-不要在本机 Windows 环境中主动运行前端依赖安装、构建、类型检查或 lint 命令，例如 `pnpm i`、`pnpm run build`、`vue-tsc`、`vite build`、`biome`、`npx biome`、`node_modules\.bin\*`。
-
-原因：该环境曾出现这些命令异常派生大量 `node.exe`，导致系统卡死。
-
-前端验证优先使用 Docker Compose 已启动的 `http://127.0.0.1:5173` 做浏览器/API 级验证，或请用户手动运行前端命令后回传结果。只有用户明确授权时，才可在说明风险、限定一次命令并设置短超时后运行本机前端 Node 命令。
+除非用户明确授权，agent 不得主动运行任何本机前端 Node 工具链命令（依赖安装、构建、
+类型检查、lint）：该环境曾异常派生大量 `node.exe` 导致系统卡死。前端验证优先使用
+Docker Compose 已运行的前端服务 `http://127.0.0.1:5173`，或由用户手动运行后回传结果。
+完整命令清单与授权流程见 `AGENTS.md`「前端本机 Node 工具链硬限制」。
 
 ### 后端
 
@@ -51,21 +48,9 @@ npx pyright app/
 
 ### 前端
 
-前端本机命令只供用户手动执行参考，agent 默认不得主动运行：
-
-- `pnpm i`
-- `pnpm run dev`
-- `pnpm run build`
-- `vue-tsc`
-- `vite build`
-- `biome` / `npx biome`
-
-agent 如需验证前端，优先使用 Docker Compose 服务：
-
-```bash
-docker compose up --build -d
-curl http://127.0.0.1:5173/
-```
+前端本机命令只供用户手动执行参考（`pnpm i` / `pnpm run dev` / `pnpm run build` /
+`vue-tsc` / `vite build` / `biome`）。agent 如需验证前端，优先使用 Docker Compose 服务
+（见下节）。
 
 ### Docker
 
@@ -211,8 +196,7 @@ hook 脚本位于 `.claude/hook_lint.sh`，配置位于 `.claude/settings.json`�
 
 ### 文献搜索
 
-- Writer 通过 `search_papers` 工具检索参考文献。
-- `backend/app/tools/openalex_scholar.py` 保留 `OpenAlexScholar` 类名，但内部是多源聚合搜索：OpenAlex、Semantic Scholar、Crossref、arXiv，以及可选 Tavily。
-- `OPENALEX_EMAIL` 未配置时只跳过 OpenAlex，不禁用其他学术源。
-- Tavily 仅在 `TAVILY_API_KEY` 存在且 `SEARCH_ENABLED=true` 时启用，用于网页、官方报告和数据来源补充。
-- 不要打印 `TAVILY_API_KEY` / `OPENALEX_API_KEY` 原文。
+Writer 的 `search_papers` 为多源聚合（OpenAlex、Semantic Scholar、Crossref、arXiv，
+外加可选 Tavily）；`OPENALEX_EMAIL` 未配置时只跳过 OpenAlex；Tavily 需
+`TAVILY_API_KEY` 且 `SEARCH_ENABLED=true`；不要打印任何 key 原文。详见
+`AGENTS.md`「文献搜索与 Tavily」。

@@ -489,6 +489,28 @@ def find_literal_result_writes(code: str) -> list[dict[str, Any]]:
     return hits
 
 
+def _read_code_file(path: str) -> str:
+    """Read one code source; expand .ipynb JSON into plain cell code.
+
+    直接 open notebook 读到的是 JSON 原文（转义形态），输出调用解析对它
+    永远落空；.py 与其他文本文件原样返回。
+    """
+    with open(path, encoding="utf-8", errors="replace") as f:
+        raw = f.read()
+    if path.endswith(".ipynb"):
+        try:
+            notebook = json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
+        cells = [
+            "".join(cell.get("source", []))
+            for cell in notebook.get("cells", [])
+            if cell.get("cell_type") == "code"
+        ]
+        return "\n\n".join(cells)
+    return raw
+
+
 def validate_code_text_parity(
     markdown_text: str,
     code_sources: list[dict[str, Any]] | str,
@@ -514,18 +536,22 @@ def validate_code_text_parity(
             elif isinstance(item, str):
                 if os.path.isfile(item):
                     try:
-                        with open(item, encoding="utf-8", errors="replace") as f:
-                            code_pieces.append(f.read())
+                        code_pieces.append(_read_code_file(item))
                     except Exception:
                         pass
                 elif work_dir and os.path.isfile(os.path.join(work_dir, item)):
                     try:
-                        with open(os.path.join(work_dir, item), encoding="utf-8", errors="replace") as f:
-                            code_pieces.append(f.read())
+                        code_pieces.append(_read_code_file(os.path.join(work_dir, item)))
                     except Exception:
                         pass
                 elif item.strip():
                     code_pieces.append(item)
+            else:
+                # CodeSource 等数据类源：collect_code_sources 返回对象而非
+                # dict/str，直接塞对象会让后续扫描永远落空（output_calls=0）。
+                content = getattr(item, "code", None) or getattr(item, "content", "") or ""
+                if isinstance(content, str) and content.strip():
+                    code_pieces.append(content)
 
     if work_dir and os.path.isdir(work_dir):
         for fname in os.listdir(work_dir):

@@ -220,7 +220,7 @@ EDA 或敏感性分析放进 `subtasks`。
 ## 每个 `quesN` 的硬性内容
 
 1. `inputs`：列出题面、附件、已定义常量的来源；不得把猜测的经验值混入。
-2. `method`：写清变量、方程/目标函数、算法和独立复算方式。优化问题必须出现决策变量、目标函数与约束；物理题必须说明状态方程或守恒关系及单位制。
+2. `method`：写清变量、方程/目标函数、算法和独立复算方式。优化问题必须出现决策变量、目标函数与约束；物理题必须说明状态方程或守恒关系及单位制。**组合优化/NP-hard 类问题必须先给出复杂度分析与工程简化论证**（聚合、分解、松弛、贪心+精确对照等），并说明简化对解质量的影响与对照方式；严禁未经论证直接套遗传算法、模拟退火、粒子群等启发式硬跑——评分端对"套启发式不出可行解/结果不实际"零容忍。
 3. `constraints`：列出题面硬约束、物理边界或统计划分边界；不满足时必须输出不可行证据。**严禁把敏感性分析、情景假设、推论结论或非约束语义的数学表达式写入 `constraints`**；所有敏感性分析、扰动范围和推论结论必须且只能输出到顶层 `sensitivity_analysis` 字段，否则一维不等式边界审计会误判为不可行并阻断代码求解。
 4. `expected_artifacts`：至少一个 `result_table`、`time_series` 或 `dataset` 数值产物；PNG 不是证据。需要图时同时列出 `figure_data`。
 5. `acceptance_metrics`：至少一个可从结构化结果复算的指标，包含比较符、阈值/目标、单位和计算口径。`target` 必须是有限 JSON 数值，不得是字符串、数组、`null`、`NaN` 或无穷值。量纲正确、公式一致等定性检查必须转换为数值通过标志（例如 `eq 1`），并在 `unit` / `description` 说明 1 的含义。不要以“结果合理”“图像平滑”充当指标。**【待求解/优化未知量严禁猜测精确等值】**：对于待求解的最优目标值、决策变量、影子价格、灵敏度增量等未知结果，建模阶段严禁猜测具体数值设为 `eq` 目标（如猜测 `shadow_price eq 10` 或 `profit_change eq 100` 会导致代码手被门禁阻断）。这类未知待求解指标必须使用合理性范围约束（如 `comparator="ge", target=0.0`）、求解器状态（`solver_status eq 1.0`）或约束违反量（`violation_max eq 0.0`）；仅在题面原文给出了明确硬性数值目标（如压力维持在 150.0 MPa）时才使用精确等值 `eq`。RMSE、R²、拟合误差、偏差、准确率、显著性、物理合理性等经验质量阈值的 `description` 必须按“阈值/目标值/判据/容差 + 依据/来自/基于 + 题目原文/数据统计/交叉验证/文献标准”说明目标值依据；`R²/R2`（含 `cv_r2_avg`）、RMSE、拟合误差、p值、偏差和准确率必须逐项点出这三类要素，首轮也不得省略；“由结果计算”“符合物理常识”不构成阈值依据。题面仅说“约”“左右”“尽可能稳定”等定性语句时，**不得**自行把它转成 5%、0.1 秒等硬阈值；应记录实际偏差/达到时间并以“方案已计算、情景已覆盖、数值可复算”等结论中立指标验收。没有可靠依据时，改用模型比较已完成、数据覆盖、数值有限或结果可复算等结论中立指标，不得臆造数值门槛。对于“判断是否存在/显著/改善”等开放性问题，禁止用 `fit_improvement ge 0.01`、`p_value le 0.05` 或存在标志 `eq 1` 在执行前强迫肯定结论。
@@ -231,6 +231,8 @@ EDA 或敏感性分析放进 `subtasks`。
    诊断要求与验收指标必须按关键词一一对应：涉及守恒、残差或质量平衡时，至少一个指标必须含 `conservation`、`residual`、守恒或质量平衡；涉及求解器状态时必须含 `solver`、`status`、求解器或状态；涉及双喷嘴/双喷油器时必须含双喷嘴、双喷油器或 `injector`。不得在 `diagnostic_requirements` 写出没有任何验收指标可核对的诊断项。
    **诊断—指标一一对应可直接照抄的范例**（按实际问题删改，不得只写笼统“已验证”）：`diagnostic_profile="numerical"` 时，`diagnostic_requirements` 写“记录步长/网格加密误差和迭代停止条件”，`acceptance_metrics` 至少分别包含 `step_grid_convergence`（label/description 含“步长/网格”）与 `iteration_convergence`（label/description 含“迭代”）；`diagnostic_profile="simulation"` 若要求“检查守恒/质量平衡残差”，至少包含 `conservation_residual`；若要求“记录求解器状态和可行性”，至少分别包含 `solver_status` 与 `feasibility_residual`；双喷嘴/双喷油器若要求同步、错相和策略比较，至少包含 `injector_phase_offset_ms`、`alternate_phase_offset_ms`、`strategy_objective`、`alternate_phase_objective` 四个可复算指标。每一条诊断要求都必须能在某个指标的 key、label 或 description 中找到对应关键词，不能用一个通用布尔指标代替步长、网格、迭代、守恒、求解器或双喷嘴证据。
 6. `diagnostic_profile` 与 `diagnostic_requirements`：每个正式问题必须按实际方法选择诊断类型。`exact` 记录代入残差/等式核验；`numerical` 记录步长或网格加密、停止条件、误差/残差；`optimization` 记录求解器状态、可行性及非凸时多初值/分支信息；`fitting` 记录残差、数据划分与可辨识性；`simulation` 记录随机种子、重复/区间或时序守恒诊断。**线性规划、整数规划及其资源情景重求解一律使用 `optimization`，不得因输出为数值而写成 `numerical`。**只有确实没有数值/算法诊断的纯定义性问题才选 `not_applicable`。诊断必须产生可在执行结果中登记的数值指标或数据表，不得只写“已验证”。
+   **`optimization` 类必须固化"主求解器 + 独立方法双算一致"**：`diagnostic_requirements` 必须包含一条独立复算要求（如顶点枚举、对偶影子价格还原、另一实现/求解器交叉求解），且 `acceptance_metrics` 有对应可复算指标（例如 `vertex_enumeration_consistent eq 1`、`dual_price_consistency eq 1`，`description` 说明独立方法的口径与一致判据）。双算结果不一致时以独立方法触发复核，不得只用求解器 `success` 充当最优性证据。
+   **题面含解析结构（线性/凸优化/守恒方程/解析几何等）时，不得以蒙特卡洛、随机模拟等纯仿真作为主求解手段**——仿真只能作为机理模型之上的补充验证；`method` 必须先给出机理模型（方程、约束、解析关系），再说明仿真/数值方法的作用边界。评分端重模型机理：纯仿真凑数值即使结果正确也达不到优秀档。
 7. 高压油管双喷嘴问题的 `acceptance_metrics` 必须计划记录同步基线（相位为 0）、非零备选相位和两种策略各自的选择依据；
    推荐使用 `phase_offset_ms`、`alternate_phase_offset_ms`、`strategy_objective`、`alternate_phase_objective` 等可复算指标键。四项必须来自同口径的数值结果，不能用一个指标同时充当多项证据。
 

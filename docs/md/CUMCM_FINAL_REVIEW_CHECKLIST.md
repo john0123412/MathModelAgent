@@ -58,7 +58,8 @@
 - [ ] 审计明确显示 `source=user_supplied_unverified`、`official_rule=false`；不因文件名、
   `label` 或“官方包”来源描述而把系统状态写成官方认证。
 - [ ] 对当前用户指定的中文基线，DOCX 与 PDF 中的摘要正文和正文 prose 均为宋体小四（12pt）
-  与单倍行距；摘要至少两段，关键词后“问题重述”另起页；内部正文页数为 10--20 页。该项是
+  与单倍行距；摘要至少两段，关键词后“问题重述”另起页；`cumcm2026` 正文页数门禁为 15--30 页
+  （30 页上限为 CUMCM 2026 官方口径，15 页下限为内部严格门禁；`cumcm2025`/`default` 内部基线 10--20 页）。该项是
   当前内部检查，不是对 CUMCM 官方格式的自动认证。
 - [ ] `submission_audit_report.json -> template_override_integrity` 为通过，且
   `docx_export_status.json`、`export_status.json`（含 PDF）、预检、PDF 视觉检查和候选清单的
@@ -361,7 +362,8 @@ Markdown、DOCX、PDF、LaTeX sidecar、manifest、submission audit 与 final ac
   `passed=true`、`quality_passed=true`、`enforced=true`，并明确 `official_rule=false`；不要把内部
   5000 字符、逐题图表覆盖等质量阈值当作官方竞赛条款。
 - [ ] 对 `cumcm2025`/`cumcm2026`，`pdf_visual_check.json -> checks.editorial_quality` 为严格策略
-  `cumcm2026_strict` 的 `passed=true`/`blocking=true`：摘要密度、首页留白和正文 10--20 页（当前用户指定的内部基线）均通过；再人工翻阅
+  `cumcm2026_strict` 的 `passed=true`/`blocking=true`：摘要密度、首页留白和正文页数（`cumcm2026`
+  为 15--30 页：30 页官方上限 + 15 页内部严格下限，`cumcm2025` 为 10--20 页）均通过；再人工翻阅
   摘要页与正文过渡页，确认不是通过无意义填充凑页数。
 - [ ] `pdf_visual_check.json -> checks.literal_markdown_headings.passed=true`，且
   `submission_audit_report.json` 中 `docx_markdown_heading_leakage.passed=true`；两者共同确认 Markdown 标题没有

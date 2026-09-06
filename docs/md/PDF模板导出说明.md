@@ -107,7 +107,9 @@ PDF 只允许字体、字号、行距、`geometry`、A4 和最小内容边距；
 文件来自竞赛官方包，也不能在报告中宣称“官方已验证”。
 
 当前用户指定的可机检中文基线为：摘要正文和正文 prose 使用宋体小四（12pt）和单倍行距，摘要
-至少两段且关键词后正文另起页，正文按 10--20 页进行内部完整性检查，参考文献必须存在并按引用
+至少两段且关键词后正文另起页，`cumcm2026` 正文按 15--30 页做严格完整性检查（30 页上限对齐
+CUMCM 2026 官方口径，15 页下限为用户指定的内部严格门禁；`cumcm2025`/`default` 维持 10--20 页），
+参考文献必须存在并按引用
 顺序编号。这些字段可以通过合同收紧或按已核实模板调整，但不是华数杯或 CUMCM 的自动官方认证。
 
 当前中文竞赛格式是用户指定基线；`huashubei` 仅作华数杯参考 profile，不能把华数杯或队伍
@@ -181,7 +183,9 @@ PyMuPDF 打开且至少包含一页；只有 `%PDF-` 文件头或损坏的占位
   5000 个内容字符；每个正式问题至少有一幅结果图和一张结果表；图表来源必须由任务内
   `paper_assets_manifest.json` 绑定到 `quesN`、数值 `source_paths` 和当前 SHA-256。
 - `pdf_visual_check.json -> checks.editorial_quality`：摘要不少于 450 字符、摘要首页文字覆盖率不低于
-  0.12、正文页数处于 10--20 页。这些是当前用户指定的内部“可读性/信息密度”阈值，不得写成 CUMCM 的官方最小页数或字数。
+  0.12、正文页数处于 15--30 页（`cumcm2026`；30 页上限来自官方口径、15 页下限为用户指定的严格门禁；
+  `cumcm2025`/`default` 为 10--20 页）。
+  这些是内部“可读性/信息密度”阈值，不得把全部阈值写成 CUMCM 的官方要求。
 - `pdf_visual_check.json -> checks.literal_markdown_headings`：正文不得出现被原样排出的 `#`、`##`、`###`
   Markdown 标题；`submission_audit_report.json -> docx_markdown_heading_leakage` 对 `res.docx` 正文执行
   同类检查（附录 B 源程序代码后的字面量不计入）。后处理会在代码围栏外补足 ATX 标题与前段之间的空行，
@@ -239,7 +243,7 @@ OpenAI Responses 兼容运行配置和 `export_profile=cumcm2026`，通过下列
 
 - `paper_preflight_report.json`：`PASS`
 - `pdf_visual_check.json`：`PASS`，A4、非空、文本可提取、20MB 文件大小、摘要首页、
-  无目录、正文满足该样本当时的内部页数上限、匿名电子稿身份字段、物理边缘越界和 CUMCM 2.5cm 内容边距检查均通过；当前默认内部基线为 20 页以内
+  无目录、正文页数门禁、匿名电子稿身份字段、物理边缘越界和 CUMCM 2.5cm 内容边距检查均通过；`cumcm2026` 正文为 15--30 页（30 页官方上限 + 15 页内部严格下限），其余 profile 内部基线 10--20 页
 - `res.md`、`res.pdf`、`res.docx`、`res.json`、`candidate_manifest.json` 均生成
 - `tex_export_status.json`：`compile_success=true`，`missing_assets=[]`
 - `latex_project/main.pdf` 已生成且非空
@@ -293,14 +297,17 @@ PDF/sidecar 自动编译会显式禁用 XeLaTeX shell escape；模型或 Markdow
   但若失败只写入 `tex_export_status.json`，不影响 `res.md`/`res.pdf`/`res.docx`
   主交付。若要把它作为正式可编译工程交付，需要单独复核 `main.pdf` 和编译日志。
 - `pdf_visual_check.json` 是低成本自动检查；它会检查 A4、非空、文本可提取、
-  20MB 文件大小、摘要首页、无目录、正文 20 页以内（当前用户指定的内部基线）、物理边缘越界和 CUMCM
+  20MB 文件大小、摘要首页、无目录、正文页数门禁（`cumcm2026` 为 15--30 页：30 页上限是 CUMCM 2026
+  官方口径、15 页下限是用户指定的内部严格门禁；`cumcm2025`/`default` 内部基线 10--20 页）、物理边缘越界和 CUMCM
   2.5cm 内容边距风险（允许少量字形 bbox 容差），并阻断 `承诺书`、`编号专用页`、
   `参赛队号` 等匿名电子稿不应出现的身份/封面字段，但仍不替代人工翻阅 PDF。
 - **`huashubei` profile 的部署放宽（2026-08 起，仅该 profile 生效）**：PDF 视觉检查的
   内容边距阈值降为 0.6cm，右边距额外提供 20pt 容差（允许公式/图略超右版心）；摘要后
-  正文页数上限放宽为 35 页；关键词允许出现在摘要页之后的页面，不强制首页；预检
-  `claim_trace` 在缺失追溯声明不超过 20 条时不阻断（超过仍 fail）。`cumcm2025`/
-  `cumcm2026` 与 `default` 维持原基线：内容边距 2.5cm（default 2.0cm）、正文 20 页以内、
+  正文页数上限放宽为 30 页（摘要不计入）；关键词允许出现在摘要页之后的页面，不强制首页；预检
+  `claim_trace` 在缺失追溯声明不超过 20 条时不阻断（超过仍 fail）。`cumcm2026` 维持严格口径：
+  内容边距 2.5cm、正文 15--30 页（30 页官方上限 + 15 页内部严格下限）、关键词须在摘要首页、
+  claim_trace 存在缺失或弱措辞即 fail；
+  `cumcm2025`/`default` 维持内部基线：内容边距 2.5cm（default 2.0cm）、正文 10--20 页、
   关键词须在摘要首页、claim_trace 存在缺失或弱措辞即 fail。`export_cli task-refresh`
   在预检无硬失败（PASS 或 CONDITIONAL_PASS）时继续重建交付物，硬门禁 FAIL 仍拒绝。
 

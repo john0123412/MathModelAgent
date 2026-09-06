@@ -210,6 +210,31 @@ class _LiteralMarkdownHeadingDocument(_FakeDocument):
         return _FakePage("上一段正文\n### 6.1.2 未渲染标题\n后续正文")
 
 
+class _OfficialLimitBodyDocument(_FakeDocument):
+    """Abstract page plus a configurable number of body pages.
+
+    The abstract mirrors ``_HighDensityAbstractDocument`` so the strict
+    editorial policy does not mask the body-page-limit signal under test.
+    """
+
+    def __init__(self, body_pages):
+        self.page_count = body_pages + 1
+
+    def __getitem__(self, index):
+        if index == 0:
+            abstract = "A" * 500
+            return _FakePage(
+                f"论文标题\n摘要\n{abstract}\n关键词：优化",
+                [
+                    {
+                        "bbox": (80.0, 80.0, 510.0, 500.0),
+                        "spans": [{"text": abstract}],
+                    }
+                ],
+            )
+        return _FakePage(f"正文第 {index} 页")
+
+
 class TestPdfVisualChecker(unittest.TestCase):
     """Verify PDF visual check writes structured status without blocking exports."""
 
@@ -327,6 +352,78 @@ class TestPdfVisualChecker(unittest.TestCase):
         self.assertFalse(report["checks"]["body_page_limit"]["passed"])
         self.assertEqual(
             report["checks"]["body_page_limit"]["body_pages_after_abstract"], 32
+        )
+
+    def test_cumcm2026_accepts_body_up_to_official_30_page_rule(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(b"%PDF-1.4 fake")
+
+            with mock.patch(
+                "fitz.open", return_value=_OfficialLimitBodyDocument(body_pages=30)
+            ):
+                report = check_pdf_visual(pdf_path, work_dir, export_profile="cumcm2026")
+
+        self.assertEqual(report["status"], "PASS")
+        self.assertTrue(report["checks"]["body_page_limit"]["passed"])
+        self.assertEqual(report["checks"]["body_page_limit"]["max_body_pages"], 30)
+        self.assertEqual(
+            report["checks"]["editorial_quality"]["checkpoints"]["body_page_range"]
+            ["recommended_range_pages"],
+            [15, 30],
+        )
+
+    def test_cumcm2026_rejects_body_beyond_official_30_page_rule(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(b"%PDF-1.4 fake")
+
+            with mock.patch(
+                "fitz.open", return_value=_OfficialLimitBodyDocument(body_pages=31)
+            ):
+                report = check_pdf_visual(pdf_path, work_dir, export_profile="cumcm2026")
+
+        self.assertEqual(report["status"], "FAIL")
+        self.assertFalse(report["checks"]["body_page_limit"]["passed"])
+        self.assertEqual(
+            report["checks"]["body_page_limit"]["body_pages_after_abstract"], 31
+        )
+
+    def test_cumcm2026_rejects_body_below_strict_15_page_floor(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(b"%PDF-1.4 fake")
+
+            with mock.patch(
+                "fitz.open", return_value=_OfficialLimitBodyDocument(body_pages=14)
+            ):
+                report = check_pdf_visual(pdf_path, work_dir, export_profile="cumcm2026")
+
+        self.assertEqual(report["status"], "FAIL")
+        self.assertFalse(report["checks"]["body_page_limit"]["passed"])
+        self.assertEqual(report["checks"]["body_page_limit"]["min_body_pages"], 15)
+        self.assertEqual(
+            report["checks"]["body_page_limit"]["body_pages_after_abstract"], 14
+        )
+
+    def test_cumcm2026_accepts_body_at_strict_15_page_floor(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            pdf_path = os.path.join(work_dir, "res.pdf")
+            with open(pdf_path, "wb") as f:
+                f.write(b"%PDF-1.4 fake")
+
+            with mock.patch(
+                "fitz.open", return_value=_OfficialLimitBodyDocument(body_pages=15)
+            ):
+                report = check_pdf_visual(pdf_path, work_dir, export_profile="cumcm2026")
+
+        self.assertEqual(report["status"], "PASS")
+        self.assertTrue(report["checks"]["body_page_limit"]["passed"])
+        self.assertEqual(
+            report["checks"]["body_page_limit"]["body_pages_after_abstract"], 15
         )
 
     def test_task_contract_can_tighten_body_page_range(self):

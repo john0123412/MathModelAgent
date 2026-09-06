@@ -638,8 +638,8 @@ docker compose exec backend uv run python -m app.tools.export_cli task-refresh `
     "min_abstract_paragraphs": 2,
     "require_references": true,
     "require_reference_style": true,
-    "body_min_pages": 8,
-    "body_max_pages": 20
+    "body_min_pages": 15,
+    "body_max_pages": 30
   }
 }
 ```

@@ -100,6 +100,15 @@ Markdown、DOCX、PDF、LaTeX sidecar、manifest、submission audit 与 final ac
 `pdf_visual_check.json`、`submission_audit_report.json`、`final_acceptance_report.json`
 和 checkpoint 的失败记录，不要把旧 PDF 当作可提交产物。
 
+## 算法表述与 AI 风险边界
+
+- [ ] 单纯形法没有被概括为一般情形下的多项式时间算法；若使用“有限步/全局最优”，已限定到当前小规模实例并说明不推广到一般大规模问题。
+- [ ] 单目标模型没有误用 Pareto 最优/效率；相关术语只出现在明确的多目标改进或推广语境。
+- [ ] 影子价格或敏感性外推已限定在当前扰动范围或最优基未切换范围内，并有重新求解或边界证据支撑。
+- [ ] 未实现的 GA/PSO/MILP/NSGA 等算法只作为比较、未来改进或待复算项出现，没有写成当前已采用方法。
+- [ ] 关键词同时通过数量检查和背景词+泛化建模词组合提示；条件项由队员结合题意人工确认。
+- [ ] 本地套话扫描、PDF 元数据和工具链指纹均不被当作正式 AI 检测或原创性结论；AI 使用声明保持真实完整。
+
 ## 摘要
 
 - 是否说明研究对象。

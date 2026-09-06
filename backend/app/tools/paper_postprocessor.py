@@ -133,6 +133,14 @@ AI_BOILERPLATE_TERMS = (
     "取得了令人满意的结果",
     "达到了预期效果",
 )
+# 关键词只作可解释的条件提示：背景实体与“优化/模型/规划/调度”等
+# 泛化建模词直接拼接时，信息密度通常不足，但不应取代人工判断。
+KEYWORD_BACKGROUND_COMBINATION_RE = re.compile(
+    r"(?:生产决策|生产方案|蔬菜种植|交通调度|物流运输|能源配置|"
+    r"资源配置|设备维护|供应链管理|城市交通|工厂生产)"
+    r"(?:优化|模型|规划|调度|决策|分析|预测)",
+    re.IGNORECASE,
+)
 METHOD_CLAIM_ALTERNATION = (
     r"遗传算法|genetic\s+algorithm|\bGA\b|Pareto|帕累托|粒子群|particle\s+swarm|PSO"
     r"|ε[\s\-–—]*约束|epsilon[\s\-]*constraint"
@@ -1810,14 +1818,30 @@ def _check_reference_format(markdown: str, *, required: bool) -> dict:
 def _check_keywords(markdown: str) -> dict:
     match = KEYWORDS_RE.search(markdown)
     if not match:
-        return {"passed": False, "count": 0, "items": []}
+        return {"passed": False, "count": 0, "items": [], "issues": []}
     raw = match.group(1).strip()
     items = [
         item.strip()
         for item in re.split(r"[;；,，、\s]+", raw)
         if item.strip()
     ]
-    return {"passed": 3 <= len(items) <= 8, "count": len(items), "items": items}
+    issues = [
+        {
+            "keyword": item,
+            "type": "background_method_combination",
+            "message": "背景实体词与泛化建模词组合，建议改为直接的模型或方法术语。",
+        }
+        for item in items
+        if KEYWORD_BACKGROUND_COMBINATION_RE.search(item)
+    ]
+    return {
+        "passed": 3 <= len(items) <= 8 and not issues,
+        "count": len(items),
+        "items": items,
+        "issues": issues,
+        "scope": "advisory keyword-quality check",
+        "official_rule": False,
+    }
 
 
 def _extract_editorial_body(markdown: str) -> str:

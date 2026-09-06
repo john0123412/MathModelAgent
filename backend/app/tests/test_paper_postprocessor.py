@@ -8,6 +8,7 @@ import unittest
 
 from app.tools.paper_postprocessor import (
     append_code_appendix,
+    _check_keywords,
     build_claim_trace,
     build_preflight_report,
     ensure_figure_references,
@@ -204,6 +205,19 @@ class TestNormalizeChineseReferences(unittest.TestCase):
         )
 
         self.assertTrue(report["checks"]["keywords"]["passed"])
+
+    def test_keyword_background_method_combination_is_reported(self):
+        check = _check_keywords("关键词：线性规划；生产决策优化；灵敏度分析")
+
+        self.assertFalse(check["passed"])
+        self.assertEqual(check["issues"][0]["keyword"], "生产决策优化")
+        self.assertEqual(check["issues"][0]["type"], "background_method_combination")
+
+    def test_keyword_quality_accepts_direct_method_terms(self):
+        check = _check_keywords("关键词：线性规划；灵敏度分析；资源优化")
+
+        self.assertTrue(check["passed"], check)
+        self.assertEqual(check["issues"], [])
 
     def test_unmatched_inline_numeric_references_are_removed(self):
         markdown = (

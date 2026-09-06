@@ -118,6 +118,21 @@ DOI_RE = re.compile(r"\b10\.\d{4,9}/[^\s<>\"']+", re.IGNORECASE)
 URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 STRONG_WORDING_RE = re.compile(r"证明|唯一|显著优于|最可靠|精确预测")
 OPTIMALITY_CLAIM_RE = re.compile(r"最优(?:解|方案|控制|参数)?|最佳(?:解|方案)?|Pareto(?:最优)?|帕累托(?:最优)?")
+# AI 套话词表（可配置）。仅作 WARN 级提示，不阻塞导出；阈值见 scan_similarity_ai_risk。
+# 注意：不收录"本文"——对"本文"的机械计数已被审计否决，属无意义指标。
+AI_BOILERPLATE_TERMS = (
+    "综上所述",
+    "本文提出",
+    "结果表明",
+    "值得注意的是",
+    "不难发现",
+    "显而易见",
+    "大量实验表明",
+    "本文提出了一种",
+    "本文所提方法",
+    "取得了令人满意的结果",
+    "达到了预期效果",
+)
 METHOD_CLAIM_ALTERNATION = (
     r"遗传算法|genetic\s+algorithm|\bGA\b|Pareto|帕累托|粒子群|particle\s+swarm|PSO"
     r"|ε[\s\-–—]*约束|epsilon[\s\-]*constraint"
@@ -186,7 +201,12 @@ NON_IMPLEMENTED_ALGORITHM_CONTEXT_RE = re.compile(
     rf"|(?:需|待)(?:在|重新|进一步|补充|复算)[^。\n]{{0,60}}(?:{METHOD_CLAIM_ALTERNATION})"
     # 方法词在前的待办/改进语境："混合整数规划框架下重新求解"、
     # "MILP 作为后续改进"均不是本次已执行方法。
-    rf"|(?:{METHOD_CLAIM_ALTERNATION})[^。\n]{{0,120}}(?:重新求解|重新计算|重算|复算|待复算|作为(?:未来|后续)?(?:改进|扩展|备选)|可作为(?:未来|后续)?(?:改进|扩展|备选)|留作(?:进一步)?(?:研究|改进))",
+    rf"|(?:{METHOD_CLAIM_ALTERNATION})[^。\n]{{0,120}}(?:重新求解|重新计算|重算|复算|待复算|作为(?:未来|后续)?(?:改进|扩展|备选)|可作为(?:未来|后续)?(?:改进|扩展|备选)|留作(?:进一步)?(?:研究|改进))"
+    # 否定词在方法名之前："本文未采用/并未使用/未涉及 遗传算法（GA）"等自然否定句式
+    # 也是选型论证，不是使用声明。原正则只认"方法名+未采用"，会误判此类为当前方法。
+    rf"|(?:未|没有|并未|不)(?:采用|使用|实现|运行|涉及|进行)[^。\n]{{0,40}}(?:{METHOD_CLAIM_ALTERNATION})"
+    # 方法名之后接否定："遗传算法（GA）…本文未(做此项对比/予实现)"同样归为排除项。
+    rf"|(?:{METHOD_CLAIM_ALTERNATION})[^。\n]{{0,80}}(?:本文未|并未|未予|未做(?:此|该)?(?:项)?(?:对比|实验|求解))",
     re.IGNORECASE,
 )
 CURRENT_ALGORITHM_CLAIM_RE = re.compile(
@@ -3275,7 +3295,7 @@ def scan_similarity_ai_risk(markdown: str, work_dir: str | None = None) -> dict:
         body,
         re.IGNORECASE,
     )))
-    boilerplate = ["综上所述", "本文提出", "结果表明"]
+    boilerplate = list(AI_BOILERPLATE_TERMS)
     boilerplate_hits = {term: len(re.findall(re.escape(term), body)) for term in boilerplate}
     boilerplate_hits = {key: value for key, value in boilerplate_hits.items() if value >= 4}
     risks = []
@@ -4128,6 +4148,49 @@ def _check_algorithm_evidence(
     }
 
 
+# 已知"算法性质表述不准确"模式。这些是学术严谨性建议，不是门禁硬错误，
+# 故以 WARN（conditional）呈现，不阻塞导出，交由人工/评审最终判断。
+ALGORITHM_CORRECTNESS_PATTERNS = [
+    (
+        "simplex_polynomial_time",
+        re.compile(r"单纯形法[^。\n]{0,48}(?:多项式时间|多项式可解|多项式复杂度)"),
+        "单纯形法最坏情况为指数复杂度（Klee–Minty 反例），不能称多项式时间/可解；"
+        "仅在决策变量少、可行域为凸集且顶点数有限时可写有限步收敛至全局最优。",
+    ),
+    (
+        "single_objective_pareto",
+        re.compile(r"Pareto\s*最优|Pareto\s*效率|帕累托最优|帕累托效率", re.IGNORECASE),
+        "Pareto 最优/效率是多目标优化概念；单目标线性规划应使用「紧约束/无剩余松弛」等表述，"
+        "Pareto 术语仅可用于「未来多目标扩展」语境。",
+    ),
+    (
+        "absolute_extrapolation",
+        re.compile(r"完全线性外推能力|线性外推完全精确|外推完全精确|完全精确的外推"),
+        "影子价格线性外推必须限定范围（最优基未切换的参数范围内/当前邻域内），"
+        "不应使用「完全精确/完全线性外推能力」等无条件断言。",
+    ),
+]
+
+
+def check_algorithm_correctness_claims(markdown: str) -> dict:
+    """WARN 级：标注已知的算法/最优性表述不准确，交由人工复核（不阻塞导出）。"""
+    body = _without_fenced_code_blocks(markdown)
+    appendix_match = re.search(r"(?m)^#{1,6}\s*附录", body)
+    body = body[: appendix_match.start()] if appendix_match else body
+    warnings: list[dict] = []
+    for key, pattern, hint in ALGORITHM_CORRECTNESS_PATTERNS:
+        for match in pattern.finditer(body):
+            snippet = body[max(0, match.start() - 30) : match.end() + 30].replace("\n", " ")
+            warnings.append({"type": key, "match": snippet.strip(), "hint": hint})
+    return {
+        "passed": not warnings,
+        "warning_count": len(warnings),
+        "warnings": warnings,
+        "scope": "advisory only; not a hard gate",
+        "disclaimer": "本报告仅提示可能的表述严谨性问题，不替代评委/人工判断。",
+    }
+
+
 def _infeasible_subtask_markers(subtask: dict) -> list[str]:
     identifier = str(subtask.get("id") or subtask.get("problem") or "")
     markers = [identifier]
@@ -4794,6 +4857,7 @@ def build_preflight_report(
     modeling_decision_check = _check_modeling_decision_approval(work_dir)
     ai_disclosure_check = _check_ai_disclosure(work_dir, markdown, export_profile)
     reproducibility_claims_check = _check_reproducibility_claims(work_dir, markdown)
+    algorithm_correctness_check = check_algorithm_correctness_claims(markdown)
     editorial_quality_check = _check_editorial_quality(
         work_dir,
         markdown,
@@ -4866,6 +4930,8 @@ def build_preflight_report(
         "res_json_sync": _with_severity(_check_res_json_sync(work_dir, markdown), "fail"),
         "freeze_integrity": _with_severity(freeze_integrity_check, "fail"),
         "algorithm_evidence": _with_severity(algorithm_evidence_check, "fail"),
+        # 算法/最优性表述准确性：仅 WARN（conditional），不阻塞导出，交人工复核
+        "algorithm_correctness": _with_severity(algorithm_correctness_check, "conditional"),
         "infeasible_optimality": _with_severity(infeasible_optimality_check, "fail"),
         "figure_result_consistency": _with_severity(
             figure_result_consistency_check, "fail"

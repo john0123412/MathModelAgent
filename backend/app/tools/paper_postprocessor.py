@@ -2930,10 +2930,14 @@ def _normalize_sync_text(text: str) -> str:
     """Strip footnote/uuid markers and all whitespace for cross-artifact compare.
 
     后处理链会重排表格与数学排版（表格对齐、LaTeX 间距命令），剔除这些纯
-    格式字符以免把排版差异误判为内容世代差异。
+    格式字符以免把排版差异误判为内容世代差异。剥除顺序：先剥 ``{[^n]: ...}``
+    内联引用定义（引用元数据，组装时被消费为文末文献节），再剥 [^n]/uuid/[n]
+    引用标记——顺序颠倒会把定义块残成 {:...} 永不匹配。
     """
+    text = re.sub(r"\{\[\^\d+\][^}]*\}", "", text)
     text = re.sub(r"\[\^[^\]]+\]", "", text)
     text = re.sub(r"\[[0-9a-fA-F-]{36}\]", "", text)
+    text = re.sub(r"\[\d+\]", "", text)
     text = re.sub(r"\\[,;!]", "", text)
     text = text.replace("|", "").replace("$", "")
     return re.sub(r"\s+", "", text)

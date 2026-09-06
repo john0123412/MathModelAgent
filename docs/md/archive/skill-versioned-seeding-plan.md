@@ -1,3 +1,5 @@
+> [已归档 2026-09-06] 本文档为一次性设计稿,状态:未实施,内容不代表当前系统行为;索引见 docs/md/archive/README.md。
+
 # 技能版本化播种方案设计（hashSkillDir + seeded-builtins.json）
 
 > 状态：**设计文档，本轮不实现代码。**

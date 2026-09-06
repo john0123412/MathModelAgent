@@ -127,6 +127,7 @@ When a plan fails this check, rewrite it by forcing:
 - Read `references/award-route-pattern-library.md` when the user asks to distill how award-style papers model and solve problem 1, problem 2, problem 3, and later sub-questions.
 - Read `references/refutation-and-model-choice.md` when auditing or improving topic choice, model choice, rejected alternatives, flip conditions, or self-refutation loops.
 - Read `references/paper-scoring-framework.md` when the user asks for scoring standards, paper competitiveness, multi-dimensional evaluation, or judge-visible strengths and weaknesses.
+- Read `references/cumcm-bc-expert-notes.md` when comparing B/C routes and you need expert-commentary judge priorities, per-problem method stacks, innovation-priority ranking, or crowd-escape ideas beyond the generic method map.
 - Read `references/problem-taxonomy.md` when classifying A/B/C problem types or finding differentiated angles.
 - Read `references/method-map.md` when mapping problem symptoms to modeling method families.
 - Read `references/engineering-feasibility.md` when auditing solver complexity, data pipelines, fallback routes, and implementation realism.

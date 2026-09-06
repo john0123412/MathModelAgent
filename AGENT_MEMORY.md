@@ -76,3 +76,9 @@
 - [09-06 LP 导出恢复] task `20260906-033157-bd8195551a4a760570d999c09194c6ab` 冻结结果与执行证据 SHA 未变；`res_json_sync`、`algorithm_evidence` PASS，确定性 export-only 修复后 `preflight/pdf_visual/submission_audit=PASS`、`final_acceptance=TECHNICAL_PASS`、状态 `completed`。
 - [09-06 失败恢复闭环] 初始 workflow 只在 final acceptance 失败后报告 `failed`，未自动继续导出修复；现对仅涉及视觉/新鲜度/清单重绑的失败持久化一次 `presentation_reflow_pending_export`，无 Provider/无数值重跑重建全链；执行证据、冻结哈希、算法、匿名、字体/模板等实质失败仍 fail-closed，预算耗尽不循环。详见 `STARTUP.md`、`docs/md/PDF模板导出说明.md`、`docs/md/CUMCM_FINAL_REVIEW_CHECKLIST.md`。
 - [09-06 匿名审计误报] `submission_audit` 改为跳过 manifest 的 sha256/sha1/md5/hash/digest 校验值，仅扫描提交文件名、显式身份字段和路径；39 项匿名审计 + 236 项定向回归通过。LP 任务刷新审计后匿名检查 PASS，但随后并发进程更新 `res.md/res.json`，故未重绑 manifest/final acceptance；冻结/执行证据 SHA 仍为 `ea38a3c6...` / `bb30986d...`。详见 docs/memory/2026-09.md。
+## 外部 skill 备查（2026-09）
+
+- liufanshan11 cumcm-b/c-problem-lfs 已 clone 至 D:\workspace\cumcm-refs\（仓库外；勿装入
+  .agents/skills/ 防触发冲突，勿采用其 LaTeX 交付链）。蒸馏落地：选题/路线→route-selection
+  的 references/cumcm-bc-expert-notes.md；B/C 终检条目→CUMCM_FINAL_REVIEW_CHECKLIST
+  "B/C 题专项复核"小节。

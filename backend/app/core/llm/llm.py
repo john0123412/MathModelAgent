@@ -4,6 +4,7 @@ from typing import Any
 from app.utils.common_utils import transform_link, split_footnotes
 from app.utils.log_util import logger
 import asyncio
+import time
 from app.schemas.response import (
     CoderMessage,
     WriterMessage,
@@ -37,10 +38,13 @@ def _record_token_usage_best_effort(
     agent_name: str,
     model: str | None,
     response: StandardResponse,
+    duration_seconds: float | None = None,
 ) -> None:
     """记录 token usage；统计失败不能影响 LLM 主调用。"""
     try:
-        record_token_usage(task_id, agent_name, model, response.usage)
+        record_token_usage(
+            task_id, agent_name, model, response.usage, duration_seconds=duration_seconds
+        )
     except Exception as exc:
         logger.warning(
             "Token usage 统计写入失败，已跳过: "
@@ -171,10 +175,12 @@ class LLM:
                     provider_kwargs["reasoning_effort"] = self.reasoning_effort
                 if response_format is not None:
                     provider_kwargs["response_format"] = response_format
+                call_started = time.monotonic()
                 response = await asyncio.wait_for(
                     self.provider.call(**provider_kwargs),
                     timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS,
                 )
+                call_duration = time.monotonic() - call_started
                 logger.info(
                     "API 响应已接收: "
                     f"content_chars={len(response.content or '')}, "
@@ -190,6 +196,7 @@ class LLM:
                     agent_name,
                     self.model,
                     response,
+                    duration_seconds=call_duration,
                 )
                 await self.send_message(response, agent_name, sub_title)
                 return response
@@ -203,7 +210,12 @@ class LLM:
                         from app.utils.common_utils import get_work_dir as _get_wd2
 
                         wd2 = _get_wd2(self.task_id)
-                        _record_budget_fail(wd2, self.task_id, known_tokens=None, duration_seconds=None)
+                        _record_budget_fail(
+                            wd2,
+                            self.task_id,
+                            known_tokens=None,
+                            duration_seconds=time.monotonic() - call_started,
+                        )
                     except Exception:
                         pass
                 # 配置错误在每次调用前都会被检查；它不是网络瞬态错误，
@@ -308,11 +320,12 @@ class LLM:
 async def simple_chat(model: LLM, history: list) -> str:
     """使用 LLM 进行简单的单轮对话。"""
     model._validate_config("simple_chat")
+    call_started = time.monotonic()
     response = await asyncio.wait_for(
         model.provider.call(
             messages=history,
             model=model.model,  # type: ignore[arg-type]
-            api_key=model.api_key,  # type: ignore[arg-type]
+            api_key=model.api_key,
             base_url=model.base_url,
         ),
         timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS,
@@ -322,5 +335,6 @@ async def simple_chat(model: LLM, history: list) -> str:
         "simple_chat",
         model.model,
         response,
+        duration_seconds=time.monotonic() - call_started,
     )
     return response.content or ""

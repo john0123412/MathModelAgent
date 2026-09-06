@@ -56,6 +56,47 @@ HIGH_CONF_IDENTITY_RE = re.compile(
 HIGH_CONF_WECHAT_QQ_RE = re.compile(
     r"(?<![a-zA-Z0-9])(?:微信|WeChat|QQ)[:：\s]*([0-9a-zA-Z_-]{5,})"
 )
+_MANIFEST_HASH_KEYS = frozenset(
+    {"sha256", "sha1", "md5", "hash", "digest", "artifact_hashes", "hashes"}
+)
+_MANIFEST_IDENTITY_KEYS = frozenset(
+    {
+        "author",
+        "creator",
+        "owner",
+        "user",
+        "team",
+        "school",
+        "school_name",
+        "institution",
+        "department",
+        "class",
+        "advisor",
+        "supervisor",
+        "student_id",
+        "registration_number",
+        "team_number",
+        "phone",
+        "telephone",
+        "mobile",
+        "email",
+        "wechat",
+        "qq",
+    }
+)
+_MANIFEST_FILENAME_KEYS = frozenset(
+    {
+        "path",
+        "name",
+        "filename",
+        "file_name",
+        "submission_file",
+        "archive",
+        "archive_name",
+        "manifest",
+        "manifest_name",
+    }
+)
 
 LOW_CONFIDENCE_KEYWORDS = [
     "学校", "学院", "大学", "University", "College", "School",
@@ -1381,41 +1422,45 @@ def _audit_submission_anonymity(work_dir: str, strict: bool = True) -> list[dict
         try:
             with open(manifest_path, encoding="utf-8") as mf:
                 m_data = json.load(mf)
+
+            def scan_manifest_identity_fields(
+                value: Any, path: str, *, filename_container: bool = False
+            ) -> None:
+                """只扫描清单中的身份字段和文件名，跳过校验哈希等非身份数据。"""
+                if isinstance(value, dict):
+                    for key, child in value.items():
+                        key_name = str(key)
+                        normalized_key = key_name.lower().replace("-", "_")
+                        child_path = f"{path}:{key_name}"
+                        if normalized_key in _MANIFEST_HASH_KEYS:
+                            continue
+                        child_is_container = filename_container or normalized_key in {
+                            "files", "artifacts", "support_materials"
+                        }
+                        if isinstance(child, str):
+                            if (
+                                child_is_container
+                                or normalized_key in _MANIFEST_FILENAME_KEYS
+                                or normalized_key in _MANIFEST_IDENTITY_KEYS
+                            ):
+                                _scan_text_for_anonymity(child, child_path, findings)
+                        elif isinstance(child, (dict, list)):
+                            scan_manifest_identity_fields(
+                                child, child_path, filename_container=child_is_container
+                            )
+                elif isinstance(value, list):
+                    for index, child in enumerate(value):
+                        child_path = f"{path}:{index}"
+                        if isinstance(child, str):
+                            if filename_container:
+                                _scan_text_for_anonymity(child, child_path, findings)
+                        elif isinstance(child, (dict, list)):
+                            scan_manifest_identity_fields(
+                                child, child_path, filename_container=filename_container
+                            )
+
             if isinstance(m_data, dict):
-                # 3.1 顶层 submission_file（主提交文件名）
-                sub_file = m_data.get("submission_file")
-                if sub_file:
-                    _scan_text_for_anonymity(str(sub_file), "candidate_manifest:submission_file", findings)
-
-                # 3.2 顶层支撑材料归档名称
-                for sm_key in ("support_materials", "support_materials_archive", "support_materials_manifest"):
-                    sm_val = m_data.get(sm_key)
-                    if sm_val:
-                        _scan_text_for_anonymity(str(sm_val), f"candidate_manifest:{sm_key}", findings)
-
-                # 3.3 字典或列表形式的 files 清单
-                files_obj = m_data.get("files")
-                if isinstance(files_obj, dict):
-                    for file_cat, file_val in files_obj.items():
-                        if isinstance(file_val, str):
-                            _scan_text_for_anonymity(file_val, f"candidate_manifest:files:{file_cat}", findings)
-                        elif isinstance(file_val, dict):
-                            for key in ("path", "name", "filename"):
-                                if file_val.get(key):
-                                    _scan_text_for_anonymity(str(file_val[key]), f"candidate_manifest:files:{file_cat}", findings)
-                        elif isinstance(file_val, list):
-                            for list_item in file_val:
-                                if isinstance(list_item, str):
-                                    _scan_text_for_anonymity(list_item, f"candidate_manifest:files:{file_cat}", findings)
-                                elif isinstance(list_item, dict):
-                                    for key in ("path", "name", "filename"):
-                                        if list_item.get(key):
-                                            _scan_text_for_anonymity(str(list_item[key]), f"candidate_manifest:files:{file_cat}", findings)
-                elif isinstance(files_obj, list):
-                    for item in files_obj:
-                        fn = str(item.get("path") or item.get("name") or "") if isinstance(item, dict) else str(item)
-                        if fn:
-                            _scan_text_for_anonymity(fn, "candidate_manifest:files", findings)
+                scan_manifest_identity_fields(m_data, "candidate_manifest")
         except Exception as exc:
             findings.append({
                 "category": "manifest_read_error",

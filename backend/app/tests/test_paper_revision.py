@@ -130,6 +130,31 @@ class ResJsonSyncCheckTest(unittest.TestCase):
             check = _check_res_json_sync(work_dir, md)
             self.assertTrue(check["passed"])
 
+    def test_postprocessed_footnote_definitions_and_numeric_markers_tolerated(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            root = Path(work_dir)
+            _seed_content(root)
+            sections = json.loads((root / "res.json").read_text(encoding="utf-8"))
+            sections["ques2"]["response_content"] = (
+                _SECTION_B
+                + "该结论来自文献[^3]的加权方法。"
+                + "{[^3]: 某篇足够长的参考文献条目，用于验证后处理搬移逻辑。}"
+            )
+            (root / "res.json").write_text(
+                json.dumps(sections, ensure_ascii=False), encoding="utf-8"
+            )
+            md = (
+                "# 论文\n\n"
+                + _SECTION_A
+                + "\n\n"
+                + _SECTION_B
+                + "该结论来自文献[1]的加权方法。\n\n"
+                + "## 参考文献\n\n[1] 某篇足够长的参考文献条目，用于验证后处理搬移逻辑。\n"
+            )
+            (root / "res.md").write_text(md, encoding="utf-8")
+            check = _check_res_json_sync(work_dir, md)
+            self.assertTrue(check["passed"], check)
+
     def test_word_level_editorial_softening_tolerated(self):
         with tempfile.TemporaryDirectory() as work_dir:
             root = Path(work_dir)

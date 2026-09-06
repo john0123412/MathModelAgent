@@ -896,6 +896,24 @@ docker compose exec backend uv run python -m app.tools.export_cli pdf --input pr
 docker compose exec backend uv run python -m app.tools.submission_audit --work-dir project/work_dir/<task_id> --require-official-fonts
 ```
 
+论文预检失败的诊断顺序：先确认任务不在 `resuming`/`finalizing`，再读取最新
+`paper_preflight_report.json`，不要用旧报告判断。`algorithm_evidence` 只应阻断明确的
+"本文采用/使用"算法声明；未来改进、比较/否定和待复算语境是排除项，不需要本轮执行证据。
+算法证据扫描复用最终代码附录的源码集合。若仅剩论文文字同步问题，使用受控
+`paper_repair_candidate`；候选隔离预检可为 `PASS` 或无 `severity=fail` 的
+`CONDITIONAL_PASS`，但不得绕过硬失败。候选应用后只能走 export-only/task-refresh，
+不调用 Provider、不重跑 Notebook 或数学求解。
+
+- **最终验收失败后的主 Agent 受控恢复**：若正式导出只因 PDF 视觉、报告新鲜度、候选清单
+  或其他确定性版式/重绑问题失败，主工作流会自动登记一次
+  `presentation_reflow_pending_export`，不调用 Provider、不重跑 Notebook/求解器，完整
+  重建 Markdown、DOCX、PDF、LaTeX sidecar、manifest、submission audit 和 final
+  acceptance。恢复预算持久化在 `checkpoint.json`，第二次仍失败即 fail-closed。执行证据、
+  冻结结果哈希变化、当前算法声明、匿名身份、字体/模板完整性等实质失败不进入该恢复路径。
+- `submission_audit` 对 manifest 的匿名扫描会跳过 `sha256`/`sha1`/`md5`/`digest` 等
+  校验值字段与十六进制串（哈希中偶然的数字片段不是手机号）；PDF/DOCX 正文、元数据和
+  真实文件名仍按高置信规则阻断，若只命中校验字段应刷新审计报告而不是修改论文或冻结结果。
+
 验收要点：
 
 - `paper_preflight_report.json = PASS`，且 `checks.appendix_console_noise.passed=true`。

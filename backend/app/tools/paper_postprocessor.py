@@ -119,7 +119,7 @@ URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 STRONG_WORDING_RE = re.compile(r"证明|唯一|显著优于|最可靠|精确预测")
 OPTIMALITY_CLAIM_RE = re.compile(r"最优(?:解|方案|控制|参数)?|最佳(?:解|方案)?|Pareto(?:最优)?|帕累托(?:最优)?")
 METHOD_CLAIM_ALTERNATION = (
-    r"遗传算法|genetic\s+algorithm|Pareto|帕累托|粒子群|particle\s+swarm|PSO"
+    r"遗传算法|genetic\s+algorithm|\bGA\b|Pareto|帕累托|粒子群|particle\s+swarm|PSO"
     r"|ε[\s\-–—]*约束|epsilon[\s\-]*constraint"
     r"|\bLNS\b|大邻域(?:搜索)?"
     r"|\bMILP\b|混合整数(?:线性)?规划|整数规划"
@@ -138,7 +138,7 @@ _EPSILON_CONSTRAINT_EVIDENCE = (
 )
 ALGORITHM_CLAIMS = {
     "genetic_algorithm": (
-        re.compile(r"遗传算法|genetic\s+algorithm", re.IGNORECASE),
+        re.compile(r"遗传算法|genetic\s+algorithm|\bGA\b", re.IGNORECASE),
         ("遗传算法", "genetic algorithm", "deap", "pymoo", "geneticalgorithm"),
     ),
     "pareto_optimization": (
@@ -171,7 +171,7 @@ ALGORITHM_CLAIMS = {
     ),
 }
 FUTURE_ALGORITHM_CONTEXT_RE = re.compile(
-    r"(?:可|可以|建议|拟|将|未来|后续|进一步|改进).{0,32}"
+    r"(?:可|可以|建议|拟|将|未来|后续|进一步|改进|推广|扩展|可沿|计划).{0,160}"
     rf"(?:{METHOD_CLAIM_ALTERNATION})",
     re.IGNORECASE,
 )
@@ -183,7 +183,18 @@ NON_IMPLEMENTED_ALGORITHM_CONTEXT_RE = re.compile(
     rf"|(?:{METHOD_CLAIM_ALTERNATION})"
     r"[^。\n]{0,80}(?:未(?:采用|使用|实现|涉及)|不(?:及|适用|涉及|需)|作为[^。\n]{0,24}(?:对比|替代)|本题[^。\n]{0,24}(?:仅|无需|不)|无需|并不|并非)"
     # 待办语境："需在 MILP 框架下重新求解/待复算"是改进建议，不是当前实现
-    rf"|(?:需|待)(?:在|重新|进一步|补充|复算)[^。\n]{{0,60}}(?:{METHOD_CLAIM_ALTERNATION})",
+    rf"|(?:需|待)(?:在|重新|进一步|补充|复算)[^。\n]{{0,60}}(?:{METHOD_CLAIM_ALTERNATION})"
+    # 方法词在前的待办/改进语境："混合整数规划框架下重新求解"、
+    # "MILP 作为后续改进"均不是本次已执行方法。
+    rf"|(?:{METHOD_CLAIM_ALTERNATION})[^。\n]{{0,120}}(?:重新求解|重新计算|重算|复算|待复算|作为(?:未来|后续)?(?:改进|扩展|备选)|可作为(?:未来|后续)?(?:改进|扩展|备选)|留作(?:进一步)?(?:研究|改进))",
+    re.IGNORECASE,
+)
+CURRENT_ALGORITHM_CLAIM_RE = re.compile(
+    r"(?:本文|本研究|本题|本次|实际|最终|主求解器|主方法)?"
+    r"\s*(?:采用|使用|实现|调用|选用|应用|基于|通过|用)\s*"
+    rf"(?:{METHOD_CLAIM_ALTERNATION})"
+    rf"|(?:{METHOD_CLAIM_ALTERNATION})"
+    r"[^。\n]{0,32}(?:求解|实现|调用|使用|采用|应用|优化)",
     re.IGNORECASE,
 )
 RANDOM_SIMULATION_RE = re.compile(
@@ -1489,10 +1500,21 @@ def _code_fence(code: str) -> str:
 
 
 def _listings_safe_code(code: str) -> str:
-    """Prevent source text from closing pandoc's LaTeX listings environment."""
-    return _shorten_long_code_separator_body(
-        code.replace(r"\end{lstlisting}", r"\end{lstlisting }")
-    )[0]
+    """Encode source-only characters that the PDF listings font cannot map.
+
+    The original source and its SHA-256 remain authoritative.  This reversible
+    display representation is used only inside the paper appendix so Unicode
+    operators cannot become U+FFFF glyphs in the rendered PDF.
+    """
+    safe = code.replace(r"\end{lstlisting}", r"\end{lstlisting }")
+    replacements = {
+        "≤": "<=", "≥": ">=", "→": "->", "≈": "~=", "×": "*",
+        "Σ": "Sigma", "∑": "sum", "∈": "in", "∂": "d",
+        "Δ": "Delta", "±": "+/-", "✓": "[OK]", "✗": "[X]",
+        "·": "*", "∞": "inf",
+    }
+    safe = "".join(replacements.get(char, char) for char in safe)
+    return _shorten_long_code_separator_body(safe)[0]
 
 
 def _shorten_long_code_separator_body(code: str) -> tuple[str, int]:
@@ -2615,12 +2637,25 @@ def ensure_table_captions(markdown: str) -> str:
                 if embedded_caption:
                     if output and output[-1].strip():
                         output.append("")
-                    output.append(embedded_caption)
+                    output.append(re.sub(
+                        r"^(表|Table)\s*\d+",
+                        rf"\g<1>{table_index}",
+                        embedded_caption,
+                    ))
                 elif not TABLE_CAPTION_RE.match(previous):
                     title = _table_caption_title(context_heading, table)
                     if output and output[-1].strip():
                         output.append("")
                     output.append(f"表{table_index} {title}")
+                else:
+                    for output_index in range(len(output) - 1, -1, -1):
+                        if output[output_index].strip():
+                            output[output_index] = re.sub(
+                                r"^(表|Table)\s*\d+",
+                                rf"\g<1>{table_index}",
+                                output[output_index].strip(),
+                            )
+                            break
                 # Pandoc requires a blank line between a standalone caption and
                 # a pipe table. Enforce it even when Writer already supplied
                 # the caption; otherwise the raw Markdown may leak into PDF.
@@ -2761,6 +2796,30 @@ def _check_math_dollar_spacing(markdown: str) -> dict:
     return {"passed": not issues, "issues": issues[:50]}
 
 
+def normalize_continuous_quantity_wording(markdown: str) -> tuple[str, int]:
+    """Make fractional LP quantities explicit continuous production equivalents."""
+    visible = _without_fenced_code_blocks(markdown)
+    appendix_match = re.search(r"(?m)^#{1,6}\s+附录", visible)
+    body = visible[: appendix_match.start()] if appendix_match else visible
+    if not re.search(r"连续型?线性规划|连续变量|允许小数解|任意非负实数|资源可分割", body):
+        return markdown, 0
+
+    def rewrite_prose(prose: str) -> tuple[str, int]:
+        chunks = re.split(r"(```[\\s\\S]*?```|~~~[\\s\\S]*?~~~)", prose)
+        changed = 0
+        for index in range(0, len(chunks), 2):
+            chunks[index], count = re.subn(
+                r"生产约\s*(\d+\.\d+)\s*件",
+                r"生产约 \1 个连续生产当量",
+                chunks[index],
+            )
+            changed += count
+        return "".join(chunks), changed
+
+    rewritten, count = rewrite_prose(markdown)
+    return rewritten, count
+
+
 def _check_continuous_quantity_wording(markdown: str) -> dict:
     """Flag decimal production results that are presented as literal whole pieces.
 
@@ -2782,7 +2841,12 @@ def _check_continuous_quantity_wording(markdown: str) -> dict:
     ambiguous_units: list[dict] = []
     if continuous_declared:
         for line_number, line in enumerate(body.splitlines(), 1):
-            for match in re.finditer(r"(?<![\w.])\d+\.\d+\s*件", line):
+            for match in re.finditer(r"(?<![\w.])\d+\.(\d+)\s*件", line):
+                # Values explicitly labelled as continuous production
+                # equivalents are already unambiguous in the paper.
+                context = line[max(0, match.start() - 24) : match.end() + 24]
+                if "连续生产当量" in context or set(match.group(1)) <= {"0"}:
+                    continue
                 ambiguous_units.append(
                     {
                         "line": line_number,
@@ -2927,17 +2991,16 @@ def _section_kind(title: str) -> str:
 
 
 def _normalize_sync_text(text: str) -> str:
-    """Strip footnote/uuid markers and all whitespace for cross-artifact compare.
+    """Strip reference markers/definitions and formatting for cross-artifact compare.
 
-    后处理链会重排表格与数学排版（表格对齐、LaTeX 间距命令），剔除这些纯
-    格式字符以免把排版差异误判为内容世代差异。剥除顺序：先剥 ``{[^n]: ...}``
-    内联引用定义（引用元数据，组装时被消费为文末文献节），再剥 [^n]/uuid/[n]
-    引用标记——顺序颠倒会把定义块残成 {:...} 永不匹配。
+    后处理链会将 Writer 分节里的脚注定义搬到统一参考文献区，并把正文
+    ``[^n]`` 改写为 ``[n]``；同时还会重排表格与数学排版。剥除顺序：先剥
+    ``{[^n]: ...}`` 内联引用定义（引用元数据，组装时被消费为文末文献节），
+    再剥 [^n]/uuid/[n] 标记——顺序颠倒会把定义块残成 {:...} 永不匹配。
     """
-    text = re.sub(r"\{\[\^\d+\][^}]*\}", "", text)
-    text = re.sub(r"\[\^[^\]]+\]", "", text)
+    text = re.sub(r"\{\[\^\d+\][^{}]*\}", "", text)
+    text = re.sub(r"\[\^?\d+\]", "", text)
     text = re.sub(r"\[[0-9a-fA-F-]{36}\]", "", text)
-    text = re.sub(r"\[\d+\]", "", text)
     text = re.sub(r"\\[,;!]", "", text)
     text = text.replace("|", "").replace("$", "")
     return re.sub(r"\s+", "", text)
@@ -3993,42 +4056,53 @@ def _check_freeze_integrity(work_dir: str) -> dict:
     }
 
 
-def _algorithm_code_evidence(work_dir: str) -> tuple[str, list[str]]:
+def _algorithm_code_evidence(
+    work_dir: str, source_names: list[str] | None = None
+) -> tuple[str, list[str]]:
     sources = collect_code_sources(work_dir)
+    if source_names is not None:
+        allowed = {str(name).replace("\\", "/") for name in source_names}
+        sources = [source for source in sources if source.name in allowed]
     return "\n".join(source.code.lower() for source in sources), [source.name for source in sources]
 
 
-def _check_algorithm_evidence(work_dir: str, markdown: str) -> dict:
-    """Reject declared optimization methods that cannot be found in executed code."""
+def _check_algorithm_evidence(
+    work_dir: str, markdown: str, code_sources: list[str] | None = None
+) -> dict:
+    """Reject current optimization-method claims that lack executed-code evidence."""
     body, _ = _reference_body_parts(_without_fenced_code_blocks(markdown))
-    code_text, source_names = _algorithm_code_evidence(work_dir)
+    code_text, source_names = _algorithm_code_evidence(work_dir, code_sources)
     claims: list[dict] = []
+    excluded_claims: list[dict] = []
+    sentences = _sentences_with_offsets(body)
     for algorithm, (claim_pattern, evidence_tokens) in ALGORITHM_CLAIMS.items():
         declared_matches = list(claim_pattern.finditer(body))
         if not declared_matches:
             continue
-        # “可升级为遗传算法”等未来改进建议不等于已在本次求解中采用；只有
-        # 当前任务的实际算法声明才应当要求代码证据。
+        # Future, comparison, negation and pending-recalculation wording is not
+        # evidence that the current task used the named algorithm.  Only an
+        # explicit current-method construction is checked as a hard claim.
         actual_matches = []
         for match in declared_matches:
-            # Scope negation/future wording to the same sentence.  A character
-            # window makes a genuine later statement such as “本文采用遗传算法”
-            # disappear merely because the previous sentence discussed a
-            # hypothetical or rejected genetic algorithm.
             context = next(
                 (
                     sentence
-                    for offset, sentence in _sentences_with_offsets(body)
+                    for offset, sentence in sentences
                     if offset <= match.start() < offset + len(sentence)
                 ),
                 body[match.start() : match.end()],
             )
+            reason = None
             if FUTURE_ALGORITHM_CONTEXT_RE.search(context):
-                continue
-            # A comparison that explicitly says an algorithm was not used is
-            # not an implementation claim.  Keep this intentionally narrow:
-            # actual claims such as “本文采用遗传算法” still require evidence.
-            if NON_IMPLEMENTED_ALGORITHM_CONTEXT_RE.search(context):
+                reason = "future_or_improvement"
+            elif NON_IMPLEMENTED_ALGORITHM_CONTEXT_RE.search(context):
+                reason = "comparison_or_not_implemented"
+            elif not CURRENT_ALGORITHM_CLAIM_RE.search(context):
+                reason = "context_without_current_method_claim"
+            if reason:
+                excluded_claims.append(
+                    {"algorithm": algorithm, "reason": reason, "context": context[:240]}
+                )
                 continue
             actual_matches.append(match)
         if not actual_matches:
@@ -4046,7 +4120,12 @@ def _check_algorithm_evidence(work_dir: str, markdown: str) -> dict:
                 "sources": source_names if evidence_found else [],
             }
         )
-    return {"passed": all(item["implemented"] for item in claims), "claims": claims}
+    return {
+        "passed": all(item["implemented"] for item in claims),
+        "claims": claims,
+        "excluded_claims": excluded_claims,
+        "evidence_sources": source_names,
+    }
 
 
 def _infeasible_subtask_markers(subtask: dict) -> list[str]:
@@ -4701,7 +4780,9 @@ def build_preflight_report(
     export_profile_check = _check_export_profile(export_profile)
     result_consistency_check = _check_result_consistency(work_dir, markdown)
     freeze_integrity_check = _check_freeze_integrity(work_dir)
-    algorithm_evidence_check = _check_algorithm_evidence(work_dir, markdown)
+    algorithm_evidence_check = _check_algorithm_evidence(
+        work_dir, markdown, code_sources=code_sources
+    )
     infeasible_optimality_check = _check_infeasible_optimality_claims(work_dir, markdown)
     figure_result_consistency_check = _check_figure_result_consistency(work_dir, markdown)
     reference_relevance_check = _check_reference_relevance(markdown)
@@ -5332,6 +5413,23 @@ def prepare_paper_markdown(
     markdown, removed_empty_references = remove_empty_reference_section(markdown)
     markdown = normalize_keywords(markdown)
     markdown = normalize_cjk_inline_spacing(markdown)
+    markdown, normalized_continuous_quantities = normalize_continuous_quantity_wording(markdown)
+    abstract_heading = re.search(r"(?m)^##\s+摘要\s*$", markdown)
+    if abstract_heading:
+        abstract_end = re.search(
+            r"(?m)^关键词\s*[：:]", markdown[abstract_heading.end() :]
+        )
+        if abstract_end:
+            start = abstract_heading.end()
+            end = start + abstract_end.start()
+            abstract_body = markdown[start:end]
+            abstract_body = re.sub(
+                r"(?<!\n)(针对问题二)", r"\n\n\1", abstract_body, count=1
+            )
+            abstract_body = re.sub(
+                r"(?<!\n)(敏感性分析层面)", r"\n\n\1", abstract_body, count=1
+            )
+            markdown = markdown[:start] + abstract_body + markdown[end:]
     markdown, removed_missing_images = remove_missing_image_references(markdown, work_dir)
     markdown, shortened_code_separators = shorten_long_code_separator_lines(markdown)
     markdown, normalised_extra_problem_labels = normalize_extra_problem_labels(

@@ -72,3 +72,7 @@
   980 全量 OK。
 - [09-05/06 后续修复] PR #56 禁思考参数不被支持时剥离 extra_body 重试（GLM-5.3/tokenrouter
   实测 400）；#57 modeler 校验失败日志附原文片段；#58 资产追溯兼容 quesN 单键+重复章节键豁免。
+- [09-06 算法证据门禁] 独立分支 `fix/algorithm-evidence-ledger-v2`：当前方法声明硬阻断，未来/比较/待复算算法语境排除并留 `excluded_claims`；证据复用最终代码附录集合。`test_gate_hardening`、论文修订/候选/工作流共 228 项定向测试 + `ruff check app` 通过；详见 docs/memory/2026-09.md。
+- [09-06 LP 导出恢复] task `20260906-033157-bd8195551a4a760570d999c09194c6ab` 冻结结果与执行证据 SHA 未变；`res_json_sync`、`algorithm_evidence` PASS，确定性 export-only 修复后 `preflight/pdf_visual/submission_audit=PASS`、`final_acceptance=TECHNICAL_PASS`、状态 `completed`。
+- [09-06 失败恢复闭环] 初始 workflow 只在 final acceptance 失败后报告 `failed`，未自动继续导出修复；现对仅涉及视觉/新鲜度/清单重绑的失败持久化一次 `presentation_reflow_pending_export`，无 Provider/无数值重跑重建全链；执行证据、冻结哈希、算法、匿名、字体/模板等实质失败仍 fail-closed，预算耗尽不循环。详见 `STARTUP.md`、`docs/md/PDF模板导出说明.md`、`docs/md/CUMCM_FINAL_REVIEW_CHECKLIST.md`。
+- [09-06 匿名审计误报] `submission_audit` 改为跳过 manifest 的 sha256/sha1/md5/hash/digest 校验值，仅扫描提交文件名、显式身份字段和路径；39 项匿名审计 + 236 项定向回归通过。LP 任务刷新审计后匿名检查 PASS，但随后并发进程更新 `res.md/res.json`，故未重绑 manifest/final acceptance；冻结/执行证据 SHA 仍为 `ea38a3c6...` / `bb30986d...`。详见 docs/memory/2026-09.md。

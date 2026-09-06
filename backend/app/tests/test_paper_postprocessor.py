@@ -455,6 +455,16 @@ class TestNormalizeChineseReferences(unittest.TestCase):
 
         self.assertTrue(report["checks"]["continuous_quantity_wording"]["passed"])
 
+    def test_integer_values_with_fixed_decimal_precision_are_accepted(self):
+        markdown = (
+            "本文采用连续型线性规划并允许小数解。\n\n"
+            "结果表明产品A为40.000 件、产品B为20.000 件。\n"
+        )
+        report = build_preflight_report(
+            work_dir=tempfile.gettempdir(), markdown=markdown, code_sources=[]
+        )
+        self.assertTrue(report["checks"]["continuous_quantity_wording"]["passed"])
+
     def test_fractional_piece_wording_in_code_appendix_is_ignored(self):
         markdown = (
             "本文采用连续型线性规划并允许小数解。\n\n"

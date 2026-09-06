@@ -698,6 +698,72 @@ class TestSubmissionAudit(unittest.TestCase):
             self.assertFalse(check["passed"])
             self.assertEqual(check["severity"], "error")
 
+    def test_submission_anonymity_ignores_hash_values_in_manifest(self):
+        """校验哈希中的手机号样式片段不应被当作真实联系方式。"""
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_required_success_files(
+                work_dir,
+                [{"preferred": "Times New Roman", "actual": "Times New Roman", "source": "profile"}],
+            )
+            hash_with_phone_shape = "a18123456789" + "0" * 52
+            _write_json(
+                work_dir,
+                "candidate_manifest.json",
+                {
+                    "artifact_hashes": {"res.pdf": hash_with_phone_shape},
+                    "support_materials": {
+                        "files": [
+                            {
+                                "path": "results.json",
+                                "sha256": hash_with_phone_shape,
+                            }
+                        ]
+                    },
+                },
+            )
+
+            report = audit_submission(work_dir, strict_anonymity=True)
+            check = next(item for item in report["checks"] if item["id"] == "submission_anonymity")
+            self.assertTrue(check["passed"], check)
+            self.assertEqual(check["evidence"]["high_confidence_count"], 0)
+
+    def test_submission_anonymity_still_scans_manifest_filenames_for_phone(self):
+        """清单中的真实提交文件名仍必须拦截手机号。"""
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_required_success_files(
+                work_dir,
+                [{"preferred": "Times New Roman", "actual": "Times New Roman", "source": "profile"}],
+            )
+            _write_json(
+                work_dir,
+                "candidate_manifest.json",
+                {"submission_file": "res_18123456789.pdf"},
+            )
+
+            report = audit_submission(work_dir, strict_anonymity=True)
+            check = next(item for item in report["checks"] if item["id"] == "submission_anonymity")
+            self.assertFalse(check["passed"], check)
+            self.assertTrue(
+                any(item["category"] == "phone" for item in check["evidence"]["high_confidence_findings"])
+            )
+
+    def test_submission_anonymity_scans_explicit_manifest_identity_fields(self):
+        """清单中的显式身份字段仍必须进入匿名门禁。"""
+        with tempfile.TemporaryDirectory() as work_dir:
+            _write_required_success_files(
+                work_dir,
+                [{"preferred": "Times New Roman", "actual": "Times New Roman", "source": "profile"}],
+            )
+            _write_json(
+                work_dir,
+                "candidate_manifest.json",
+                {"metadata": {"phone": "18123456789"}},
+            )
+
+            report = audit_submission(work_dir, strict_anonymity=True)
+            check = next(item for item in report["checks"] if item["id"] == "submission_anonymity")
+            self.assertFalse(check["passed"], check)
+
     def test_cross_modal_hash_windows_crlf_parity(self):
         """测试 Windows CRLF 换行符下跨模态报告哈希计算与 submission_audit 一致性。"""
         from app.tools.cross_modal_validator import audit_cross_modal

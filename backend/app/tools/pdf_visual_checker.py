@@ -21,9 +21,15 @@ CUMCM_MIN_CONTENT_MARGIN_PT = 2.5 / 2.54 * 72
 CUMCM_CONTENT_MARGIN_TOLERANCE_PT = 3.0
 MAX_CUMCM_PDF_SIZE_BYTES = 20 * 1024 * 1024
 MAX_CUMCM_BODY_PAGES = 20
-# 华数杯部署放宽（仅 huashubei profile 生效；cumcm2025/2026 与 default 维持原基线）：
+# CUMCM 2026 官方格式规范：正文不超过 30 页（摘要不计入）。cumcm2026 profile
+# 的硬门禁与编辑质量建议范围默认按该官方上限执行，不再使用内部 20 页基线。
+CUMCM2026_MAX_BODY_PAGES = 30
+# 用户指定的 cumcm2026 严格门禁下限（官方规范只设 30 页上限，15 页下限为内部
+# 交付质量要求）：cumcm2026 的正文页数必须落在 [15, 30] 区间内。
+CUMCM2026_MIN_BODY_PAGES = 15
+# 华数杯部署放宽（仅 huashubei profile 生效；cumcm2025 与 default 维持原基线）：
 HUASHUBEI_MIN_CONTENT_MARGIN_PT = 0.6 / 2.54 * 72  # 页边距允许至 0.6cm（公式略超右边距放行）
-HUASHUBEI_MAX_BODY_PAGES = 30  # 原则上正文<=20页；华数杯部署严格按新规正文<=30页（摘要不计入）。
+HUASHUBEI_MAX_BODY_PAGES = 30  # 华数杯部署严格按新规正文<=30页（摘要不计入）。
 HUASHUBEI_RIGHT_MARGIN_SLACK_PT = 20.0  # 允许公式/图略超右边距至页面边缘的额外余量
 HUASHUBEI_KEYWORDS_ANY_PAGE = True  # 关键词允许出现在摘要页之后的页面，不强制首页
 MAX_ABSTRACT_PAGES = 1  # 新规：摘要强制控制在首页单页内。
@@ -289,7 +295,10 @@ def _missing_glyph_sample(text: str, marker: str) -> str:
 
 
 def _check_body_page_limit(
-    page_texts: list[str], *, max_body_pages: int = MAX_CUMCM_BODY_PAGES
+    page_texts: list[str],
+    *,
+    max_body_pages: int = MAX_CUMCM_BODY_PAGES,
+    min_body_pages: int | None = None,
 ) -> dict:
     appendix_start_page = None
     for index, text in enumerate(page_texts, 1):
@@ -299,8 +308,10 @@ def _check_body_page_limit(
     body_end_page = appendix_start_page - 1 if appendix_start_page else len(page_texts)
     body_pages_after_abstract = max(0, body_end_page - 1)
     return {
-        "passed": body_pages_after_abstract <= max_body_pages,
+        "passed": body_pages_after_abstract <= max_body_pages
+        and (min_body_pages is None or body_pages_after_abstract >= min_body_pages),
         "body_pages_after_abstract": body_pages_after_abstract,
+        "min_body_pages": min_body_pages,
         "max_body_pages": max_body_pages,
         "appendix_start_page": appendix_start_page,
     }
@@ -537,13 +548,21 @@ def check_pdf_visual(
         ) or not 1.0 <= float(min_content_margin_cm) <= 5.0:
             raise ValueError("min_content_margin_cm 必须在 1.0 至 5.0 之间")
     if body_max_pages is None:
-        effective_body_max = (
-            HUASHUBEI_MAX_BODY_PAGES
-            if export_profile == "huashubei"
-            else MAX_CUMCM_BODY_PAGES
-        )
+        if export_profile == "cumcm2026":
+            effective_body_max = CUMCM2026_MAX_BODY_PAGES
+        elif export_profile == "huashubei":
+            effective_body_max = HUASHUBEI_MAX_BODY_PAGES
+        else:
+            effective_body_max = MAX_CUMCM_BODY_PAGES
     else:
         effective_body_max = body_max_pages
+    if body_min_pages is None:
+        # cumcm2026 严格门禁下限：正文不足 15 页同样阻断。
+        effective_body_min = (
+            CUMCM2026_MIN_BODY_PAGES if export_profile == "cumcm2026" else None
+        )
+    else:
+        effective_body_min = body_min_pages
     if min_content_margin_cm is None:
         if export_profile == "huashubei":
             # 华数杯部署放宽：正文页边距允许至 0.6cm（公式略超右边距放行）
@@ -655,7 +674,9 @@ def check_pdf_visual(
         },
         "page_count": {"passed": page_count > 0},
         "body_page_limit": _check_body_page_limit(
-            page_texts, max_body_pages=effective_body_max
+            page_texts,
+            max_body_pages=effective_body_max,
+            min_body_pages=effective_body_min,
         ),
         "abstract_on_single_page": _check_abstract_on_single_page(
             page_texts, max_abstract_pages=MAX_ABSTRACT_PAGES,
@@ -664,8 +685,10 @@ def check_pdf_visual(
             page_texts,
             first_page_coverage_ratio,
             quality_policy,
-            body_min_pages=body_min_pages,
-            body_max_pages=body_max_pages,
+            # 未显式覆盖时与硬门禁同源，使建议范围随 profile 对齐严格口径
+            # （cumcm2026 -> [15, 30] 页）。
+            body_min_pages=effective_body_min if body_min_pages is None else body_min_pages,
+            body_max_pages=effective_body_max if body_max_pages is None else body_max_pages,
         ),
         "a4_size": {
             "passed": bool(page_sizes) and all(item["a4"] for item in page_sizes),

@@ -60,7 +60,7 @@ class TestExportTemplateOverride(unittest.TestCase):
                         "min_abstract_paragraphs": 2,
                         "require_references": True,
                         "require_reference_style": True,
-                        "body_min_pages": 10,
+                        "body_min_pages": 15,
                         "body_max_pages": 20,
                     },
                 },
@@ -92,6 +92,9 @@ class TestExportTemplateOverride(unittest.TestCase):
             self.assertTrue(Path(loaded["docx_reference_doc"]).is_file())
             self.assertEqual(
                 loaded["format_contract"]["preflight"]["body_max_pages"], 20
+            )
+            self.assertEqual(
+                loaded["format_contract"]["preflight"]["body_min_pages"], 15
             )
             self.assertEqual(
                 get_editorial_policy_override(str(root), "cumcm2026")[
@@ -270,9 +273,45 @@ class TestExportTemplateOverride(unittest.TestCase):
             with self.assertRaisesRegex(TemplateOverrideError, "字体名称"):
                 validate_pdf_font_overrides({"CJKmainfont": "SimSun{bad}"})
 
+            official_cap = root / "official-cap.json"
+            official_cap.write_text(
+                json.dumps({"preflight": {"body_min_pages": 15, "body_max_pages": 30}}),
+                encoding="utf-8",
+            )
+            install_export_template_override(
+                str(root), "cumcm2026", format_contract_path=str(official_cap)
+            )
+            self.assertEqual(
+                get_pdf_visual_constraints(str(root), "cumcm2026")["body_max_pages"],
+                30,
+            )
+
+            legacy_min = root / "legacy-min.json"
+            legacy_min.write_text(
+                json.dumps({"preflight": {"body_min_pages": 10, "body_max_pages": 30}}),
+                encoding="utf-8",
+            )
+            install_export_template_override(
+                str(root), "cumcm2025", format_contract_path=str(legacy_min)
+            )
+            self.assertEqual(
+                get_pdf_visual_constraints(str(root), "cumcm2025")["body_min_pages"],
+                10,
+            )
+
+            below_strict_floor = root / "below-strict-floor.json"
+            below_strict_floor.write_text(
+                json.dumps({"preflight": {"body_min_pages": 14, "body_max_pages": 30}}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(TemplateOverrideError, "只能保持在内部范围内"):
+                install_export_template_override(
+                    str(root), "cumcm2026", format_contract_path=str(below_strict_floor)
+                )
+
             relaxed = root / "relaxed.json"
             relaxed.write_text(
-                json.dumps({"preflight": {"body_min_pages": 0, "body_max_pages": 30}}),
+                json.dumps({"preflight": {"body_min_pages": 0, "body_max_pages": 31}}),
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(TemplateOverrideError, "只能"):

@@ -76,7 +76,12 @@ _RISKY_DOCX_PREFIXES = ("word/activex/", "word/embeddings/", "customui/")
 # reviewed code/profile change, rather than an untrusted JSON switch.
 _MIN_ABSTRACT_PARAGRAPHS = 2
 _MIN_EDITORIAL_BODY_PAGES = 10
-_MAX_EDITORIAL_BODY_PAGES = 20
+# 上限对齐 CUMCM 2026 官方口径“正文不超过 30 页”；合同仍只能保持或收紧，
+# 不能放宽到 30 页以上。
+_MAX_EDITORIAL_BODY_PAGES = 30
+# cumcm2026 的严格门禁下限（用户指定，官方仅设 30 页上限）：该 profile 的合同
+# body_min_pages/body_max_pages 不得低于 15。
+_CUMCM2026_MIN_BODY_PAGES = 15
 _MIN_CONTENT_MARGIN_CM = 2.5
 
 TEMPLATE_OVERRIDE_AUDIT_FIELDS = (
@@ -328,11 +333,19 @@ def _normalise_pdf_contract(raw: object) -> dict[str, Any]:
     return {"variables": result, "min_content_margin_cm": margin}
 
 
-def _normalise_preflight_contract(raw: object) -> dict[str, Any]:
+def _normalise_preflight_contract(
+    raw: object, *, export_profile: object = None
+) -> dict[str, Any]:
     if raw is None:
         return {}
     if not isinstance(raw, dict) or set(raw) - _PREFLIGHT_FIELDS:
         raise TemplateOverrideError("preflight 合同包含不支持的字段")
+    profile_value = normalize_export_profile(export_profile).value
+    min_floor = (
+        _CUMCM2026_MIN_BODY_PAGES
+        if profile_value == "cumcm2026"
+        else _MIN_EDITORIAL_BODY_PAGES
+    )
     result: dict[str, Any] = {}
     for name in ("min_abstract_paragraphs", "body_min_pages", "body_max_pages"):
         if name in raw:
@@ -346,23 +359,12 @@ def _normalise_preflight_contract(raw: object) -> dict[str, Any]:
                 raise TemplateOverrideError(
                     "min_abstract_paragraphs 只能保持或提高内部下限（2 至 10）"
                 )
-            if (
-                name == "body_min_pages"
-                and not _MIN_EDITORIAL_BODY_PAGES
-                <= value
-                <= _MAX_EDITORIAL_BODY_PAGES
+            if name in ("body_min_pages", "body_max_pages") and not (
+                min_floor <= value <= _MAX_EDITORIAL_BODY_PAGES
             ):
                 raise TemplateOverrideError(
-                    "body_min_pages 只能保持或提高内部下限（10 至 20）"
-                )
-            if (
-                name == "body_max_pages"
-                and not _MIN_EDITORIAL_BODY_PAGES
-                <= value
-                <= _MAX_EDITORIAL_BODY_PAGES
-            ):
-                raise TemplateOverrideError(
-                    "body_max_pages 只能保持或收紧内部上限（10 至 20）"
+                    f"{name} 只能保持在内部范围内"
+                    f"（{min_floor} 至 {_MAX_EDITORIAL_BODY_PAGES}）"
                 )
             result[name] = value
     for name in ("require_references", "require_reference_style"):
@@ -372,14 +374,21 @@ def _normalise_preflight_contract(raw: object) -> dict[str, Any]:
             if raw[name] is False:
                 raise TemplateOverrideError(f"{name} 不能关闭内部正式交付门禁")
             result[name] = raw[name]
-    minimum = result.get("body_min_pages", _MIN_EDITORIAL_BODY_PAGES)
+    minimum = result.get(
+        "body_min_pages",
+        _CUMCM2026_MIN_BODY_PAGES
+        if profile_value == "cumcm2026"
+        else _MIN_EDITORIAL_BODY_PAGES,
+    )
     maximum = result.get("body_max_pages", _MAX_EDITORIAL_BODY_PAGES)
     if minimum > maximum:
         raise TemplateOverrideError("body_min_pages 不能大于 body_max_pages")
     return result
 
 
-def normalise_format_contract(raw: object) -> dict[str, Any]:
+def normalise_format_contract(
+    raw: object, *, export_profile: object = None
+) -> dict[str, Any]:
     """Validate a user-supplied JSON layout contract into a small safe subset."""
     if not isinstance(raw, dict):
         raise TemplateOverrideError("版式合同必须是 JSON 对象")
@@ -414,7 +423,9 @@ def normalise_format_contract(raw: object) -> dict[str, Any]:
         "official_rule": False,
         "docx": _normalise_docx_contract(raw.get("docx")),
         "pdf": _normalise_pdf_contract(raw.get("pdf")),
-        "preflight": _normalise_preflight_contract(raw.get("preflight")),
+        "preflight": _normalise_preflight_contract(
+            raw.get("preflight"), export_profile=export_profile
+        ),
     }
 
 
@@ -456,7 +467,9 @@ def load_export_template_override(work_dir: str, export_profile: object) -> dict
     if not isinstance(entry, dict):
         raise TemplateOverrideError("模板覆盖 profile 条目无效")
 
-    contract = normalise_format_contract(entry.get("format_contract", {}))
+    contract = normalise_format_contract(
+        entry.get("format_contract", {}), export_profile=profile
+    )
     expected_contract_hash = entry.get("format_contract_sha256")
     if expected_contract_hash != _canonical_sha256(contract):
         raise TemplateOverrideError("版式合同哈希不匹配；请重新导入模板")
@@ -596,11 +609,15 @@ def install_export_template_override(
         raw_contract = _read_json(
             contract_source, max_bytes=MAX_CONTRACT_BYTES, kind="版式合同 JSON"
         )
-        contract = normalise_format_contract(raw_contract)
+        contract = normalise_format_contract(raw_contract, export_profile=profile)
     elif isinstance(entry.get("format_contract"), dict):
-        contract = normalise_format_contract(entry["format_contract"])
+        contract = normalise_format_contract(
+            entry["format_contract"], export_profile=profile
+        )
     else:
-        contract = normalise_format_contract({"label": label or "用户提供的竞赛版式合同"})
+        contract = normalise_format_contract(
+            {"label": label or "用户提供的竞赛版式合同"}, export_profile=profile
+        )
     if label:
         contract["label"] = _safe_text(label, "label")
 

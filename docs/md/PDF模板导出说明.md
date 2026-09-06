@@ -196,6 +196,43 @@ PyMuPDF 打开且至少包含一页；只有 `%PDF-` 文件头或损坏的占位
 `POST /modeling/<task_id>/resume`。该路径重建 Markdown/DOCX/PDF/LaTeX 与审计，但不调用 provider、不能改写
 Writer 正文、结果、证据或冻结值；它不是第二次内容润色预算。
 
+### 受控修复与执行质量复核入口
+
+论文与执行侧的受控修复入口汇总如下；审批接口的完整命令示例见
+`docs/md/任务接管与引导接口.md`。
+
+- **数学执行与结果冻结门禁**：新任务会写入 `problem_contract.json` 固定题面参数；
+  每个正式 `quesN` 必须通过受控 `record_execution_evidence` 登记真实执行、可行性、
+  约束、来源 SHA-256、指标与图表数据来源，模型不得手写 manifest 或哈希。工作流仅在
+  `execution_validation_report.json = PASS` 后生成 `frozen_results.json` 并启动 Writer；
+  摘要、正文、图题和结论中的计算数值只能使用冻结结果。缺少 manifest、notebook 有未解决
+  执行错误、约束不满足、优化变量缺失或来源哈希变化都会阻止论文写作与任务完成。
+- **执行质量复核（execution-review）**：冻结后先生成 `execution_quality_review.json/md`。
+  结果表明确标记"不达标/失败"或出现 NaN/Inf，或启用 `require_model_review=true` 时，
+  任务停在 `waiting_quality_review`，Writer 不启动。审查者读取题面、ModelPlan、代码、
+  结果 CSV 和复核报告后调用 `POST /modeling/<task_id>/execution-review`：`repair` 只让
+  指定子题回到 Coder 并使依赖旧冻结事实的 Writer 文本失效；`approve` 才进入 Writer。
+  审批只绑定当前结果文件哈希，结果变化后必须重审；返修最多一次，普通 `/resume` 不能
+  绕过该状态。直接手改 CSV、manifest、冻结结果或论文数值不属于可信接管流程。
+- **预检 FAIL 的受控论文候选修复**：冻结结果与 Writer hand-off 完整但
+  `paper_preflight_report.json = FAIL` 且自动 Writer 回修已停止时，不得直接手改
+  `res.md`。在任务目录 `internal/` 写入完整章节替换 JSON（`sections` 必须覆盖当前所有
+  Writer 阶段，另附 `comment`），在 **backend 容器内**运行
+  `docker compose exec backend uv run python -m app.tools.paper_repair_candidate_cli <task_id> internal/<candidate>.json`，
+  再调用普通 `POST /modeling/<task_id>/resume` 触发正式预检与导出。该入口仅接受冻结状态、
+  一次未用的论文修复预算和当前预检 `FAIL`；它先在隔离副本预检，且只能同步更新论文
+  Markdown/JSON 与对应 Writer hand-off，不调用 provider，也不能修改代码、结果
+  CSV/XLSX、执行证据或冻结结果。
+- **已完成论文的受控编辑质量返修**：任务已在 `paper_preflight_passed` 或 `completed`，
+  但重新执行内部编辑质量预检后为 `FAIL` 时，同一 CLI 追加 `--editorial-quality`。它使用
+  独立的一次 `editorial_repair_attempts` 预算，要求冻结结果与完整 Writer hand-off 均仍
+  有效，并先在隔离副本通过同一套严格预检；成功后只更新论文 Markdown/JSON、Writer
+  hand-off 与候选审计。
+- **门禁失败时不要先补导 PDF**：任务 `failed` 且消息为"代码执行/数值可行性门禁未通过"
+  时，先打开 `execution_validation_report.json` 逐问修复证据缺口；此时 Writer 尚未运行，
+  `res.pdf` 缺失是预期保护行为，强行导出不能让任务变为可验收。
+- 上述候选应用成功不等于竞赛人工验收；仍须检查重建后的 PDF/DOCX、提交规则和建模口径。
+
 已归档的 E2B 真实轻量线性规划任务 `20260711-133616-38439fe3` 使用
 OpenAI Responses 兼容运行配置和 `export_profile=cumcm2026`，通过下列主交付与严格字体验收：
 

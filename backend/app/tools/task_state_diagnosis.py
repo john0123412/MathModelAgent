@@ -110,7 +110,9 @@ def diagnose_task_state(work_dir: str | os.PathLike[str]) -> dict[str, Any]:
         elif technical and technical != "TECHNICAL_PASS":
             verdict = "CONTRADICTION"
             issues.append(f"主产物齐全但 final_acceptance={technical!r}，completed 不成立。")
-        elif workflow_state in _EXPORT_TRANSITIONAL:
+        elif verdict == "CONSISTENT" and workflow_state in _EXPORT_TRANSITIONAL:
+            # 只把"无任何矛盾"的待导出态标为设计内过渡；已判 CONTRADICTION
+            # （如 repair_requested 未执行）不得被覆盖淡化。
             verdict = "TRANSITIONAL_EXPORT"
             issues.append(
                 "内部状态为候选返修后的待导出态：允许仅导出续传，属设计内过渡，不是缺陷。"

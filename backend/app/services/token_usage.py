@@ -94,6 +94,7 @@ def record_token_usage(
     agent_name: str,
     model: str | None,
     usage: Usage | None,
+    duration_seconds: float | None = None,
 ) -> None:
     """记录一次 LLM 调用的 token usage，只保存聚合数字。"""
     if not task_id:
@@ -105,7 +106,9 @@ def record_token_usage(
             from app.utils.common_utils import get_work_dir as _get_wd
 
             wd = _get_wd(task_id)
-            _record_budget_unknown(wd, task_id, known_tokens=None, duration_seconds=None)
+            _record_budget_unknown(
+                wd, task_id, known_tokens=None, duration_seconds=duration_seconds
+            )
         except Exception:
             pass
         return
@@ -160,7 +163,12 @@ def record_token_usage(
         from app.services.task_budget import record_provider_call as _record_budget
 
         wd = common_utils.get_work_dir(safe_task_id)
-        _record_budget(wd, safe_task_id, known_tokens=total_tokens, duration_seconds=None)
+        _record_budget(
+            wd,
+            safe_task_id,
+            known_tokens=total_tokens,
+            duration_seconds=duration_seconds,
+        )
     except Exception:
         pass
 

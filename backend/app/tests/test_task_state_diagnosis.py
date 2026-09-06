@@ -75,6 +75,15 @@ class DiagnoseTest(unittest.TestCase):
             _seed(work_dir, external="completed", workflow_state="paper_repair_pending_export")
             self.assertEqual(diagnose_task_state(work_dir)["verdict"], "TRANSITIONAL_EXPORT")
 
+    def test_pending_export_with_unexecuted_repair_is_contradiction(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            # codex 审计场景：TRANSITIONAL_EXPORT 不得覆盖未执行返修的矛盾。
+            _seed(work_dir, external="completed", workflow_state="paper_repair_pending_export",
+                  quality_status="repair_requested")
+            diagnosis = diagnose_task_state(work_dir)
+            self.assertEqual(diagnosis["verdict"], "CONTRADICTION")
+            self.assertTrue(any("repair_requested" in i for i in diagnosis["issues"]))
+
     def test_completed_with_missing_artifact_is_contradiction(self):
         with tempfile.TemporaryDirectory() as work_dir:
             _seed(work_dir, external="completed", workflow_state="paper_preflight_passed",

@@ -197,7 +197,7 @@ def _stage_and_preflight(
             editorial_policy=editorial_policy,
             template_override_audit=template_override_audit,
         )
-        if report.get("status") != "PASS":
+        if report.get("status") not in ("PASS", "CONDITIONAL_PASS"):
             failures = [
                 key
                 for key, value in (report.get("checks") or {}).items()

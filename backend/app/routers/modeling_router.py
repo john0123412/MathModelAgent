@@ -39,6 +39,10 @@ from app.tools.candidate_exporter import write_candidate_manifest
 from app.tools.submission_audit import write_submission_audit_report
 from app.tools.final_acceptance import write_final_acceptance_report
 from app.tools.execution_quality_review import build_execution_quality_review
+from app.tools.paper_repair_candidate import (
+    PaperRepairCandidateError,
+    run_presentation_reflow,
+)
 import os
 import re
 import asyncio
@@ -397,6 +401,131 @@ def _finalize_docx_and_manifest(
             except FileNotFoundError:
                 pass
         raise
+
+
+_EXPORT_ONLY_RECOVERY_FINAL_CHECKS = frozenset(
+    {
+        "primary_deliverables",
+        "required_reports",
+        "pdf_visual_check",
+        "submission_audit_report",
+        "editorial_quality_gate",
+        "artifact_freshness",
+        "paper_revision",
+        "complete_source_appendix",
+    }
+)
+_EXPORT_ONLY_RECOVERY_AUDIT_CHECKS = frozenset(
+    {
+        "required_files",
+        "required_reports",
+        "paper_preflight",
+        "pdf_visual_check",
+        "submission_file",
+        "docx_markdown_heading_leakage",
+        "docx_format_contract",
+        "template_override_integrity",
+    }
+)
+
+
+def _final_acceptance_failed_ids(report: dict) -> set[str]:
+    checks = report.get("checks") if isinstance(report, dict) else None
+    if not isinstance(checks, list):
+        return set()
+    return {
+        str(item.get("id"))
+        for item in checks
+        if isinstance(item, dict) and item.get("passed") is False and item.get("id")
+    }
+
+
+def _export_only_recovery_is_safe(work_dir: str, report: dict) -> bool:
+    """Allow one deterministic export retry, never a numerical or evidence retry."""
+    failed = _final_acceptance_failed_ids(report)
+    if not failed or not failed.issubset(_EXPORT_ONLY_RECOVERY_FINAL_CHECKS):
+        return False
+    if "submission_audit_report" not in failed:
+        return True
+
+    audit_path = os.path.join(work_dir, "submission_audit_report.json")
+    try:
+        with open(audit_path, encoding="utf-8") as handle:
+            audit = json.load(handle)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        # A missing/stale report is exactly what the export-only pass rebuilds.
+        return True
+    checks = audit.get("checks") if isinstance(audit, dict) else None
+    if not isinstance(checks, list):
+        return True
+    failed_audit = {
+        str(item.get("id"))
+        for item in checks
+        if isinstance(item, dict)
+        and item.get("passed") is False
+        and item.get("id")
+    }
+    return bool(failed_audit) and failed_audit.issubset(_EXPORT_ONLY_RECOVERY_AUDIT_CHECKS)
+
+
+async def _recover_final_acceptance_export_only(
+    task_id: str,
+    export_profile: ExportProfile | str | None,
+    cancel_event: asyncio.Event,
+    report: dict,
+) -> dict | None:
+    """Run one provider-free reflow when final failures are export-only.
+
+    The staged reflow persists its one-use budget in ``checkpoint.json``.  A
+    second failure therefore cannot loop: the next final report is surfaced as
+    a real task failure for explicit human/provider/model recovery.
+    """
+    work_dir = get_work_dir(task_id)
+    if not _export_only_recovery_is_safe(work_dir, report):
+        return None
+    try:
+        run_presentation_reflow(task_id)
+    except PaperRepairCandidateError as exc:
+        logger.warning("跳过自动导出恢复: {}", str(exc))
+        return None
+
+    await _safe_publish_message(
+        task_id,
+        SystemMessage(
+            content="最终技术验收发现可确定性修复的导出问题，开始一次无 Provider 版式/报告重建",
+            type="warning",
+        ),
+    )
+    try:
+        workflow = MathModelWorkFlow()
+        workflow.cancel_event = cancel_event
+        resumed = await workflow.resume(
+            task_id,
+            recovery_context="最终验收导出门禁失败，执行一次确定性 export-only 重建；不得调用 Provider 或重跑数值求解。",
+        )
+        if resumed is not None:
+            raise RuntimeError(f"导出恢复返回了意外状态: {resumed}")
+        checkpoint = CheckpointManager(work_dir).load()
+        profile = (
+            checkpoint.export_profile
+            if checkpoint is not None
+            else export_profile or DEFAULT_MODELING_EXPORT_PROFILE
+        )
+        return await asyncio.to_thread(
+            _finalize_docx_and_manifest,
+            task_id,
+            profile,
+        )
+    except Exception as exc:
+        logger.error("确定性导出恢复失败: {}", type(exc).__name__)
+        await _safe_publish_message(
+            task_id,
+            SystemMessage(
+                content=f"确定性导出恢复失败: {exc}",
+                type="error",
+            ),
+        )
+        return None
 
 
 async def _apply_final_acceptance_status(task_id: str, report: dict) -> bool:
@@ -1160,6 +1289,12 @@ async def run_modeling_task_async(
             _write_cancelled_status_if_active(task_id, "任务在导出后已取消")
             await _safe_publish_message(task_id, SystemMessage(content="任务在导出后已取消", type="warning"))
             return
+        if final_report.get("technical_status") != "TECHNICAL_PASS":
+            recovered_report = await _recover_final_acceptance_export_only(
+                task_id, export_profile, cancel_event, final_report
+            )
+            if recovered_report is not None:
+                final_report = recovered_report
         if not await _apply_final_acceptance_status(task_id, final_report):
             return
     except asyncio.CancelledError:
@@ -2389,6 +2524,12 @@ async def run_resume_task_async(
             _write_cancelled_status_if_active(task_id, "任务在导出后已取消")
             await _safe_publish_message(task_id, SystemMessage(content="任务在导出后已取消", type="warning"))
             return
+        if final_report.get("technical_status") != "TECHNICAL_PASS":
+            recovered_report = await _recover_final_acceptance_export_only(
+                task_id, export_profile, cancel_event, final_report
+            )
+            if recovered_report is not None:
+                final_report = recovered_report
         if not await _apply_final_acceptance_status(task_id, final_report):
             return
     except asyncio.CancelledError:

@@ -75,7 +75,7 @@ class TestPaperRepairCandidate(unittest.TestCase):
             )
             candidate = _candidate(root, keys)
 
-            staged = {"status": "PASS", "source_sha256": "staged"}
+            staged = {"status": "CONDITIONAL_PASS", "source_sha256": "staged"}
             with (
                 patch("app.tools.paper_repair_candidate.get_work_dir", return_value=str(root)),
                 patch(

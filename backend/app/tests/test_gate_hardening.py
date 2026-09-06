@@ -82,6 +82,66 @@ class AlgorithmClaimGateExtensionTest(unittest.TestCase):
         )
         self.assertEqual(check["claims"], [])
 
+    def test_future_context_after_algorithm_name_stays_exempt(self):
+        check = self._run(
+            "遗传算法可作为后续改进方向，混合整数规划留作进一步研究。",
+            "x = 1\n",
+        )
+        self.assertTrue(check["passed"], check)
+        self.assertEqual(check["claims"], [])
+        self.assertEqual(len(check["excluded_claims"]), 2)
+
+    def test_comparison_with_ga_and_pso_stays_exempt(self):
+        check = self._run(
+            "相较于 GA/PSO，本文采用线性规划完成当前求解。",
+            "from scipy.optimize import linprog\n",
+        )
+        self.assertTrue(check["passed"], check)
+        self.assertEqual(check["claims"], [])
+
+    def test_current_ga_claim_without_evidence_still_fails(self):
+        check = self._run("本文采用 GA 完成当前求解。", "x = 1\n")
+        self.assertFalse(check["passed"], check)
+        self.assertIn("genetic_algorithm", {item["algorithm"] for item in check["claims"]})
+
+    def test_pending_milp_recalculation_stays_exempt(self):
+        check = self._run(
+            "后续需在混合整数规划框架下重新求解，以评估整数化损失。",
+            "from scipy.optimize import linprog\n",
+        )
+        self.assertTrue(check["passed"], check)
+        self.assertEqual(check["claims"], [])
+
+
+class NotebookParityTest(unittest.TestCase):
+    def test_notebook_code_cells_are_scanned_as_python(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            notebook = {
+                "cells": [
+                    {"cell_type": "markdown", "source": ["result_table.to_csv('fake.csv')"]},
+                    {"cell_type": "code", "source": ["result_table.to_csv('ques1_results.csv', index=False)\n"]},
+                ]
+            }
+            path = os.path.join(work_dir, "notebook.ipynb")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(notebook, handle)
+            report = validate_code_text_parity(
+                "结果见 `ques1_results.csv`。", ["notebook.ipynb"], work_dir
+            )
+        self.assertTrue(report["passed"], report)
+        self.assertIn("ques1_results.csv", report["code_generated_files"])
+
+    def test_notebook_without_writer_still_warns(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            path = os.path.join(work_dir, "notebook.ipynb")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"cells": [{"cell_type": "code", "source": ["x = 1\\n"]}]}, handle)
+            report = validate_code_text_parity(
+                "结果见 `ques1_results.csv`。", ["notebook.ipynb"], work_dir
+            )
+        self.assertFalse(report["passed"])
+        self.assertIn("ques1_results.csv", report["missing_critical_generators"])
+
 
 class LiteralResultCsvTest(unittest.TestCase):
     """结果/验收 CSV 全部由字面量写出时必须拦截。"""

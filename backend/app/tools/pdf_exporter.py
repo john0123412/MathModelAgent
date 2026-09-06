@@ -255,6 +255,50 @@ def _insert_abstract_pagebreak(markdown: str) -> tuple[str, bool]:
     return "".join(lines), True
 
 
+def _compact_pdf_abstract(markdown: str) -> tuple[str, bool]:
+    """Use a PDF-only smaller abstract group so keywords remain on page one."""
+    lines = markdown.splitlines(keepends=True)
+    abstract_index = next(
+        (index for index, line in enumerate(lines) if re.match(r"^##\s+摘要\s*$", line.strip())),
+        None,
+    )
+    if abstract_index is None:
+        return markdown, False
+    keyword_index = next(
+        (
+            index
+            for index in range(abstract_index + 1, len(lines))
+            if KEYWORDS_LINE_RE.match(lines[index])
+        ),
+        None,
+    )
+    if keyword_index is None:
+        return markdown, False
+    if any(r"\begingroup" in line for line in lines[abstract_index:keyword_index]):
+        return markdown, False
+    raw_open = "```{=latex}\n\\begingroup\\small\n```\n\n"
+    raw_close = "\n```{=latex}\n\\endgroup\n```\n\n"
+    lines.insert(abstract_index, raw_open)
+    lines.insert(keyword_index + 2, raw_close)
+    return "".join(lines), True
+
+
+def _reflow_long_display_math(markdown: str) -> tuple[str, bool]:
+    """Split long two-expression display math in the PDF-only source."""
+    changed = False
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal changed
+        body = match.group(1)
+        if r"\qquad" not in body or len(body) < 90:
+            return match.group(0)
+        changed = True
+        body = body.replace(r"\qquad", r"\\")
+        return "$$\n\\begin{aligned}\n" + body.strip() + "\n\\end{aligned}\n$$"
+
+    return re.sub(r"\$\$\s*(.*?)\s*\$\$", replace, markdown, flags=re.DOTALL), changed
+
+
 def _insert_appendix_pagebreak(markdown: str, *, enabled: bool) -> tuple[str, bool]:
     """Insert a PDF-only break before an appendix when the profile requires it.
 
@@ -343,13 +387,21 @@ def _prepare_pdf_markdown_source(
     with open(md_path, encoding="utf-8") as f:
         markdown = f.read()
     prepared_markdown, inserted_pagebreak = _insert_abstract_pagebreak(markdown)
+    prepared_markdown, compacted_abstract = _compact_pdf_abstract(prepared_markdown)
+    prepared_markdown, reflowed_display_math = _reflow_long_display_math(prepared_markdown)
     prepared_markdown, inserted_appendix_pagebreak = _insert_appendix_pagebreak(
         prepared_markdown, enabled=appendix_pagebreak
     )
     prepared_markdown, inserted_cjk_breaks = _insert_cjk_pdf_break_opportunities(
         prepared_markdown
     )
-    if not inserted_pagebreak and not inserted_appendix_pagebreak and not inserted_cjk_breaks:
+    if not (
+        inserted_pagebreak
+        or compacted_abstract
+        or reflowed_display_math
+        or inserted_appendix_pagebreak
+        or inserted_cjk_breaks
+    ):
         return md_path, False
 
     os.makedirs(work_dir, exist_ok=True)

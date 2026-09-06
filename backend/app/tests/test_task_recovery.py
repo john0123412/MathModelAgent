@@ -1,10 +1,12 @@
 """Regression tests for durable task recovery boundaries."""
 
+import asyncio
 import json
 import os
 import tempfile
 import unittest
 from unittest import mock
+from unittest.mock import AsyncMock
 
 from fastapi import BackgroundTasks, HTTPException
 from fastapi.testclient import TestClient
@@ -103,6 +105,77 @@ class TestManualExecutionRecovery(unittest.TestCase):
             self.assertEqual(checkpoint.last_manual_recovery["mode"], "low_cost_algorithm")
             with self.assertRaisesRegex(RuntimeError, "已使用过"):
                 manager.authorize_manual_execution_recovery("provider_changed")
+
+
+class TestExportOnlyRecoveryClassification(unittest.TestCase):
+    def test_allows_only_export_and_report_freshness_failures(self):
+        report = {
+            "technical_status": "TECHNICAL_FAIL",
+            "checks": [
+                {"id": "pdf_visual_check", "passed": False},
+                {"id": "artifact_freshness", "passed": False},
+            ],
+        }
+        self.assertTrue(modeling_router._export_only_recovery_is_safe("unused", report))
+
+    def test_rejects_execution_or_frozen_result_failures(self):
+        report = {
+            "technical_status": "TECHNICAL_FAIL",
+            "checks": [
+                {"id": "execution_validation_report", "passed": False},
+                {"id": "frozen_results_integrity", "passed": False},
+            ],
+        }
+        self.assertFalse(modeling_router._export_only_recovery_is_safe("unused", report))
+
+    def test_submission_audit_recovery_rejects_anonymity_failure(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            with open(os.path.join(work_dir, "submission_audit_report.json"), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {"checks": [{"id": "submission_anonymity", "passed": False}]},
+                    handle,
+                )
+            report = {
+                "technical_status": "TECHNICAL_FAIL",
+                "checks": [{"id": "submission_audit_report", "passed": False}],
+            }
+            self.assertFalse(modeling_router._export_only_recovery_is_safe(work_dir, report))
+
+
+class TestExportOnlyRecovery(unittest.IsolatedAsyncioTestCase):
+    async def test_rebuilds_once_without_provider_after_export_gate_failure(self):
+        with tempfile.TemporaryDirectory() as work_dir:
+            report = {
+                "technical_status": "TECHNICAL_FAIL",
+                "checks": [{"id": "pdf_visual_check", "passed": False}],
+            }
+            recovered = {"technical_status": "TECHNICAL_PASS"}
+            with (
+                mock.patch.object(modeling_router, "get_work_dir", return_value=work_dir),
+                mock.patch.object(
+                    modeling_router, "run_presentation_reflow", return_value={"status": "staged"}
+                ) as stage,
+                mock.patch.object(modeling_router, "MathModelWorkFlow") as workflow_cls,
+                mock.patch.object(
+                    modeling_router,
+                    "_finalize_docx_and_manifest",
+                    return_value=recovered,
+                ) as finalize,
+                mock.patch.object(
+                    modeling_router.redis_manager,
+                    "publish_message",
+                    new_callable=AsyncMock,
+                ),
+            ):
+                workflow_cls.return_value.resume = AsyncMock(return_value=None)
+                result = await modeling_router._recover_final_acceptance_export_only(
+                    "task-1", "cumcm2026", asyncio.Event(), report
+                )
+
+        self.assertEqual(result, recovered)
+        stage.assert_called_once_with("task-1")
+        workflow_cls.return_value.resume.assert_awaited_once()
+        finalize.assert_called_once_with("task-1", "cumcm2026")
 
 
 class TestResumeRoute(unittest.IsolatedAsyncioTestCase):

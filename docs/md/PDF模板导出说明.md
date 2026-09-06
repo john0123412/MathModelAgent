@@ -44,6 +44,7 @@ Docker 后端默认负责完成建模主流程，并生成：
 - `frozen_results.json`（数值事实唯一来源，预检保持纯只读，等价性核验 fail-closed）
 - `cross_modal_audit.json`（跨模态对齐质检：代码-文本对齐、最优性证书一致性、LaTeX 完整性与私有依赖审计）
 - `paper_preflight_report.json/md`（包含结构完整性、正文事实一致性与跨模态阻断检查）
+- 正式导出后的 PDF 视觉或报告新鲜度失败会触发一次持久化的 export-only 版式恢复；该恢复不调用 Provider、不重跑 Notebook/求解器，并会同步重建 DOCX、PDF、LaTeX sidecar、manifest、submission audit 和 final acceptance。执行证据、冻结结果、算法声明、匿名身份、字体/模板等实质门禁失败不会被该路径绕过。
 - `pdf_visual_check.json`（PDF 全页视觉与边距溢出检查）
 - `submission_audit_report.json/md`（提交物合规与分层匿名审计：PDF/DOCX 高置信阻断与低置信预警、文档元数据/注释/附件扫描）
 - `final_acceptance_report.json`（最终技术验收报告）
@@ -302,6 +303,29 @@ PDF/sidecar 自动编译会显式禁用 XeLaTeX shell escape；模型或 Markdow
   `cumcm2026` 与 `default` 维持原基线：内容边距 2.5cm（default 2.0cm）、正文 20 页以内、
   关键词须在摘要首页、claim_trace 存在缺失或弱措辞即 fail。`export_cli task-refresh`
   在预检无硬失败（PASS 或 CONDITIONAL_PASS）时继续重建交付物，硬门禁 FAIL 仍拒绝。
+
+### 算法证据与论文同步失败的恢复顺序
+
+`checks.algorithm_evidence` 只对当前正文明确采用/使用的 GA、PSO、MILP、Pareto 等算法要求本轮
+可执行源码证据；“相较于”“未来改进”“待复算/重新求解”等语境会写入 `excluded_claims`，不会
+误作当前实现。证据扫描使用与“附录C 源程序代码”相同的最终源码集合，避免附录与门禁扫描来源不一致。
+若旧任务报告仍显示算法失败，必须在任务不处于 `resuming`/`finalizing` 时重建 Markdown 和预检，不能
+沿用旧报告。
+
+`checks.res_json_sync` 发现脚注定义从 Writer 分节搬到统一参考文献区、或 `[^n]` 被规范为 `[n]` 时，
+属于合法后处理差异；当前同步规范化会剥离这些标记后再按正文句子重叠核验。若仍有真实分节脱节，
+使用一次受控 `paper_repair_candidate`，隔离预检必须是 `PASS` 或无 `severity=fail` 的
+`CONDITIONAL_PASS`，落盘后只允许 `task-refresh`/export-only 重建，不重跑 Provider、Notebook 或数学求解。
+
+正式 CUMCM profile 的 `CONDITIONAL_PASS` 仍不是最终技术通过：必须继续检查 `pdf_visual_check.json`、
+`submission_audit_report.json` 和 `final_acceptance_report.json`。摘要跨页、附录缺字形、物理内容边距或
+匿名审计失败都必须单独修复/人工确认，不能因算法门禁已通过而放行。
+
+匿名审计扫描 `candidate_manifest.json` 时只检查提交文件名、显式身份字段及其下的文件路径；`sha256`、
+`sha1`、`md5`、`hash`、`digest` 和 `artifact_hashes` 等校验字段不作为联系方式文本扫描。哈希字符串中
+偶然出现的 `1xxxxxxxxxx` 数字段片段不能单独触发手机号阻断；PDF/DOCX 正文、元数据和真实文件名仍保持
+高置信匿名门禁。若审计报告只命中 manifest/claim-trace/support manifest 的 hash 字段，应按扫描器误报
+处理并刷新报告，不应修改论文或冻结结果。
 - raw TeX 已在主 PDF 与 LaTeX sidecar 导出中关闭，正文不要依赖 `\begin{table}`、`\begin{align}`
   等 raw LaTeX 环境；标准 Markdown 表格与 `$...$`、`\(...\)` 数学公式仍可用。
 - `paper_preflight_report.json` 只说明格式门禁和基本证据链通过，不证明数学模型和论文论证正确。

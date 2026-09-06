@@ -89,9 +89,15 @@ uv run python -m app.tools.export_cli task-refresh `
 代码执行、可行性约束和数值来源可追溯；它们不替代人工复算、数值收敛检查或领域判断。
 
 若正文与冻结结果发生可定位冲突，工作流会最多定向回修一次相应 Writer 章节并重新预检；
-再次 `FAIL` 或无法定位的硬失败会停止 PDF 候选导出。此时先看
-`paper_preflight_report.json -> checks` 和 checkpoint 的 `last_paper_preflight_failure`，
-不要把旧 PDF 当作可提交产物。
+再次 `FAIL` 或无法定位的硬失败会停止 PDF 候选导出。正式导出后的 PDF 视觉、报告新鲜度或
+可确定性版式问题，主工作流会把当前检查点置为一次性的 `presentation_reflow_pending_export`，
+自动执行一轮不调用 Provider、不重跑 Notebook/求解器的 export-only 重建，并重新生成
+Markdown、DOCX、PDF、LaTeX sidecar、manifest、submission audit 与 final acceptance。
+该重建预算持久化在 `checkpoint.json`；第二次仍失败，或失败项涉及执行证据、冻结结果哈希、
+当前算法声明、匿名身份、字体/模板完整性等实质门禁时，必须 fail-closed，不能无限续传或
+为了 PASS 绕过门禁。此时先看 `paper_preflight_report.json -> checks`、
+`pdf_visual_check.json`、`submission_audit_report.json`、`final_acceptance_report.json`
+和 checkpoint 的失败记录，不要把旧 PDF 当作可提交产物。
 
 ## 摘要
 
@@ -158,7 +164,7 @@ uv run python -m app.tools.export_cli task-refresh `
 - 每个约束来源和图表数据源是否由当前求解/定向回修回合实际新建或更新；不得把 checkpoint
   中未更新的旧结果文件重新登记为本次计算证据。
 - `frozen_results.json` 中的指标是否与摘要、正文、表格和图题一致；不可行子问题是否没有被称为最优或已完成。
-- 正文声明的遗传算法、Pareto、粒子群等方法是否确实在 notebook/可运行源码中有实现证据。
+- 正文声明的遗传算法、Pareto、粒子群等方法是否确实在 notebook/可运行源码中有实现证据；仅作比较、未来改进或待复算的算法名称应记录为排除项，不得误当作当前实现，也不得借排除语境掩盖“本文采用”声明。
 
 ## 结果与敏感性分析
 

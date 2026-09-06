@@ -2101,9 +2101,14 @@ def _check_editorial_asset_trace(
             if not isinstance(entry, dict):
                 result["errors"].append(f"{kind} 存在非对象条目")
                 continue
-            questions = _editorial_manifest_question_numbers(entry.get("questions"))
+            raw_questions = entry.get("questions")
+            if raw_questions is None and entry.get("quesN"):
+                # Coder prompt 契约允许用单个 ``quesN`` 键表达绑定；
+                # 消费侧必须接受这两种形态，否则正式图全部误判 missing。
+                raw_questions = [entry.get("quesN")]
+            questions = _editorial_manifest_question_numbers(raw_questions)
             if not questions:
-                if not entry.get("questions"):
+                if raw_questions is None:
                     questions = list(range(1, (expected_questions or 1) + 1))
                 else:
                     result["errors"].append(f"{kind} 条目缺少合法 quesN 问题绑定")
@@ -2142,13 +2147,21 @@ def _check_editorial_asset_trace(
                 ):
                     result["errors"].append("figures 条目缺少存在的任务内图片路径")
                     continue
-                manifest_entries.setdefault(safe_path, []).append(entry)
+                # 归一化后的 questions 随条目存入，assets 匹配时直接使用，
+                # 避免二次解析在 quesN 单键形态上再次落空。
+                registered = dict(entry)
+                registered["questions"] = questions
+                manifest_entries.setdefault(safe_path, []).append(registered)
             else:
                 table_questions.update(questions)
 
     for figure in assets.get("figures", []):
-        safe_path = _editorial_safe_relative_path(work_dir, figure.get("path"))
         figure_questions = set(figure.get("questions", []))
+        if not figure_questions:
+            # 无 quesN 绑定的是扩展分析图，不属于强制来源追溯的正式资产
+            # （文件存在性由 images 检查把关）。
+            continue
+        safe_path = _editorial_safe_relative_path(work_dir, figure.get("path"))
         matching_entries = manifest_entries.get(safe_path or "", [])
         has_question_binding = any(
             not figure_questions
@@ -2910,9 +2923,15 @@ def _section_kind(title: str) -> str:
 
 
 def _normalize_sync_text(text: str) -> str:
-    """Strip footnote/uuid markers and all whitespace for cross-artifact compare."""
+    """Strip footnote/uuid markers and all whitespace for cross-artifact compare.
+
+    后处理链会重排表格与数学排版（表格对齐、LaTeX 间距命令），剔除这些纯
+    格式字符以免把排版差异误判为内容世代差异。
+    """
     text = re.sub(r"\[\^[^\]]+\]", "", text)
     text = re.sub(r"\[[0-9a-fA-F-]{36}\]", "", text)
+    text = re.sub(r"\\[,;!]", "", text)
+    text = text.replace("|", "").replace("$", "")
     return re.sub(r"\s+", "", text)
 
 
@@ -2962,8 +2981,24 @@ def _check_res_json_sync(work_dir: str, markdown: str) -> dict:
             "note": "res.json 没有可核对的分节文本，跳过。",
         }
     md_norm = _normalize_sync_text(markdown)
+    # 模型可能对两个相邻 prompt 键（如 eda/symbol）写出同一章（标题仅虚词之
+    # 差）。组装时按标题去重只会保留其一，被弃版本在 res.md 中必然缺席——
+    # 这是合法取舍，不算脱节；识别出重复章节键并跳过核对。
+    def _title_key(text: str) -> str:
+        first = text.strip().splitlines()[0] if text.strip() else ""
+        first = re.sub(r"^\s*#\s*", "", first)
+        first = re.sub(r"^[一二三四五六七八九十\d]+\s*[、.．:：]\s*", "", first)
+        return re.sub(r"[与和及]", "", re.sub(r"\s+", "", first))
+
+    titles: dict[str, list[str]] = {}
+    for key in sorted(sections):
+        titles.setdefault(_title_key(sections[key]), []).append(key)
+    duplicate_keys = {k for keys in titles.values() if len(keys) > 1 for k in keys}
+
     desynced: list[str] = []
     for key in sorted(sections):
+        if key in duplicate_keys:
+            continue
         body = _normalize_sync_text(sections[key])
         if len(body) < 50:
             continue

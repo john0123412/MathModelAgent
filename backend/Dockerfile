@@ -105,6 +105,10 @@ COPY . .
 ENV MMA_GIT_COMMIT=${GIT_COMMIT}
 ENV MMA_BUILD_ID=${BUILD_ID}
 
+# 稳定部署标记：代码已入镜像。/config 的 source_mounted 据此区分
+# "work_dir 数据挂载"与"源码挂载"，稳定模式下不再误报 source_mounted=true。
+RUN touch /app/.mma-image-baked
+
 # 运行时刷新可选挂载字体目录的 fontconfig 缓存。这样 Windows 用户可以把
 # C:\Windows\Fonts 只读挂进容器，让 Docker PDF 优先命中 Times New
 # Roman/SimSun/SimHei/KaiTi 等本机合法安装的正式字体，而不是退回开源字体。
